@@ -1,0 +1,28 @@
+# secrets
+.env
+.env.local
+*.tfvars
+!*.tfvars.example
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# node
+node_modules/
+dist/
+.vite/
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/
