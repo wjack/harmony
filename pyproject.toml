@@ -1,0 +1,91 @@
+[project]
+name = "harmony"
+version = "0.1.0"
+description = "Harmony: a network of Claude representatives that negotiate across organizations."
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "alembic==1.20.1",
+    "anthropic==2.3.0",
+    "asyncpg==0.32.0",
+    "boto3==1.43.118",
+    "fastapi==0.162.0",
+    "honcho==2.0.0",
+    "httpx==0.28.1",
+    "itsdangerous==2.2.0",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.16.1",
+    "pyyaml==6.0.3",
+    "sqlalchemy[asyncio]==2.1.6",
+    "sse-starlette==3.6.0",
+    "temporalio==1.34.0",
+    "typer==0.27.3",
+    "uvicorn[standard]==0.54.0",
+    "watchfiles==1.3.0",
+]
+
+[project.scripts]
+harmony = "harmony.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "asyncpg-stubs==0.32.0",
+    "hypothesis==6.170.10",
+    "pyright==1.1.414",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.1",
+    "ruff==0.17.2",
+    "types-boto3[s3]==1.43.118",
+    "types-pyyaml==6.0.12.20260906",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["web", "infra"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # isort
+    "UP",           # pyupgrade
+    "B",            # bugbear
+    "SIM",          # simplify
+    "ASYNC",        # async pitfalls
+    "C4",           # comprehensions
+    "PIE",
+    "PT",           # pytest style
+    "RUF",
+    "DTZ",          # naive datetimes
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # typographic punctuation in strings and comments is deliberate
+]
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/versions/*.py" = ["E501"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts", "migrations"]
+exclude = ["**/__pycache__", ".venv", "web", "infra"]
+strict = ["src/harmony"]
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not minio and not compose"]
+markers = [
+    "minio: needs MinIO (docker compose --profile storage up -d minio); opt in with -m minio",
+    "compose: needs the containerized app stack (compose.ci.yaml); opt in with -m compose",
+]

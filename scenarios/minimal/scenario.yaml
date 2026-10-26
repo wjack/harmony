@@ -1,0 +1,9 @@
+# The smallest valid scenario: one org, one member, no threads.
+#
+# Used by tests and scripts/p0_actas_check.sh as a world whose seed IDs differ from
+# harmony-demo's (seed IDs are uuid5 of the scenario name), so "a member ID from
+# another world" exists somewhere and still isn't in the session's world.
+name: minimal
+anchor: 2026-10-26
+default_member: sam
+orgs: [solo]

@@ -1,0 +1,342 @@
+"""Transcripts as raw wire JSON (§2.2): rep sessions (`rep_transcript`) and internal
+chats (`chat_messages`).
+
+Rules every implementation keeps:
+- Append-only. A stored message is never rewritten; ordering is the explicit per-thread
+  (per-side) or per-conversation `seq`, never an id.
+- `content_text` is the JSON text of the message's `content` array exactly as it was
+  sent (`llm.wire.canonical_json`) or received (the response's `content`, re-serialized
+  canonically, which keeps key order and empty thinking blocks with their signatures).
+- Nothing is written ahead of a call: notices are flushed into the request, not into
+  the stored transcript, until the call they went out with has been stored.
+- Temporal passes transcript references (`TranscriptRef`), never transcripts; the
+  activity loads the bytes.
+
+Every message carries the turn that wrote it. A turn's messages are contiguous and form
+the transcript's tail while the turn runs (the workflow runs one turn per transcript at
+a time), and each has a **position**: its index among that turn's messages. Appending
+with an explicit `position` is idempotent: a message already stored at that position is
+reused when it is byte-identical and refused (`TranscriptConflict`) when it isn't, so a
+retried activity never duplicates or rewrites what an earlier attempt stored.
+
+Owner: E1.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Annotated, Final, Literal, Protocol
+from uuid import UUID, uuid5
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from harmony.db.models import ChatMessage, Conversation, RepTranscript
+from harmony.db.models.choices import Side, TranscriptRole
+from harmony.db.uow import UnitOfWork, unit_of_work
+from harmony.errors import HarmonyError
+from harmony.events.schemas import EventScope
+from harmony.llm.wire import JsonObject, canonical_json
+
+# Namespaces the chat_messages id of a turn's message at a position.
+_CHAT_ID_PREFIX: Final = "transcript"
+
+
+class _Model(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ConversationTranscript(_Model):
+    """An internal chat: `chat_messages` rows of one conversation."""
+
+    kind: Literal["conversation"] = "conversation"
+    world_id: UUID
+    conversation_id: UUID
+
+
+class RepSideTranscript(_Model):
+    """One representative side: `rep_transcript` rows of (thread, side)."""
+
+    kind: Literal["rep"] = "rep"
+    world_id: UUID
+    thread_id: UUID
+    side: Side
+
+
+TranscriptRef = Annotated[ConversationTranscript | RepSideTranscript, Field(discriminator="kind")]
+
+
+class TranscriptConflict(HarmonyError):
+    """An append that would rewrite, reorder or split stored messages."""
+
+
+class WireMessage(_Model):
+    """One stored message: its role and the raw JSON text of its `content`."""
+
+    role: TranscriptRole
+    content_text: str
+    # The turn that wrote it, as loaded; ignored on append (the append's turn wins).
+    turn_id: UUID | None = None
+
+    @classmethod
+    def of(cls, role: TranscriptRole, content: JsonValue) -> WireMessage:
+        """A message whose content is serialized the one canonical way."""
+        return cls(role=role, content_text=canonical_json(content))
+
+    def content(self) -> JsonValue:
+        parsed: JsonValue = json.loads(self.content_text)
+        return parsed
+
+    def as_json(self) -> JsonObject:
+        """`{"role": ..., "content": [...]}` as the request body carries it."""
+        return {"role": self.role, "content": self.content()}
+
+    def same_bytes(self, other: WireMessage) -> bool:
+        return self.role == other.role and self.content_text == other.content_text
+
+
+class TranscriptStore(Protocol):
+    """Loads and appends one transcript's raw messages. `run_turn` writes through it."""
+
+    async def load(self, ref: TranscriptRef) -> list[WireMessage]:
+        """Every stored message of `ref`, in `seq` order, each with its `turn_id`."""
+        ...
+
+    async def append(
+        self,
+        ref: TranscriptRef,
+        messages: Sequence[WireMessage],
+        *,
+        turn_id: UUID,
+        author_member_id: UUID | None = None,
+        position: int | None = None,
+    ) -> list[int]:
+        """Append `messages` for `turn_id` in one transaction; returns their seqs.
+
+        `position` is the index of the first message among the turn's messages (module
+        docstring). With it the append is idempotent; without it the messages go after
+        the turn's stored ones. `author_member_id` is the member who typed the batch's
+        `user` messages (a chat message); other rows never have an author. Conversation
+        appends also bump the conversation's version (snapshot event), so the chat view
+        refetches its items.
+        """
+        ...
+
+
+class SqlTranscriptStore:
+    """The Postgres `TranscriptStore`."""
+
+    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+        self._sessionmaker = sessionmaker
+
+    async def load(self, ref: TranscriptRef) -> list[WireMessage]:
+        async with self._sessionmaker() as session:
+            return await load_in(session, ref)
+
+    async def append(
+        self,
+        ref: TranscriptRef,
+        messages: Sequence[WireMessage],
+        *,
+        turn_id: UUID,
+        author_member_id: UUID | None = None,
+        position: int | None = None,
+    ) -> list[int]:
+        async with unit_of_work(self._sessionmaker, ref.world_id) as uow:
+            seqs = await append_in(
+                uow,
+                ref,
+                messages,
+                turn_id=turn_id,
+                author_member_id=author_member_id,
+                position=position,
+            )
+            await uow.commit()
+        return seqs
+
+
+async def load_in(session: AsyncSession, ref: TranscriptRef) -> list[WireMessage]:
+    """`TranscriptStore.load` on a caller's session."""
+    if isinstance(ref, ConversationTranscript):
+        query = (
+            select(ChatMessage.role, ChatMessage.content_text, ChatMessage.turn_id)
+            .where(
+                ChatMessage.world_id == ref.world_id,
+                ChatMessage.conversation_id == ref.conversation_id,
+            )
+            .order_by(ChatMessage.seq)
+        )
+    else:
+        query = (
+            select(RepTranscript.role, RepTranscript.content_text, RepTranscript.turn_id)
+            .where(
+                RepTranscript.world_id == ref.world_id,
+                RepTranscript.thread_id == ref.thread_id,
+                RepTranscript.side == ref.side,
+            )
+            .order_by(RepTranscript.seq)
+        )
+    rows = (await session.execute(query)).all()
+    return [WireMessage(role=row[0], content_text=row[1], turn_id=row[2]) for row in rows]
+
+
+async def append_in(
+    uow: UnitOfWork,
+    ref: TranscriptRef,
+    messages: Sequence[WireMessage],
+    *,
+    turn_id: UUID,
+    author_member_id: UUID | None = None,
+    position: int | None = None,
+) -> list[int]:
+    """Append inside a caller's unit of work (for writes that must commit together with
+    the transcript, such as a member message and its conversation snapshot). Same
+    semantics as `TranscriptStore.append`."""
+    if ref.world_id != uow.world_id:
+        raise ValueError(f"transcript of world {ref.world_id} appended in {uow.world_id}")
+    session = uow.session
+    # Serializes appenders of this transcript, so seqs and positions can't race.
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(_lock_key(ref), 0)))
+    )
+    tail_seq = await _tail_seq(session, ref)
+    stored = await _turn_rows(session, ref, turn_id)
+    start = len(stored) if position is None else position
+    if start > len(stored):
+        raise TranscriptConflict(
+            f"turn {turn_id} has {len(stored)} stored messages; can't append at {start}"
+        )
+    seqs: list[int] = []
+    added = 0
+    for offset, message in enumerate(messages):
+        at = start + offset
+        if at < len(stored):
+            seq, existing = stored[at]
+            if not existing.same_bytes(message):
+                raise TranscriptConflict(
+                    f"turn {turn_id} already stored a different message at position {at}"
+                )
+            seqs.append(seq)
+            continue
+        if stored and added == 0 and stored[-1][0] != tail_seq:
+            raise TranscriptConflict(f"turn {turn_id} is no longer the transcript's tail")
+        tail_seq += 1
+        added += 1
+        author = author_member_id if message.role == "user" else None
+        session.add(_row(ref, message, seq=tail_seq, turn_id=turn_id, at=at, author=author))
+        seqs.append(tail_seq)
+    if added and isinstance(ref, ConversationTranscript):
+        await _touch_conversation(uow, ref)
+    await session.flush()
+    return seqs
+
+
+def _lock_key(ref: TranscriptRef) -> str:
+    if isinstance(ref, ConversationTranscript):
+        return f"transcript:{ref.world_id}:{ref.conversation_id}"
+    return f"transcript:{ref.world_id}:{ref.thread_id}:{ref.side}"
+
+
+async def _tail_seq(session: AsyncSession, ref: TranscriptRef) -> int:
+    if isinstance(ref, ConversationTranscript):
+        last = await session.scalar(
+            select(func.max(ChatMessage.seq)).where(
+                ChatMessage.world_id == ref.world_id,
+                ChatMessage.conversation_id == ref.conversation_id,
+            )
+        )
+    else:
+        last = await session.scalar(
+            select(func.max(RepTranscript.seq)).where(
+                RepTranscript.world_id == ref.world_id,
+                RepTranscript.thread_id == ref.thread_id,
+                RepTranscript.side == ref.side,
+            )
+        )
+    return last or 0
+
+
+async def _turn_rows(
+    session: AsyncSession, ref: TranscriptRef, turn_id: UUID
+) -> list[tuple[int, WireMessage]]:
+    """The turn's stored messages with their seqs, in position order."""
+    if isinstance(ref, ConversationTranscript):
+        query = (
+            select(ChatMessage.seq, ChatMessage.role, ChatMessage.content_text)
+            .where(
+                ChatMessage.world_id == ref.world_id,
+                ChatMessage.conversation_id == ref.conversation_id,
+                ChatMessage.turn_id == turn_id,
+            )
+            .order_by(ChatMessage.seq)
+        )
+    else:
+        query = (
+            select(RepTranscript.seq, RepTranscript.role, RepTranscript.content_text)
+            .where(
+                RepTranscript.world_id == ref.world_id,
+                RepTranscript.thread_id == ref.thread_id,
+                RepTranscript.side == ref.side,
+                RepTranscript.turn_id == turn_id,
+            )
+            .order_by(RepTranscript.seq)
+        )
+    rows = (await session.execute(query)).all()
+    return [(row[0], WireMessage(role=row[1], content_text=row[2])) for row in rows]
+
+
+def _row(
+    ref: TranscriptRef,
+    message: WireMessage,
+    *,
+    seq: int,
+    turn_id: UUID,
+    at: int,
+    author: UUID | None,
+) -> ChatMessage | RepTranscript:
+    if isinstance(ref, ConversationTranscript):
+        return ChatMessage(
+            world_id=ref.world_id,
+            id=uuid5(turn_id, f"{_CHAT_ID_PREFIX}/{at}"),
+            conversation_id=ref.conversation_id,
+            seq=seq,
+            role=message.role,
+            content_text=message.content_text,
+            author_member_id=author,
+            turn_id=turn_id,
+        )
+    return RepTranscript(
+        world_id=ref.world_id,
+        thread_id=ref.thread_id,
+        side=ref.side,
+        seq=seq,
+        role=message.role,
+        content_text=message.content_text,
+        turn_id=turn_id,
+    )
+
+
+async def _touch_conversation(uow: UnitOfWork, ref: ConversationTranscript) -> None:
+    conversation = await uow.session.get(Conversation, (ref.world_id, ref.conversation_id))
+    if conversation is None:
+        raise LookupError(f"conversation {ref.conversation_id} not in world {ref.world_id}")
+    conversation.last_activity_at = datetime.now(UTC)
+    uow.add_snapshot(
+        conversation, EventScope.member(conversation.owner_member_id, conversation.org_id)
+    )
+
+
+__all__ = [
+    "ConversationTranscript",
+    "RepSideTranscript",
+    "SqlTranscriptStore",
+    "TranscriptConflict",
+    "TranscriptRef",
+    "TranscriptStore",
+    "WireMessage",
+    "append_in",
+    "load_in",
+]

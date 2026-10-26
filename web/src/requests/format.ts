@@ -1,0 +1,139 @@
+/**
+ * Formatting for the Requests inbox: times and the labels the rows show. A date is
+ * read off a `Calendar` (the session's world calendar, `useCalendar`), so it matches the
+ * World date; a time of day or an age is the same on either calendar.
+ */
+import type { Calendar } from "../demo/worldClock";
+import { firstName } from "../shell/names";
+import type { EscalationKind, InboxItem, Side, ThreadState } from "./types";
+
+// --- Time --------------------------------------------------------------------------------
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** Linear's compact age: "now", "4m", "3h", "2d", then a date. */
+export function shortAge(iso: string, calendar: Calendar, now: number = Date.now()): string {
+  const elapsed = Math.max(0, now - Date.parse(iso));
+  if (elapsed < MINUTE) return "now";
+  if (elapsed < HOUR) return `${String(Math.floor(elapsed / MINUTE))}m`;
+  if (elapsed < DAY) return `${String(Math.floor(elapsed / HOUR))}h`;
+  if (elapsed < 7 * DAY) return `${String(Math.floor(elapsed / DAY))}d`;
+  return shortDate(iso, calendar);
+}
+
+/** "just now", "4 min ago", "3 hours ago", "2 days ago", then a date. */
+export function longAge(iso: string, calendar: Calendar, now: number = Date.now()): string {
+  const elapsed = Math.max(0, now - Date.parse(iso));
+  if (elapsed < MINUTE) return "just now";
+  if (elapsed < HOUR) return `${String(Math.floor(elapsed / MINUTE))} min ago`;
+  if (elapsed < DAY) {
+    const hours = Math.floor(elapsed / HOUR);
+    return `${String(hours)} ${hours === 1 ? "hour" : "hours"} ago`;
+  }
+  if (elapsed < 7 * DAY) {
+    const days = Math.floor(elapsed / DAY);
+    return `${String(days)} ${days === 1 ? "day" : "days"} ago`;
+  }
+  return shortDate(iso, calendar);
+}
+
+const dateFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+const timeFormat = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+
+/** "Nov 4". */
+export function shortDate(iso: string, calendar: Calendar): string {
+  return dateFormat.format(calendar(iso));
+}
+
+/** "Nov 4, 9:12 AM". */
+export function dateTime(iso: string, calendar: Calendar): string {
+  const date = calendar(iso);
+  return `${dateFormat.format(date)}, ${timeFormat.format(date)}`;
+}
+
+/** "in 19 hours", "in 40 min": how long until `iso`, with no calendar to disagree about. */
+export function timeLeft(iso: string, now: number = Date.now()): string {
+  const left = Date.parse(iso) - now;
+  if (left < MINUTE) return "any moment";
+  if (left < HOUR) return `in ${String(Math.floor(left / MINUTE))} min`;
+  if (left < DAY) {
+    const hours = Math.floor(left / HOUR);
+    return `in ${String(hours)} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  const days = Math.floor(left / DAY);
+  return `in ${String(days)} ${days === 1 ? "day" : "days"}`;
+}
+
+/** "9:12 AM". */
+export function clockTime(iso: string): string {
+  return timeFormat.format(new Date(iso));
+}
+
+// --- Labels ------------------------------------------------------------------------------
+
+/** The org's representative, as the transcript names it. */
+export function representativeName(orgName: string): string {
+  return `Claude for ${orgName}`;
+}
+
+/** "Henderson Lab's", "Cascade Thin Films'". */
+export function possessive(name: string): string {
+  return name.endsWith("s") ? `${name}'` : `${name}'s`;
+}
+
+/** What an open escalation of `kind` asks of the member: the inbox row's subtitle. */
+export function needsLabel(kind: EscalationKind): string {
+  switch (kind) {
+    case "consult":
+      return "Needs your answer";
+    case "outbound_review":
+      return "Reply needs your review";
+  }
+}
+
+export function isTerminal(state: ThreadState): boolean {
+  return state === "closed" || state === "expired";
+}
+
+/** A thread's position: its state, our side, and whose turn it is. */
+export interface Standing {
+  state: ThreadState;
+  side: Side;
+  side_to_move: Side | null;
+}
+
+/**
+ * Where a thread stands, from our side. A thread waits on a principal while one side
+ * checks with its team: ours, or the counterparty's, which is theirs to answer.
+ */
+export function stateLabel({ state, side, side_to_move }: Standing, counterparty: string): string {
+  switch (state) {
+    case "active":
+      return "Claude is handling";
+    case "awaiting_principal":
+      return side_to_move === null || side_to_move === side ? "Checking with the team" : `Waiting on ${counterparty}`;
+    case "closed":
+      return "Closed";
+    case "expired":
+      return "Expired";
+  }
+}
+
+/**
+ * The inbox row's subtitle after the counterparty's name. `needsYou` is the row's
+ * section: an open item assigned to someone else reads as theirs, not yours.
+ */
+export function rowStatus(item: InboxItem, needsYou: boolean): string {
+  const open = item.escalation !== null && item.escalation.status === "open" ? item.escalation : null;
+  if (open !== null && needsYou) return needsLabel(open.kind);
+  if (item.shared_by !== null) return `Shared by ${firstName(item.shared_by.name)}`;
+  if (open !== null && open.assignees.length > 0) {
+    return `Waiting on ${open.assignees.map((assignee) => firstName(assignee.name)).join(", ")}`;
+  }
+  return stateLabel(
+    { state: item.thread_state, side: item.side, side_to_move: item.side_to_move },
+    item.counterparty.name,
+  );
+}

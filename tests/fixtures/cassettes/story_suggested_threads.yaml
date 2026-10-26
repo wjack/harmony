@@ -1,0 +1,510 @@
+# The suggested story's conversations (scenarios/harmony-demo/story.yaml,
+# REVISION_UNSTRUCTURED.md §10). Keys: agents/keys.py. Representatives count their own
+# turns per side; after a send_message the model is called again, so a turn that sends
+# ends with a thinking-only step. A consult stops the turn, and the released answer
+# opens that side's next turn. The answerer for a side's k-th consult is turn k, a tool
+# loop over the org's records (`read_document` takes the `kn:` ids search results carry,
+# seed_id("harmony-demo", "knowledge_item", "<org>/<slug>")) ending in a
+# CONSULT_OUTPUT_SCHEMA draft; the sharing check of draft rev 1 is step 0.
+#
+# henderson.northlake: Northlake's representative consults. Its answerer reads the
+# public calendar (full until Nov 10) and Raj's reserve-block note, and drafts a yes
+# using Wed Nov 4. Quoting list prices commits nothing, so it needs no person, but the
+# sharing check fails it (reserve slots aren't in what Northlake shares) and it goes to
+# Helen, the default assignee. Once she approves, Northlake proposes $1,410 with results
+# by Nov 5. Henderson's representative consults on the go-ahead, which reaches Alex;
+# with his yes it confirms, Northlake books and closes, and Henderson closes too.
+#
+# henderson.ridgeline: Ridgeline asks for the seal material. Henderson's answerer finds
+# none in the lab's records, so the question reaches Alex inline; his answer (Kalrez)
+# goes back. Ridgeline's answerer quotes from the price list, which is within what
+# Ridgeline shares, so it is released without a person: $325. Alex says yes to the
+# order, Ridgeline confirms and closes, and Henderson closes too.
+#
+# henderson.calder: not in the story (Calder is a weak fit and left out), but the
+# outreach card lets a visitor include it, so its side is scripted too.
+scenario: harmony-demo
+entries:
+
+  # --- henderson.northlake
+  - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 1, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Hello, this is Claude for Henderson Lab at Northlake University. We need powder
+            XRD and SEM/EDS on 12 layered-oxide sodium-ion cathode powders, with standard
+            reports by Fri Nov 6. The powders are air-sensitive and kept under argon, so
+            they need air-free handling throughout; for XRD they'd go in a Bruker D8 dome
+            mount. Can you run both on that timeline? If so, please quote with dates and
+            tell us how you'd like the samples delivered.
+  - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 1, step: 1}
+    content:
+      - type: thinking
+  - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 1, step: 0}
+    content:
+      - type: thinking
+        thinking: >-
+          I don't know what's open on the instruments or what this would cost; the core
+          does. Ask before answering.
+      - type: tool_use
+        name: consult
+        input:
+          question: >-
+            Henderson Lab (Northlake University) asks for powder XRD and SEM/EDS on 12
+            air-sensitive sodium-ion cathode powders, with standard reports by Fri Nov 6
+            and air-free handling throughout. Can we run XRD on 12 air-sensitive powders
+            before Nov 6, and what would the whole job cost?
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 0}
+    content:
+      - type: thinking
+        thinking: The XRD date is the hard part. Check the instrument calendar first.
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: XRD availability before Nov 6}
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 1}
+    content:
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:6b7fbc91-aa36-5e83-ab17-3f1f29cad215"}
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 2}
+    content:
+      - type: thinking
+        thinking: >-
+          The public calendar is full until Nov 10, too late. Raj's note came up in the
+          search: a reserve XRD block on Wed Nov 4.
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:be42e6e1-dafe-5027-b898-6a83ab9d3d6c"}
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 3}
+    content:
+      - type: thinking
+        thinking: About 14 powders fit in the block, so all 12 do. Now the price.
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: price list air-free handling}
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 4}
+    content:
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:d8571c44-0258-5cee-b333-638d7c4f1e45"}
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 5}
+    content:
+      - type: thinking
+        thinking: Does a priority slot cost an academic user more?
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:fd3ceca2-ec25-585d-af2e-d237ae91ea47"}
+  - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 6}
+    content:
+      - type: thinking
+        thinking: >-
+          Academic users pay list price for priority slots, so 12 × $45 + 12 × $60 + $150 =
+          $1,410. Quoting the slot and list prices commits nothing, and the
+          representative may confirm a list-price booking once we say a slot is
+          available.
+      - type: text
+        text: |-
+          {
+            "answer": "Yes. The public XRD calendar is full until Nov 10, but we can run all 12 powders in a reserve XRD block on Wed Nov 4, 09:00–13:00, and the SEM/EDS from Tue Nov 3, with standard reports by Thu Nov 5. The powders should arrive sealed under argon by Tue Nov 3; we load them into dome holders in our glovebox. At our external academic prices the job is $1,410: powder XRD 12 × $45 = $540, SEM/EDS 12 × $60 = $720, and $150 for air-free handling. Quotes are valid 14 days.",
+            "needs_human": false,
+            "needs_human_reason": null,
+            "route": {
+              "assignees": ["helen"],
+              "reason": "Instrument priority and reserve-slot requests go to Helen."
+            },
+            "rationale": "The public calendar can't meet Nov 6, but Raj's reserve XRD block on Wed Nov 4 fits all 12 powders with room to spare. The price is the external academic list price: academic users pay list price for priority slots, so there is no exception to approve. Quoting isn't booking, and the instructions let the representative confirm a list-price booking once we've said a slot is available."
+          }
+  - match: {org: northlake, role: sharing_check, thread: "henderson.northlake", turn: 1, step: 0}
+    content:
+      - type: text
+        text: |-
+          {
+            "within_sharing": false,
+            "reason": "The draft proposes an internal reserve XRD block (Wed Nov 4, 09:00–13:00). Northlake shares what is open on the public instrument calendar, and its description excludes internal reserve slots."
+          }
+  # Turn 2 opens with the answer Helen released.
+  - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 2, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Good news: we can meet your date. We can run all 12 powders in a priority XRD
+            slot on the morning of Wed Nov 4 and the SEM/EDS from Tue Nov 3, with standard
+            reports by Thu Nov 5. Please ship the powders sealed under argon to arrive by
+            Tue Nov 3; we load them into dome holders in our glovebox. At our external
+            academic prices it comes to $1,410: XRD 12 × $45, SEM/EDS 12 × $60, and $150
+            for air-free handling. The quote is valid 14 days. Shall we book it?
+  - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 2, step: 1}
+    content:
+      - type: thinking
+  - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 2, step: 0}
+    content:
+      - type: thinking
+        thinking: A price and dates to agree to. The brief says to check with Alex first.
+      - type: tool_use
+        name: consult
+        input:
+          question: >-
+            Northlake Characterization Core proposes powder XRD on the morning of Wed Nov 4
+            and SEM/EDS from Tue Nov 3, with standard reports by Thu Nov 5, for $1,410 at
+            its external academic prices (XRD 12 × $45, SEM/EDS 12 × $60, $150 for air-free
+            handling), quote valid 14 days. The powders must arrive sealed under argon by
+            Tue Nov 3. Shall I go ahead and book it?
+  - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 0}
+    content:
+      - type: thinking
+        thinking: A go-ahead on spending. Check the budget, then who decides.
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: external services budget}
+  - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 1}
+    content:
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:2a6cb410-5609-5df0-bb2e-dac356853451"}
+  - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 2}
+    content:
+      - type: thinking
+      - type: text
+        text: |-
+          {
+            "answer": "Yes, go ahead with Northlake: $1,410, with standard reports by Thu Nov 5.",
+            "needs_human": true,
+            "needs_human_reason": "Agreeing to a price and dates commits the lab, and the brief says to check with Alex first.",
+            "route": {
+              "assignees": ["alex"],
+              "reason": "A go-ahead on Alex's own request, within the lab's discretionary budget."
+            },
+            "rationale": "$1,410 is inside the lab's ~$2,000 discretionary budget for external characterization, so the decision is Alex's on his own request, not Maya's. Reports by Thu Nov 5 meet his Nov 6 deadline."
+          }
+  # Turn 3 opens with Alex's answer.
+  - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 3, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Yes, please go ahead and book it: XRD on Wed Nov 4 and SEM/EDS from Nov 3 for
+            $1,410, with reports by Thu Nov 5. We'll ship the 12 powders sealed under argon
+            to arrive by Tue Nov 3. Thank you.
+  - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 3, step: 1}
+    content:
+      - type: thinking
+  - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 3, step: 0}
+    content:
+      - type: thinking
+        thinking: >-
+          The slot was released to me and the price is the list price, so my instructions
+          let me confirm the booking.
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Booked: powder XRD on the morning of Wed Nov 4 and SEM/EDS from Tue Nov 3 for
+            your 12 powders, $1,410, with standard reports by Thu Nov 5. Ship them sealed
+            under argon to arrive by Tue Nov 3. Thanks, and good luck with the
+            measurements.
+  - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 3, step: 1}
+    content:
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            Booked Henderson Lab (Alex Chen) for powder XRD on 12 air-sensitive powders in
+            the Wed Nov 4 reserve block, 09:00–13:00, which Helen released, and SEM/EDS
+            from Tue Nov 3. $1,410 at external academic list prices; standard reports due
+            Thu Nov 5. The samples arrive sealed under argon by Tue Nov 3.
+  # The closed notice opens Henderson's last turn.
+  - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 4, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            Northlake Characterization Core booked powder XRD (morning of Wed Nov 4) and
+            SEM/EDS (from Tue Nov 3) on the 12 cathode powders for $1,410, with standard
+            reports by Thu Nov 5; Alex approved. Ship the powders sealed under argon to
+            arrive by Tue Nov 3.
+
+  # --- henderson.ridgeline
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 1, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Hello, this is Claude for Henderson Lab at Northlake University. We need an
+            airtight holder to carry 12 air-sensitive sodium-ion cathode powders under argon
+            to a Bruker D8 powder XRD dome mount. It needs to reach us before Tue Nov 3.
+            Could you quote one, with a delivery date?
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 1, step: 1}
+    content:
+      - type: thinking
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 1, step: 0}
+    content:
+      - type: thinking
+        thinking: >-
+          The instrument model is given, but not the seal material, and I need both
+          before the shop can quote.
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Thanks. We can machine an airtight powder transfer holder for a Bruker D8 dome
+            mount. Before we can quote it, we need the seal material for the O-rings. Which
+            would you like, and how long will the powders sit in the holder?
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 1, step: 1}
+    content:
+      - type: thinking
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 2, step: 0}
+    content:
+      - type: thinking
+        thinking: The brief doesn't name a seal material. Ask the lab.
+      - type: tool_use
+        name: consult
+        input:
+          question: >-
+            Ridgeline Fabrication can machine an airtight powder transfer holder for a
+            Bruker D8 dome mount, but needs the seal material for the O-rings before it can
+            quote, and asks how long the powders will sit in the holder. The brief doesn't
+            say. Which seal material should I specify?
+  - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 0}
+    content:
+      - type: thinking
+        thinking: Look for a seal material in the lab's records.
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: seal O-ring gasket material}
+  - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 1}
+    content:
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: argon storage powders}
+  - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 2}
+    content:
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:2cf6abfd-eba0-5357-8e58-363cbd471105"}
+  - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 3}
+    content:
+      - type: thinking
+        thinking: >-
+          Nothing names a seal material. The project notes say how the powders are stored,
+          not what the holder should use. This is Alex's call.
+      - type: text
+        text: |-
+          {
+            "answer": "The lab's records don't name a seal material for the holder. The project notes only say the powders are stored in an argon glovebox and take up moisture within minutes of exposure.",
+            "needs_human": true,
+            "needs_human_reason": "Nothing on file names a seal material, and choosing one is a decision about Alex's samples.",
+            "route": {
+              "assignees": ["alex"],
+              "reason": "A sample-handling question on Alex's own request."
+            },
+            "rationale": "Searched the lab's records for a seal, O-ring or gasket material and found none. Project NAC-12 says the powders are kept under argon and are moisture-sensitive, which bears on the choice, but the choice is Alex's."
+          }
+  # Turn 3 opens with Alex's answer.
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 3, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Kalrez, please: the powders may sit under argon for a few weeks. Could you
+            quote the holder with Kalrez seals, and confirm it can reach us before Tue
+            Nov 3?
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 3, step: 1}
+    content:
+      - type: thinking
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 2, step: 0}
+    content:
+      - type: thinking
+        thinking: I have what I need to quote. The shop has the prices and lead times.
+      - type: tool_use
+        name: consult
+        input:
+          question: >-
+            Henderson Lab wants an airtight powder transfer holder for a Bruker D8 dome
+            mount with Kalrez seals; the powders may sit under argon for a few weeks. It
+            must reach them before Tue Nov 3. What's the price and lead time?
+  - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: Bruker D8 holder Kalrez price}
+  - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 1}
+    content:
+      - type: tool_use
+        name: read_document
+        input: {id: "kn:894d0380-75d4-5cd5-af88-22d84768254d"}
+  - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 2}
+    content:
+      - type: thinking
+        thinking: >-
+          $240 + $85 = $325, 4 business days: ordered Mon Oct 26, it ships Fri Oct 30.
+      - type: text
+        text: |-
+          {
+            "answer": "The airtight powder transfer holder for a Bruker D8 dome mount, aluminum body, is $240, and Kalrez seals in place of the included Viton add $85: $325 in total. The lead time is 4 business days, so ordered today it ships by Fri Oct 30, ahead of Nov 3. Kalrez is what we recommend for long storage under argon.",
+            "needs_human": false,
+            "needs_human_reason": null,
+            "route": {
+              "assignees": ["dana"],
+              "reason": "Everything goes to Dana."
+            },
+            "rationale": "A standard holder from the price list with the Kalrez option, at the standard 4-business-day lead time. Nothing here goes beyond the price list."
+          }
+  - match: {org: ridgeline, role: sharing_check, thread: "henderson.ridgeline", turn: 1, step: 0}
+    content:
+      - type: text
+        text: |-
+          {
+            "within_sharing": true,
+            "reason": "Only a price, a seal option and a lead time from Ridgeline's price list, which its sharing description covers."
+          }
+  # Turn 3 opens with the released answer.
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 3, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            With Kalrez seals the holder is $325: $240 for the aluminum-bodied airtight
+            transfer holder for your Bruker D8 dome mount, plus $85 for Kalrez in place of
+            the standard Viton. It takes 4 business days, so if you confirm today it ships
+            by Fri Oct 30, ahead of Nov 3. Kalrez is what we'd recommend for weeks under
+            argon. Shall we go ahead?
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 3, step: 1}
+    content:
+      - type: thinking
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 4, step: 0}
+    content:
+      - type: thinking
+        thinking: An order to agree to. Check with Alex first.
+      - type: tool_use
+        name: consult
+        input:
+          question: >-
+            Ridgeline Fabrication quotes $325 for the airtight transfer holder with Kalrez
+            seals ($240 plus $85 for Kalrez), shipping by Fri Oct 30, ahead of Nov 3. Shall
+            I confirm the order?
+  - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 2, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: search_org_knowledge
+        input: {query: external services budget}
+  - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 2, step: 1}
+    content:
+      - type: thinking
+      - type: text
+        text: |-
+          {
+            "answer": "Yes, go ahead with Ridgeline: $325, shipping by Fri Oct 30.",
+            "needs_human": true,
+            "needs_human_reason": "Confirming an order commits the lab, and the brief says to check with Alex first.",
+            "route": {
+              "assignees": ["alex"],
+              "reason": "A go-ahead on Alex's own request, within the lab's discretionary budget."
+            },
+            "rationale": "$325 is well inside the lab's ~$2,000 discretionary budget, so the go-ahead is Alex's on his own request. The holder ships before the powders must leave for characterization."
+          }
+  # Turn 5 opens with Alex's answer.
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 5, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Yes, please go ahead: the airtight holder with Kalrez seals for $325, shipping
+            by Fri Oct 30. Please ship it to Henderson Lab, Bldg 4, Northlake campus. Thank
+            you.
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 5, step: 1}
+    content:
+      - type: thinking
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 4, step: 0}
+    content:
+      - type: thinking
+        thinking: List price and standard lead time, so I may confirm the order.
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Confirmed: one airtight powder transfer holder for a Bruker D8 dome mount with
+            Kalrez seals, $325, shipping to Henderson Lab, Bldg 4, Northlake campus by Fri
+            Oct 30. Thanks for the order.
+  - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 4, step: 1}
+    content:
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            Order from Henderson Lab (Alex Chen): one airtight powder transfer holder for a
+            Bruker D8 dome mount, aluminum body, Kalrez seals, $325 at list price. Ships by
+            Fri Oct 30 to Henderson Lab, Bldg 4, Northlake campus.
+  - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 6, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            Ridgeline Fabrication is machining the airtight transfer holder with Kalrez
+            seals for $325, shipping to Bldg 4 by Fri Oct 30. Alex chose Kalrez and
+            approved the order.
+
+  # --- henderson.calder
+  - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 1, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Hello, this is Claude for Henderson Lab at Northlake University. We need powder
+            XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders by Fri Nov 6, and
+            an airtight holder to carry them under argon to a Bruker D8 dome mount. Could
+            you help with either?
+  - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 1, step: 1}
+    content:
+      - type: thinking
+  - match: {org: calder, role: representative, thread: "henderson.calder", turn: 1, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Thanks for asking. Calder does computation only (DFT and machine-learned
+            potentials) and has no laboratory instruments or machining, so we can't help
+            with either. If you later want voltage or stability screening on these
+            materials, we'd be glad to talk.
+  - match: {org: calder, role: representative, thread: "henderson.calder", turn: 1, step: 1}
+    content:
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            Henderson Lab asked for XRD, SEM/EDS and an airtight sample holder. We do
+            computation only, so we said so and closed.
+  - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 2, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            Calder Computational does computation only and can't run the measurements or
+            make the holder.

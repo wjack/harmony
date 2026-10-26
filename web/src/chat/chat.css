@@ -1,0 +1,215 @@
+/*
+ * Prose and motion the chat needs beyond the theme's utilities: Claude's serif reply
+ * body (16.5px, 1.6) with its headings, lists, tables and code, and the shimmer on a
+ * tool line while the tool runs.
+ */
+
+.chat-prose {
+  font-family: var(--font-serif);
+  font-size: 16.5px;
+  /* Claude sets paragraphs at ~24.5px and opens list items up a little. */
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  font-variant-numeric: lining-nums;
+}
+
+.chat-prose > :first-child {
+  margin-top: 0;
+}
+
+.chat-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-prose p {
+  margin: 0 0 0.75em;
+}
+
+.chat-prose h1,
+.chat-prose h2,
+.chat-prose h3,
+.chat-prose h4 {
+  margin: 1.25em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+
+.chat-prose h1 {
+  font-size: 1.35em;
+}
+
+.chat-prose h2 {
+  font-size: 1.2em;
+}
+
+.chat-prose h3,
+.chat-prose h4 {
+  font-size: 1.05em;
+}
+
+.chat-prose strong {
+  font-weight: 600;
+}
+
+.chat-prose ul,
+.chat-prose ol {
+  margin: 0 0 0.75em;
+  padding-left: 1.6em;
+}
+
+.chat-prose ul {
+  list-style: disc;
+}
+
+.chat-prose ol {
+  list-style: decimal;
+}
+
+.chat-prose li {
+  margin: 0.25em 0;
+  padding-left: 0.2em;
+  line-height: 1.65;
+}
+
+.chat-prose li > ul,
+.chat-prose li > ol {
+  margin: 0.3em 0 0;
+}
+
+.chat-prose a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+.chat-prose a:hover {
+  text-decoration-color: currentColor;
+}
+
+.chat-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--bg-user-bubble);
+  border: 1px solid var(--border);
+}
+
+.chat-prose pre {
+  margin: 0 0 0.9em;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+.chat-prose pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 13px;
+}
+
+.chat-prose blockquote {
+  margin: 0 0 0.75em;
+  padding-left: 1em;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.chat-prose hr {
+  margin: 1.25em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.chat-prose table {
+  width: 100%;
+  margin: 0.25em 0 1em;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.chat-prose th {
+  padding: 6px 16px 8px 0;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-strong);
+  vertical-align: bottom;
+}
+
+.chat-prose td {
+  padding: 8px 16px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Compact prose inside cards: the outreach brief. */
+.chat-prose-sm {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.chat-prose-sm p,
+.chat-prose-sm ul,
+.chat-prose-sm ol {
+  margin: 0 0 0.5em;
+}
+
+.chat-prose-sm ul {
+  padding-left: 1.2em;
+  list-style: disc;
+}
+
+.chat-prose-sm > :last-child {
+  margin-bottom: 0;
+}
+
+/* The card's own subject (the outreach brief) reads in the body color. */
+.chat-prose-sm.chat-prose-lead {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* "Searching the Harmony network…" while the tool runs. */
+.chat-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--text-muted) 0%,
+      var(--text-muted) 40%,
+      var(--text-faint) 50%,
+      var(--text-muted) 60%,
+      var(--text-muted) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chat-shimmer 2.2s linear infinite;
+}
+
+@keyframes chat-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-shimmer {
+    animation: none;
+    color: var(--text-muted);
+    background: none;
+  }
+}

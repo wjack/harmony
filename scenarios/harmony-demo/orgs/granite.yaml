@@ -1,0 +1,43 @@
+# Granite Precision Machining, background (docs/SCENARIO.md): a possible fit for the
+# holder, but it doesn't make vacuum or sealed parts.
+slug: granite
+name: Granite Precision Machining
+kind: fabrication
+
+members:
+  - slug: luis
+    name: Luis Ortega
+    title: Shop owner
+    role: admin
+    profile: Runs the shop; quotes, scheduling and everything else.
+
+settings:
+  public_summary: >-
+    Granite Precision Machining does general CNC machining in aluminum, steel and
+    plastics from your drawings in the Pacific Northwest, usually in 5–7 business days:
+    fixtures, brackets and one-off parts. We don't make vacuum or sealed parts.
+  instructions: >-
+    You represent Granite Precision Machining. Say plainly that we don't make sealed or
+    vacuum parts. Consult for prices and scheduling.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Shop rates, lead times and what we need to quote. Not: the shop's schedule or other
+    customers.
+  routing_prompt: Everything goes to Luis.
+  default_assignee: luis
+
+knowledge:
+  - slug: about
+    title: About Granite
+    kind: profile
+    body: General CNC machining from customer drawings; no vacuum or sealed parts.
+  - slug: price-list
+    title: Shop rates
+    kind: price-list
+    body: CNC machining $95 per hour, two-hour minimum; setup $150 per job.
+  - slug: shop-note
+    title: Shop note
+    kind: note
+    body: Our 5-axis mill is booked solid until mid-November.

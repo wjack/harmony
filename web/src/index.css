@@ -1,0 +1,45 @@
+@import "tailwindcss";
+@import "./theme/tokens.css";
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings:
+      "cv11" 1,
+      "ss01" 1;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+}
+
+@layer utilities {
+  /* Thin, warm scrollbars, as in the Claude app's sidebar and menus. */
+  .scrollbar-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+}

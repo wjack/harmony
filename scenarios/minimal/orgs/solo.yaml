@@ -1,0 +1,24 @@
+slug: solo
+name: Solo Test Org
+kind: test
+
+members:
+  - slug: sam
+    name: Sam Rivera
+    title: Owner
+    role: admin
+    profile: Does everything.
+
+settings:
+  public_summary: A one-person org for tests.
+  instructions: Answer briefly.
+
+policy:
+  sharing_description: Anything about the org's own work.
+  routing_prompt: Everything goes to Sam.
+  default_assignee: sam
+
+knowledge:
+  - slug: about
+    title: About Solo
+    body: A one-person org for tests.

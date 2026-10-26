@@ -1,0 +1,48 @@
+/*
+ * React Flow, restyled in Claude's tokens (UI_REFERENCE.md §8). base.css carries only
+ * the structural rules; everything visible comes from the tokens.
+ */
+@import "@xyflow/react/dist/base.css";
+
+.harmony-network .react-flow {
+  --xy-background-color: var(--bg);
+  --xy-background-pattern-dots-color-default: color-mix(in srgb, var(--text-faint) 80%, transparent);
+  --xy-edge-stroke-default: var(--border-strong);
+  --xy-selection-background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+  --xy-selection-border-default: 1px dotted var(--accent);
+  font-family: var(--font-sans);
+}
+
+/* Nodes are our own cards: no React Flow chrome around them. */
+.harmony-network .react-flow__node {
+  border-radius: 12px;
+}
+
+.harmony-network .react-flow__node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.harmony-network .react-flow__node-label {
+  pointer-events: none;
+}
+
+/* A turn in flight: the dash runs from requester to responder. */
+.harmony-thread-edge--flowing {
+  animation: harmony-edge-flow 0.7s linear infinite;
+}
+
+@keyframes harmony-edge-flow {
+  from {
+    stroke-dashoffset: 22;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .harmony-thread-edge--flowing {
+    animation: none;
+  }
+}

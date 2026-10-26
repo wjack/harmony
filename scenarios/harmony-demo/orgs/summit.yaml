@@ -1,0 +1,46 @@
+# Summit Glovebox Services, background (docs/SCENARIO.md): a possible fit for the
+# transfer, though it packs and ships rather than machining holders.
+slug: summit
+name: Summit Glovebox Services
+kind: logistics
+
+members:
+  - slug: marco
+    name: Marco Bellini
+    title: Operations manager
+    role: admin
+    profile: Runs the gloveboxes and shipping; quotes and scheduling.
+
+settings:
+  public_summary: >-
+    Summit Glovebox Services prepares, packs and ships air-sensitive materials in the
+    Pacific Northwest: we pack under argon or nitrogen and ship in sealed pouches and
+    canisters, usually in 2–3 business days. We don't measure samples or machine
+    parts.
+  instructions: >-
+    You represent Summit Glovebox Services. We don't measure samples or machine parts.
+    Consult for prices and scheduling.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Our packing and shipping prices, lead times and packaging options. Not: glovebox
+    capacity or other clients.
+  routing_prompt: Everything goes to Marco.
+  default_assignee: marco
+
+knowledge:
+  - slug: about
+    title: About Summit
+    kind: profile
+    body: Inert-atmosphere sample prep, packaging and sealed shipping.
+  - slug: price-list
+    title: Price list
+    kind: price-list
+    body: >-
+      Glovebox packing under Ar or N2 $35 per sample. Sealed canister shipping $120 per
+      shipment, regional, 2 business days.
+  - slug: glovebox-capacity
+    title: Glovebox capacity
+    kind: note
+    body: Box 2 is down for regeneration until Nov 2; we can only run one packing job a day.

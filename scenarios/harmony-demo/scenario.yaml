@@ -1,0 +1,33 @@
+# The demo scenario (docs/SCENARIO.md, ARCHITECTURE.md §11.5 and §11.7).
+#
+# Five featured orgs (the story's cast and the adversary) and ten background orgs for
+# the P1 sim; P3 adds more. The suggested story is in story.yaml. Format:
+# src/harmony/seeds/schema.py (story.yaml: StorySpec).
+name: harmony-demo
+anchor: 2026-10-26
+# "Try the suggested request" starts as Alex.
+default_member: alex
+
+communities:
+  - slug: northlake-university
+    name: Northlake University
+    kind: university
+
+orgs:
+  # Featured
+  - henderson
+  - northlake
+  - ridgeline
+  - calder
+  - vantage
+  # Background
+  - bayside
+  - summit
+  - ostrander
+  - pinecrest
+  - harbor
+  - meridian
+  - ridgeway
+  - lumen
+  - granite
+  - tidewater

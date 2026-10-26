@@ -1,0 +1,91 @@
+# The containerized app, for CI and `make compose-smoke` (scripts/compose_smoke.sh):
+# the production image as api + worker, against throwaway Postgres and Temporal, with
+# MODEL_MODE=scripted and OBJECT_STORE=localfs. It is its own Compose project, so it
+# runs beside the dev stack (compose.yaml) on host ports offset by 10000.
+#
+#   docker compose -f compose.ci.yaml up -d --build --wait
+#   docker compose -f compose.ci.yaml down -v
+name: harmony-ci
+
+x-app: &app
+  image: harmony:ci
+  build:
+    context: .
+  environment:
+    APP_ENV: ci
+    MODEL_MODE: scripted
+    OBJECT_STORE: localfs
+    PORT: "10000"
+    DATABASE_URL: postgresql://harmony:harmony@postgres:5432/harmony
+    DATABASE_DIRECT_URL: postgresql://harmony:harmony@postgres:5432/harmony
+    TEMPORAL_ADDRESS: temporal:7233
+    TEMPORAL_NAMESPACE: default
+    BUILD_SHA: ${BUILD_SHA:-ci}
+    # A throwaway value so the smoke checks can exercise /api/admin/wipe.
+    ADMIN_SECRET: ci-only-admin-secret
+    # No model key exists here, and any accidental client call fails fast and locally.
+    ANTHROPIC_BASE_URL: http://127.0.0.1:9
+  # api and worker share localfs objects, as they would share MinIO.
+  volumes:
+    - objects:/app/.data
+
+services:
+  # Same images, commands and healthchecks as the dev stack, minus its volumes and
+  # ports: data lives only as long as the stack.
+  postgres:
+    extends:
+      file: compose.yaml
+      service: postgres
+    ports: !override
+      - "127.0.0.1:${HARMONY_CI_PG_PORT:-15432}:5432"
+    volumes: !reset []
+
+  temporal:
+    extends:
+      file: compose.yaml
+      service: temporal
+    ports: !override
+      - "127.0.0.1:${HARMONY_CI_TEMPORAL_PORT:-17233}:7233"
+    volumes: !reset []
+    tmpfs:
+      - /data
+
+  # Render runs this as the web service's and the worker's pre-deploy command.
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:${HARMONY_CI_API_PORT:-18000}:10000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:10000/api/healthz', timeout=2)
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  worker:
+    <<: *app
+    command: ["harmony", "worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+
+volumes:
+  objects:

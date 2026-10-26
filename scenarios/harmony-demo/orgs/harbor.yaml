@@ -1,0 +1,44 @@
+# Harbor Pilot Line, background (docs/SCENARIO.md): not a fit for the story.
+slug: harbor
+name: Harbor Pilot Line
+kind: fabrication
+
+members:
+  - slug: ben
+    name: Ben Okonkwo
+    title: Pilot line manager
+    role: admin
+    profile: Runs the pilot line; scheduling, quotes and partner builds.
+
+settings:
+  public_summary: >-
+    Harbor Pilot Line builds pouch cells for cathode and anode materials at the 1–10 Ah
+    scale in the Pacific Northwest, from electrode coating to formation, usually in 3–4
+    weeks. We don't do materials characterization or machined parts.
+  instructions: >-
+    You represent Harbor Pilot Line. Consult for prices, scheduling and anything
+    custom.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Pilot build prices, lead times and what customers supply. Not: the line schedule or
+    partner builds.
+  routing_prompt: Everything goes to Ben.
+  default_assignee: ben
+
+knowledge:
+  - slug: about
+    title: About Harbor
+    kind: profile
+    body: Pouch-cell pilot fabrication for battery materials.
+  - slug: price-list
+    title: Pilot build prices
+    kind: price-list
+    body: >-
+      Pilot build of 10 pouch cells (1 Ah) $6,500, including coating and formation;
+      3–4 weeks. Customer supplies 500 g of active material.
+  - slug: line-schedule
+    title: Line schedule
+    kind: schedule
+    body: The coater is reserved for a partner build until Nov 20.

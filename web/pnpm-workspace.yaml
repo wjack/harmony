@@ -1,0 +1,11 @@
+# web/ is a standalone pnpm project; this file holds its pnpm settings and stops pnpm
+# from searching parent directories for a workspace.
+
+# Supply-chain hygiene: resolve only versions published at least 7 days ago (minutes).
+minimumReleaseAge: 10080
+
+peerDependencyRules:
+  allowedVersions:
+    # openapi-typescript 7.13 declares typescript ^5, but generates correctly with 6.0
+    # (scripts/gen_api.sh). typescript-eslint caps TypeScript below 6.1.
+    openapi-typescript>typescript: "6"

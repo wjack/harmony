@@ -1,0 +1,239 @@
+/*
+ * Claude's visual language as CSS variables (docs/UI_REFERENCE.md §1), mapped onto
+ * Tailwind utilities below. Components use the utilities (`bg-canvas`, `text-muted`,
+ * `rounded-menu`, `shadow-card`…) or `var(--…)`, never raw hex values, so a token change
+ * (or the dark set) reaches every screen.
+ *
+ * Fonts load from Google Fonts in index.html: Source Serif 4 stands in for Claude's
+ * Copernicus/Tiempos, Inter for Styrene, JetBrains Mono for tool input and output.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #faf9f5; /* main canvas, warm off-white */
+  --bg-sidebar: #f5f4ee;
+  --bg-user-bubble: #f0eee6;
+  --surface: #ffffff; /* composer, cards, menus, modals */
+  --hover: #efede5; /* hover tint; also the selected sidebar row */
+  --pressed: #e8e6dc;
+  --scrim: rgb(20 20 19 / 0.5);
+
+  /* Lines */
+  --border: #e8e6dc; /* hairlines */
+  --border-strong: #d9d6ca; /* input borders, bordered buttons */
+
+  /* Text */
+  --text: #141413;
+  --text-secondary: #3d3d3a;
+  --text-muted: #73726c;
+  --text-faint: #a3a198;
+
+  /* Brand and actions */
+  --accent: #d97757; /* the Claude spark, focus rings */
+  --accent-strong: #c6613f; /* send button */
+  --accent-soft: #f5e4dc; /* tinted accent backgrounds (suggested rings, chips) */
+  --primary-btn: #141413;
+  --primary-btn-hover: #2f2f2c;
+  --primary-btn-text: #ffffff;
+  --toggle-on: #2c84db;
+  --link: #2c6fbb;
+  --tooltip-bg: #141413;
+  --tooltip-text: #faf9f5;
+
+  /* Status (pills, toasts, network nodes) */
+  --info: #2c84db;
+  --info-soft: #e3eefa;
+  --success: #2f7d4f;
+  --success-soft: #e2f0e6;
+  --warning: #c6613f;
+  --warning-soft: #f8e7df;
+  --danger: #b93a32;
+  --danger-soft: #f7e1df;
+
+  /* The demo bar is deliberately not Claude-styled (ARCHITECTURE.md §11.4). */
+  --demo-bg: #1f1e1d;
+  --demo-surface: #2d2c2a;
+  --demo-border: #3d3c38;
+  --demo-text: #e9e7df;
+  --demo-muted: #9b998f;
+  --demo-alert: #3a2a22; /* "needs a human" chips */
+  --demo-alert-hover: #4a3428;
+  --demo-alert-ring: #5a3a2c;
+  --demo-alert-text: #f3d9cc;
+  --demo-alert-muted: #c9a593;
+
+  /* Elevation: cards use a hairline plus a very soft shadow. */
+  --elevation-card: 0 1px 2px rgb(20 20 19 / 0.04), 0 2px 8px rgb(20 20 19 / 0.03);
+  --elevation-composer: 0 2px 4px rgb(20 20 19 / 0.03), 0 4px 18px rgb(20 20 19 / 0.05);
+  --elevation-menu: 0 4px 12px rgb(20 20 19 / 0.06), 0 12px 32px rgb(20 20 19 / 0.08);
+  --elevation-modal: 0 8px 24px rgb(20 20 19 / 0.1), 0 24px 64px rgb(20 20 19 / 0.14);
+
+  /* Layout */
+  --sidebar-width: 272px;
+  --sidebar-rail-width: 48px;
+  --demo-bar-height: 36px;
+}
+
+/*
+ * Dark values, from the dark-mode reference. Nothing switches to them yet (the dark
+ * mode toggle is out of scope, UI_REFERENCE.md §10); set data-theme="dark" on <html>.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #262624;
+  --bg-sidebar: #1f1e1d;
+  --bg-user-bubble: #141413;
+  --surface: #30302e;
+  --hover: #3a3936;
+  --pressed: #44433f;
+  --scrim: rgb(0 0 0 / 0.6);
+
+  --border: #3e3e38;
+  --border-strong: #4d4c47;
+
+  --text: #faf9f5;
+  --text-secondary: #dedcd3;
+  --text-muted: #a6a39a;
+  --text-faint: #75736c;
+
+  --accent-soft: #4a3229;
+  --primary-btn: #faf9f5;
+  --primary-btn-hover: #e8e6dc;
+  --primary-btn-text: #141413;
+  --link: #6aa6e8;
+  --tooltip-bg: #faf9f5;
+  --tooltip-text: #141413;
+
+  --info-soft: #1f3247;
+  --success-soft: #1f3528;
+  --warning-soft: #45291f;
+  --danger-soft: #45211f;
+
+  --elevation-card: 0 1px 2px rgb(0 0 0 / 0.3);
+  --elevation-composer: 0 4px 18px rgb(0 0 0 / 0.3);
+  --elevation-menu: 0 12px 32px rgb(0 0 0 / 0.4);
+  --elevation-modal: 0 24px 64px rgb(0 0 0 / 0.5);
+}
+
+@theme inline {
+  --color-canvas: var(--bg);
+  --color-sidebar: var(--bg-sidebar);
+  --color-bubble: var(--bg-user-bubble);
+  --color-surface: var(--surface);
+  --color-hover: var(--hover);
+  --color-pressed: var(--pressed);
+  --color-scrim: var(--scrim);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-ink: var(--text);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-primary: var(--primary-btn);
+  --color-primary-hover: var(--primary-btn-hover);
+  --color-on-primary: var(--primary-btn-text);
+  --color-toggle: var(--toggle-on);
+  --color-link: var(--link);
+
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --color-demo: var(--demo-bg);
+  --color-demo-surface: var(--demo-surface);
+  --color-demo-border: var(--demo-border);
+  --color-demo-text: var(--demo-text);
+  --color-demo-muted: var(--demo-muted);
+  --color-tooltip: var(--tooltip-bg);
+  --color-on-tooltip: var(--tooltip-text);
+  --color-demo-alert: var(--demo-alert);
+  --color-demo-alert-hover: var(--demo-alert-hover);
+  --color-demo-alert-ring: var(--demo-alert-ring);
+  --color-demo-alert-text: var(--demo-alert-text);
+  --color-demo-alert-muted: var(--demo-alert-muted);
+
+  --font-serif: "Source Serif 4", "Newsreader", ui-serif, Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* 8px buttons and inputs, 12px menus and modals, 20px composer. */
+  --radius-control: 8px;
+  --radius-menu: 12px;
+  --radius-composer: 20px;
+
+  --shadow-card: var(--elevation-card);
+  --shadow-composer: var(--elevation-composer);
+  --shadow-menu: var(--elevation-menu);
+  --shadow-modal: var(--elevation-modal);
+
+  --animate-spark: spark-spin 2.4s cubic-bezier(0.6, 0, 0.4, 1) infinite;
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+  --animate-toast-in: toast-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  --animate-fade-in: fade-in 140ms ease-out;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+
+  @keyframes spark-spin {
+    0% {
+      transform: rotate(0deg) scale(1);
+    }
+    50% {
+      transform: rotate(90deg) scale(0.86);
+    }
+    100% {
+      transform: rotate(180deg) scale(1);
+    }
+  }
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.45;
+      transform: scale(0.8);
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+}

@@ -1,0 +1,45 @@
+# Pinecrest Precursors, background (docs/SCENARIO.md): not a fit for the story.
+slug: pinecrest
+name: Pinecrest Precursors
+kind: synthesis
+
+members:
+  - slug: aisha
+    name: Aisha Raman
+    title: Sales lead
+    role: admin
+    profile: Handles quotes, orders and custom syntheses.
+
+settings:
+  public_summary: >-
+    Pinecrest Precursors supplies battery-grade sodium salts and transition-metal
+    precursors (Mn, Fe, Ni) in research and pilot quantities from the Pacific
+    Northwest, with certificates of analysis, usually in 1–2 weeks. We don't do
+    characterization.
+  instructions: >-
+    You represent Pinecrest Precursors. Consult for catalog prices, lead times and
+    custom batches.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Catalog prices, lead times for stock items and certificates of analysis. Not:
+    supplier lead-time problems or other customers.
+  routing_prompt: Everything goes to Aisha.
+  default_assignee: aisha
+
+knowledge:
+  - slug: about
+    title: About Pinecrest
+    kind: profile
+    body: Sodium salts and transition-metal precursors for battery research.
+  - slug: price-list
+    title: Catalog prices
+    kind: price-list
+    body: >-
+      Na2CO3, battery grade, $40 per kg. MnSO4 $35 per kg. NiSO4 $90 per kg. Custom
+      precursor batches from $1,200.
+  - slug: supply-note
+    title: Supply note
+    kind: note
+    body: Nickel sulfate lead times are slipping to three weeks; quote two weeks only for stock.

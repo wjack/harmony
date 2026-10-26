@@ -1,0 +1,337 @@
+/**
+ * The suggested story in a browser (REVISION_UNSTRUCTURED.md §10) on ScriptedModel,
+ * against the real API, worker, Postgres and Temporal (scripts/e2e_ui.sh).
+ *
+ * Alex sends the suggested message, approves the outreach for Northlake and Ridgeline
+ * and answers Ridgeline's seal question inline. Helen approves Northlake's flagged
+ * answer from her inbox. Alex says yes to both, both conversations close and Claude
+ * sums up. Then the network view, what Northlake's representative saw, and
+ * Customize → Harmony's sharing.
+ *
+ * The cassettes are keyed by turn, not by what is typed, so the test follows the
+ * story's path: Calder is left out, as the walkthrough says. Every browser context is
+ * a new visitor, so the test gets a world of its own. Messaged and Replied are passing
+ * states on ScriptedModel (a reply or a consult follows within a turn or two), so the
+ * network checks wait on the states that hold until a person acts, and on Closed.
+ */
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+/** Long enough for several model turns on both sides (representative, consult, sharing check). */
+const TURNS = { timeout: 90_000 };
+
+const NORTHLAKE = "Northlake Characterization Core";
+const RIDGELINE = "Ridgeline Fabrication";
+const CALDER = "Calder Computational";
+/**
+ * How Northlake's inbox names the request: by Henderson's first message to it, since
+ * the brief (and so its first line) is Henderson's own, past the representative's
+ * self-introduction, which every request from Henderson shares.
+ */
+const NORTHLAKE_TITLE = /^We need powder XRD and SEM\/EDS on 12 layered-oxide/;
+
+test.describe.configure({ timeout: 6 * 60_000 });
+
+async function switchAccount(page: Page, from: string, to: string): Promise<void> {
+  await page.getByRole("button", { name: `Account: ${from}` }).click();
+  await page.getByRole("menu").getByText(to, { exact: true }).click();
+  await expect(page.getByRole("button", { name: `Account: ${to}` })).toBeVisible();
+}
+
+/** Follows a sidebar link; `name` is a prefix, since a badge can follow it ("Requests 2 need you"). */
+async function openFromSidebar(page: Page, name: string): Promise<void> {
+  await page
+    .getByRole("navigation", { name: "Sidebar" })
+    .getByRole("link", { name: new RegExp(`^${name}`) })
+    .first()
+    .click();
+}
+
+/** Answers the open inline question from `org`, in the chat. */
+async function answerInline(page: Page, org: string, text: string): Promise<void> {
+  const box = page.getByRole("textbox", { name: `Your answer about ${org}` });
+  await expect(box).toBeVisible(TURNS);
+  await box.fill(text);
+  await page.getByRole("region").filter({ has: box }).getByRole("button", { name: "Send answer" }).click();
+  await expect(box).toBeHidden(TURNS);
+}
+
+/** The live status card's row for `org`. */
+function statusRow(page: Page, org: string): Locator {
+  return page
+    .getByRole("region", { name: "Network request" })
+    .last()
+    .getByRole("listitem")
+    .filter({ hasText: org });
+}
+
+/** `org`'s card on the network canvas. */
+function networkNode(page: Page, org: string): Locator {
+  return page.locator(".react-flow__node").filter({ hasText: org });
+}
+
+/** Whether `org`'s name shows in full on its card: no part of it is clipped. */
+async function nameFits(page: Page, org: string): Promise<boolean> {
+  const name = networkNode(page, org).locator("[data-org-name]");
+  const [text, box] = await Promise.all([name.boundingBox(), name.locator("..").boundingBox()]);
+  if (text === null || box === null) return false;
+  return text.x + text.width <= box.x + box.width + 0.5 && text.y + text.height <= box.y + box.height + 0.5;
+}
+
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Whether `a` and `b` overlap. */
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+async function boxesOf(locator: Locator): Promise<Box[]> {
+  const boxes = await Promise.all((await locator.all()).map((each) => each.boundingBox()));
+  return boxes.filter((box) => box !== null);
+}
+
+/** How many thread lines on the canvas are drawn over a card; each should land on open canvas. */
+async function edgeLabelsOverCards(page: Page): Promise<number> {
+  const [labels, cards] = await Promise.all([
+    boxesOf(page.locator("[data-edge-label]")),
+    boxesOf(page.locator(".react-flow__node")),
+  ]);
+  return labels.filter((label) => cards.some((card) => overlaps(label, card))).length;
+}
+
+/** What `clippedValues` reads of an element. The e2e project has no DOM types to name it. */
+interface Measured {
+  scrollWidth: number;
+  clientWidth: number;
+  textContent: string | null;
+}
+
+/** What `cutShortText` reads of an element. */
+interface MeasuredHeight {
+  scrollHeight: number;
+  clientHeight: number;
+  textContent: string | null;
+}
+
+/** The decision card's question and draft where they're cut short: taller than their box. */
+async function cutShortText(card: Locator): Promise<string[]> {
+  return card
+    .locator("h2, [aria-busy]")
+    .evaluateAll((texts: MeasuredHeight[]) =>
+      texts.filter((text) => text.scrollHeight > text.clientHeight + 1).map((text) => text.textContent ?? ""),
+    );
+}
+
+/** The properties rail's values that are cut short: content wider than the box showing it. */
+async function clippedValues(rail: Locator): Promise<string[]> {
+  return rail
+    .locator("dd, dd *")
+    .evaluateAll((values: Measured[]) =>
+      values.filter((value) => value.scrollWidth > value.clientWidth + 1).map((value) => value.textContent ?? ""),
+    );
+}
+
+// A test of its own: each visitor gets a fresh world, so this one has no request in flight.
+test("before any request is in flight, the network view's note sits clear of every card", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("dialog").getByRole("button", { name: /^Network view/ }).click();
+  await expect(page).toHaveURL(/\/network/);
+  const note = page.locator("[data-no-request]");
+  await expect(note).toContainText(/No requests yet|Nothing in flight/);
+  await expect(page.locator(".react-flow__node").first()).toBeVisible();
+  const [box] = await boxesOf(note);
+  const cards = await boxesOf(page.locator(".react-flow__node"));
+  expect(box).toBeDefined();
+  expect(cards.filter((card) => box !== undefined && overlaps(box, card))).toEqual([]);
+});
+
+test("the suggested story, from Alex's message to both conversations closed", async ({ page }) => {
+  await test.step("Alex sends the suggested message", async () => {
+    await page.goto("/");
+    await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+    await page.getByRole("button", { name: /^Find a lab that can run XRD/ }).click();
+    await expect(page.getByRole("textbox", { name: "Write your message to Claude" })).toHaveValue(/^Find a lab/);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page).toHaveURL(/\/chat\//);
+  });
+
+  await test.step("at 900px the chat narrows with the window, so nothing runs off its right edge", async () => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    await expect(page.getByRole("button", { name: "Share", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("textbox", { name: "Write your message to Claude" })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("button", { name: "Use voice mode" })).toBeInViewport({ ratio: 1 });
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await test.step("the outreach card lists Calder as not a fit, and its first option leaves it out", async () => {
+    await expect(page.getByText("Send this request to 2 organizations?")).toBeVisible(TURNS);
+    const brief = page.getByRole("region", { name: "Network request" }).first();
+    await expect(brief).toContainText("Henderson Lab");
+    for (const org of [NORTHLAKE, RIDGELINE, CALDER]) await expect(brief).toContainText(org);
+    await expect(brief.getByRole("listitem").filter({ hasText: CALDER })).toContainText("Not a fit");
+
+    const first = page.getByRole("option", { name: /Send to 2 organizations/ });
+    await expect(first).not.toContainText(CALDER);
+    await first.click();
+    await expect(statusRow(page, CALDER)).toContainText("Screened", TURNS);
+  });
+
+  await test.step("Ridgeline's question reaches Alex inline, and he answers", async () => {
+    await expect(statusRow(page, RIDGELINE)).toContainText("Needs your answer", TURNS);
+    await answerInline(page, RIDGELINE, "Kalrez, please. The powders may sit under argon for a few weeks.");
+    await expect(page.getByText(/quotes \$325/)).toBeVisible(TURNS);
+  });
+
+  await test.step("the demo bar says Northlake needs a human, once however many items wait on Helen", async () => {
+    await expect(page.getByRole("button", { name: /Northlake needs a human/ })).toBeVisible(TURNS);
+  });
+
+  await test.step("the network view rings the suggested recipients and shows who waits on a person", async () => {
+    await openFromSidebar(page, "Network");
+    for (const org of [NORTHLAKE, RIDGELINE, CALDER]) {
+      await expect(networkNode(page, org)).toContainText("Suggested");
+    }
+    await expect(networkNode(page, NORTHLAKE)).toContainText("Needs human", TURNS);
+    await expect(networkNode(page, CALDER)).toContainText("Screened");
+    expect(await nameFits(page, NORTHLAKE)).toBe(true);
+    await expect(page.locator("[data-edge-label]").first()).toBeVisible();
+    expect(await edgeLabelsOverCards(page)).toBe(0);
+  });
+
+  await test.step("on a 1366×768 laptop the account menu opens below the demo bar, Log out in view", async () => {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.getByRole("button", { name: "Account: Alex Chen" }).click();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem", { name: "Log out" })).toBeInViewport({ ratio: 1 });
+    const [bar, opened] = await Promise.all([
+      page.locator('header[aria-label="Demo controls"]').boundingBox(),
+      menu.boundingBox(),
+    ]);
+    expect(opened?.y ?? 0).toBeGreaterThanOrEqual((bar?.y ?? 0) + (bar?.height ?? Infinity));
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await test.step("as Helen, the inbox explains why Northlake's answer needs her, and she approves it", async () => {
+    await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
+    await openFromSidebar(page, "Requests");
+    await page.getByText(NORTHLAKE_TITLE).first().click();
+
+    await expect(page.getByText("Why this needs you:")).toBeVisible(TURNS);
+    // The properties rail and its Activity log show at the default laptop width, every
+    // value in full.
+    const rail = page.getByRole("complementary", { name: "Properties" });
+    await expect(rail).toBeVisible();
+    await expect(rail).toContainText("Dr. Helen Ward");
+    await expect(rail).toContainText("Henderson Lab");
+    expect(await clippedValues(rail)).toEqual([]);
+    await expect(page.getByText(/internal reserve slots/).first()).toBeVisible();
+    const lookedAt = page.getByRole("region", { name: "What Claude looked at" });
+    await expect(lookedAt).toContainText("Public calendar");
+    await expect(lookedAt).toContainText("Raj's note, reserve XRD block");
+
+    // The decision reads in full at the end of the thread: the whole question and draft.
+    const card = page.getByRole("region", { name: "Needs your decision" });
+    await expect(card.getByRole("heading", { level: 2 })).toBeVisible();
+    expect(await cutShortText(card)).toEqual([]);
+
+    const approve = page.getByRole("region", { name: "Your decision" }).getByRole("button", { name: "Approve & send" });
+    await approve.click();
+    await expect(approve).toBeHidden(TURNS);
+  });
+
+  await test.step("back as Alex, he says yes to both and both conversations close", async () => {
+    await switchAccount(page, "Dr. Helen Ward", "Alex Chen");
+    await openFromSidebar(page, "Find a lab that can run XRD");
+    await answerInline(page, NORTHLAKE, "Yes, go ahead with Northlake.");
+    await answerInline(page, RIDGELINE, "Yes, go ahead with Ridgeline.");
+
+    await expect(statusRow(page, NORTHLAKE)).toContainText("Closed", TURNS);
+    await expect(statusRow(page, RIDGELINE)).toContainText("Closed", TURNS);
+    await expect(page.getByText(/\$1,735/).first()).toBeVisible(TURNS);
+  });
+
+  await test.step("the network view shows both conversations Closed and Calder Screened, at a readable size", async () => {
+    await openFromSidebar(page, "Network");
+    await expect(networkNode(page, NORTHLAKE)).toContainText("Closed");
+    await expect(networkNode(page, RIDGELINE)).toContainText("Closed");
+    await expect(networkNode(page, CALDER)).toContainText("Screened");
+    expect(await edgeLabelsOverCards(page)).toBe(0);
+    // The pill is 22px tall at zoom 1; below ~0.8 its 12px label stops being readable.
+    const pill = networkNode(page, NORTHLAKE).getByText("Closed", { exact: true });
+    const box = await pill.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(18);
+
+    // At 1024px, opening a card's panel keeps that card whole and readable.
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await networkNode(page, NORTHLAKE).click();
+    const panel = page.getByRole("complementary", { name: `${NORTHLAKE} details` });
+    await expect(panel).toBeVisible();
+    await expect.poll(async () => (await pill.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(18);
+    await expect
+      .poll(async () => {
+        const card = await networkNode(page, NORTHLAKE).boundingBox();
+        const aside = await panel.boundingBox();
+        return card !== null && aside !== null && card.x + card.width <= aside.x;
+      })
+      .toBe(true);
+    await panel.getByRole("button", { name: "Close panel" }).click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await test.step("Northlake's representative saw the released answer, never Raj's note", async () => {
+    await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
+    await openFromSidebar(page, "Requests");
+    await page.getByText(NORTHLAKE_TITLE).first().click();
+    await page.getByRole("button", { name: "What our representative saw" }).first().click();
+    const saw = page.getByRole("dialog", { name: "What our representative saw" });
+    await expect(saw.getByRole("region", { name: "Released answers" })).toContainText("Wed Nov 4");
+    await expect(saw).not.toContainText("Raj's note");
+    await expect(saw).not.toContainText("priority work");
+    await saw.getByRole("button", { name: "Close" }).click();
+  });
+
+  await test.step("Customize → Harmony has only the spec's sections, and sharing edits persist", async () => {
+    await openFromSidebar(page, "Customize");
+    await expect(page).toHaveURL(/\/customize\/harmony/);
+    const settings = page.getByRole("navigation", { name: "Harmony settings" });
+    await expect(settings.getByRole("listitem")).toHaveText([
+      /^Public profile/,
+      /^Instructions/,
+      /^Sharing/,
+      /^Autonomy/,
+      /^Team and routing/,
+    ]);
+
+    await settings.getByRole("button", { name: /^Sharing/ }).click();
+    const everyone = page.getByRole("textbox", { name: "Shared with everyone" });
+    const addition = " Open SEM slots on weekdays.";
+    const description = `${await everyone.inputValue()}${addition}`;
+    await everyone.fill(description);
+
+    await page.getByRole("button", { name: "Add organization" }).click();
+    await page.getByRole("menuitem", { name: "Henderson Lab" }).click();
+    const mode = page.getByRole("button", { name: /^Mode for Henderson Lab/ });
+    const henderson = page.getByRole("listitem").filter({ has: mode });
+    await mode.click();
+    await page.getByRole("menuitemradio", { name: /^Skip/ }).click();
+    const extra = "Reserve XRD blocks when the public calendar is full.";
+    await henderson.getByRole("textbox", { name: "Also share with them" }).fill(extra);
+    await page.getByRole("button", { name: "Save changes" }).click();
+    // The org's fields and the trusted organization are separate writes; the toast
+    // follows the last of them.
+    await expect(page.getByText(/^Settings saved/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel" })).toBeHidden();
+
+    await page.reload();
+    await settings.getByRole("button", { name: /^Sharing/ }).click();
+    await expect(page.getByRole("textbox", { name: "Shared with everyone" })).toHaveValue(description);
+    await expect(mode).toHaveAccessibleName(/: Skip$/);
+    await expect(henderson.getByRole("textbox", { name: "Also share with them" })).toHaveValue(extra);
+  });
+});

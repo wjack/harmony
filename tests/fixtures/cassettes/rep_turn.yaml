@@ -1,0 +1,22 @@
+# One representative turn run directly (tests/e2e/test_rep_turn_stream.py,
+# tests/integration/test_rep_turn_outcomes.py): Northlake's representative answers
+# Henderson's opening message on the tests' own thread, `rep-turn`, which no scenario
+# seeds. The text streams to Northlake's members as `stream.delta` (send_message input
+# deltas); Henderson sees typing only. After a message a representative's turn goes
+# on, so step 1 is the model ending it.
+scenario: harmony-demo
+entries:
+  - match: {org: northlake, role: representative, thread: rep-turn, turn: 1, step: 0}
+    content:
+      - {type: thinking}
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Thanks for reaching out. Northlake can run powder XRD on all 12 air-sensitive
+            samples, loaded in our glovebox into sealed holders. Our public calendar is
+            full until Nov 10; I am checking whether an earlier slot can be found and
+            will come back to you shortly.
+  - match: {org: northlake, role: representative, thread: rep-turn, turn: 1, step: 1}
+    content:
+      - {type: thinking}

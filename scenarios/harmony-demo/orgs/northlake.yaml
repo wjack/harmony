@@ -1,0 +1,105 @@
+# Northlake Characterization Core, the main responder (docs/SCENARIO.md).
+# The public calendar can't meet Nov 6; Raj's reserve block can. Reserve slots aren't in
+# the sharing description, so an answer that uses the block fails the sharing check and
+# goes to Helen.
+#
+# The public calendar also says "SEM unavailable Thursday afternoons
+# through December" (ARCHITECTURE.md §2.1, §11.6). Who books those afternoons is in the
+# client-voltaic record, which the sharing description keeps out of every answer.
+slug: northlake
+name: Northlake Characterization Core
+kind: characterization
+featured: true
+communities: [northlake-university]
+
+members:
+  - slug: helen
+    name: Dr. Helen Ward
+    title: Core director
+    role: admin
+    profile: >-
+      Runs scheduling, priority requests, reserve slots, pricing exceptions and external
+      contracts. Default assignee.
+  - slug: raj
+    name: Raj Patel
+    title: Staff scientist, XRD and SEM
+    role: member
+    profile: Runs the instruments; sample prep and air-free handling questions.
+
+settings:
+  public_summary: >-
+    Northlake Characterization Core is a shared-instrument facility at Northlake
+    University, open to external academic and industry users: powder XRD (Bruker D8,
+    with air-free dome holders), SEM with EDS (Thermo Apreo 2) and XPS. Typical
+    turnaround is 5–10 business days, with priority service by arrangement. We don't do
+    synthesis, sample shipping or data interpretation beyond standard reports.
+  instructions: >-
+    You represent the Northlake Characterization Core to external users. Consult the
+    core for prices, availability and anything else you don't know; never guess. Once
+    your side has told you a slot is available, you may confirm a booking at list
+    prices. Never discuss other clients or their bookings.
+
+policy:
+  autonomy: auto
+  sharing_description: >-
+    Our external academic price list, what is open on the public instrument calendar,
+    sample-prep and air-free handling requirements, and typical turnaround. Not: other
+    clients or their bookings, internal reserve slots, or discounts.
+  routing_prompt: >-
+    Instrument scheduling, priority or reserve-slot requests, and pricing exceptions go
+    to Helen. Sample-prep and air-free handling questions go to Raj. Anything over
+    $5,000 needs Helen.
+  default_assignee: helen
+
+# An example of the Trusted organizations list. Ridgeline machines holders for our dome
+# mounts, so it may also hear our holder specifications; its mode is the default.
+trusted_organizations:
+  - org: ridgeline
+    sharing_description: >-
+      Our dome-holder dimensions and O-ring requirements, so they can machine holders
+      that fit our instruments.
+
+knowledge:
+  - slug: facility-overview
+    title: Facility overview
+    kind: profile
+    body: >-
+      Shared-instrument facility at Northlake University: powder XRD, SEM with EDS and
+      XPS, open to external academic and industry users.
+  - slug: price-list
+    title: Price list, external academic
+    kind: price-list
+    body: >-
+      Powder XRD $45 per sample. SEM/EDS $60 per sample. Air-free transfer and handling
+      $150 flat per batch. Standard report included. Quotes valid 14 days.
+  - slug: public-calendar
+    title: Public calendar
+    kind: schedule
+    body: >-
+      XRD fully booked until Nov 10; next open XRD block Tue Nov 10. SEM open from
+      Nov 3. SEM unavailable Thursday afternoons through December.
+  - slug: air-free-handling
+    title: Air-free handling
+    kind: procedure
+    body: >-
+      We load air-sensitive powders into dome holders in our glovebox. Customers ship
+      samples sealed under Ar. We take sealed holders with Viton or Kalrez O-rings.
+  - slug: reserve-xrd-block
+    title: Raj's note, reserve XRD block
+    kind: note
+    author: raj
+    body: >-
+      I've kept a reserve XRD block on Wed Nov 4, 09:00–13:00, for priority work. Enough
+      time for ~14 powders.
+  - slug: client-voltaic
+    title: "Client: Voltaic Motors"
+    kind: client
+    body: >-
+      Standing SEM booking every Thursday afternoon through December. Under NDA; never
+      discuss.
+  - slug: pricing-policy
+    title: Pricing policy
+    kind: policy
+    body: >-
+      Academic users pay the external academic list price, priority slots included.
+      Industry users pay +20% for priority slots. Volume discounts are Helen's call.

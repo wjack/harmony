@@ -1,0 +1,441 @@
+"""Threads: one per (request, responder), and what crosses the network (§4, §7).
+
+A thread's `state` mirrors its `ThreadWorkflow`. Messages are append-only, ordered by
+a per-thread `seq` allocated under the thread's row lock, and never updated once
+delivered. Message ids are `side_effect_id(turn_id, step_idx, tool_use_id)` for agent
+messages, so a retried turn collides instead of duplicating.
+
+Writes queue, for each party org with `EventScope.thread(org, thread)`, a
+`thread_message` snapshot (append-only, version 1, through `UnitOfWork.add_event` as
+P0's turn does) and the `thread` snapshot.
+
+The request's title is the requester's: the first line of its brief, which never
+crosses. A responder names the request from what did cross, the requester's first
+message on the thread (`request_title`).
+
+`cassette_key` names a thread for ScriptedModel cassettes (`agents.keys.thread_key`):
+the seed slug for a seeded thread, else `<requester>.<responder>[.<k>]`, where k counts
+only the non-seeded threads between the same pair. Everything that keys a model call on
+a thread (turns, the consult answerer) uses it, so the keys agree.
+
+Owner: E4.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Collection, Mapping
+from datetime import UTC, datetime
+from functools import cache
+from typing import Final
+from uuid import UUID
+
+from pydantic import JsonValue
+from pydantic_core import to_jsonable_python
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import select, tuple_
+from sqlalchemy.dialects.postgresql import distinct_on, insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from harmony.agents.keys import thread_key
+from harmony.agents.models import BRIEF_TITLE_CHARS, brief_title, first_line
+from harmony.db import repo
+from harmony.db.models import (
+    Base,
+    NetworkRequest,
+    Org,
+    RepSession,
+    Thread,
+    ThreadAccess,
+    ThreadMessage,
+    World,
+)
+from harmony.db.models.choices import (
+    AccessReason,
+    Provenance,
+    Side,
+    ThreadMessageKind,
+    ThreadState,
+)
+from harmony.db.uow import UnitOfWork
+from harmony.events.schemas import EntitySnapshot, EventScope, ThreadAccessChanged
+from harmony.seeds.ids import seed_id
+from harmony.seeds.loader import ScenarioNotFound, load_scenario
+from harmony.seeds.schema import ScenarioError
+
+MAX_TURNS = 16
+TERMINAL_STATES: frozenset[ThreadState] = frozenset(("closed", "expired"))
+THREAD_MESSAGE_ENTITY: Final = "thread_message"
+# What either party's stream carries about a message, as `GET /threads/{id}` shows it:
+# its provenance (§5), never which teammate approved or wrote it, nor the turn.
+MESSAGE_SNAPSHOT_COLUMNS: Final = (
+    "id",
+    "thread_id",
+    "seq",
+    "from_org_id",
+    "kind",
+    "body",
+    "provenance",
+    "created_at",
+)
+
+
+async def open(
+    uow: UnitOfWork,
+    *,
+    thread_id: UUID,
+    request: NetworkRequest,
+    responder_org_id: UUID,
+    deadline_at: datetime | None,
+) -> Thread:
+    """Open the thread `active` with the requester to move, and give the request's
+    creator `routed` access on the requester side. Idempotent on `thread_id`. The
+    responder side's access is routed when its first escalation is (§10); its admins
+    see it regardless."""
+    session = uow.session
+    existing = await repo.get(session, Thread, uow.world_id, thread_id)
+    if existing is not None:
+        return existing
+    thread = Thread(
+        world_id=uow.world_id,
+        id=thread_id,
+        request_id=request.id,
+        requester_org_id=request.requester_org_id,
+        responder_org_id=responder_org_id,
+        state="active",
+        side_to_move="requester",
+        turn_count=0,
+        deadline_at=deadline_at,
+    )
+    session.add(thread)
+    await session.flush()
+    if request.created_by_member_id is not None:
+        await add_access(
+            uow, thread, member_id=request.created_by_member_id, org_id=request.requester_org_id
+        )
+    snapshot(uow, thread)
+    return thread
+
+
+async def add_access(
+    uow: UnitOfWork,
+    thread: Thread,
+    *,
+    member_id: UUID,
+    org_id: UUID,
+    reason: AccessReason = "routed",
+    shared_by_member_id: UUID | None = None,
+    question: str | None = None,
+) -> bool:
+    """Give a member access to the thread for `reason`; False when they already had it
+    for that reason. Tells the member (`thread.access_changed`, member scope)."""
+    inserted = await uow.session.scalar(
+        insert(ThreadAccess)
+        .values(
+            world_id=uow.world_id,
+            thread_id=thread.id,
+            member_id=member_id,
+            reason=reason,
+            shared_by_member_id=shared_by_member_id,
+            question=question,
+        )
+        .on_conflict_do_nothing()
+        .returning(ThreadAccess.member_id)
+    )
+    if inserted is None:
+        return False
+    uow.add_event(
+        ThreadAccessChanged(
+            thread_id=thread.id,
+            member_id=member_id,
+            reason=reason,
+            added=True,
+            shared_by=shared_by_member_id,
+            question=question,
+        ),
+        EventScope.member(member_id, org_id),
+    )
+    return True
+
+
+async def append_message(
+    uow: UnitOfWork,
+    thread_id: UUID,
+    *,
+    message_id: UUID,
+    from_org_id: UUID,
+    kind: ThreadMessageKind,
+    body: str,
+    provenance: Provenance,
+    turn_id: UUID | None = None,
+    author_member_id: UUID | None = None,
+    approved_by_member_id: UUID | None = None,
+) -> ThreadMessage:
+    """Append one message and update the thread: `side_to_move` (the other side
+    answers next), `last_activity_at`, and `turn_count`, which counts turns, not
+    messages: a representative may send several messages in one turn (§5), so only a
+    message that starts a new turn counts (see `_starts_turn`). Returns the existing row
+    when `message_id` was already written."""
+    session = uow.session
+    thread = await locked(uow, thread_id)
+    existing = await repo.get(session, ThreadMessage, uow.world_id, message_id)
+    if existing is not None:
+        return existing
+    if from_org_id not in (thread.requester_org_id, thread.responder_org_id):
+        raise ValueError(f"org {from_org_id} is not a party to thread {thread_id}")
+    last = await session.scalar(
+        repo.in_world(ThreadMessage, uow.world_id)
+        .where(ThreadMessage.thread_id == thread_id)
+        .order_by(ThreadMessage.seq.desc())
+        .limit(1)
+    )
+    message = ThreadMessage(
+        world_id=uow.world_id,
+        id=message_id,
+        thread_id=thread_id,
+        seq=(last.seq if last is not None else 0) + 1,
+        from_org_id=from_org_id,
+        kind=kind,
+        body=body,
+        provenance=provenance,
+        author_member_id=author_member_id,
+        approved_by_member_id=approved_by_member_id,
+        turn_id=turn_id,
+    )
+    session.add(message)
+    if _starts_turn(last, from_org_id=from_org_id, turn_id=turn_id):
+        thread.turn_count += 1
+    thread.side_to_move = "requester" if from_org_id == thread.responder_org_id else "responder"
+    thread.last_activity_at = datetime.now(UTC)
+    await session.flush()
+    await session.refresh(message, attribute_names=["created_at"])
+    delivered = EntitySnapshot(
+        entity_type=THREAD_MESSAGE_ENTITY,
+        entity_id=message.id,
+        # Delivered messages are never updated (§5), so there is one version.
+        version=1,
+        data={key: to_jsonable_python(getattr(message, key)) for key in MESSAGE_SNAPSHOT_COLUMNS},
+    )
+    for org_id in parties(thread):
+        uow.add_event(delivered, EventScope.thread(org_id, thread.id))
+    snapshot(uow, thread)
+    return message
+
+
+def _starts_turn(last: ThreadMessage | None, *, from_org_id: UUID, turn_id: UUID | None) -> bool:
+    """Whether a message opens a new turn: the first message, a side change, or a new
+    agent turn. A person's message (no `turn_id`) is a turn of its own."""
+    return (
+        last is None
+        or last.from_org_id != from_org_id
+        or turn_id is None
+        or last.turn_id != turn_id
+    )
+
+
+async def set_state(
+    uow: UnitOfWork,
+    thread_id: UUID,
+    state: ThreadState,
+    *,
+    side_to_move: Side | None = None,
+) -> Thread:
+    """Move the thread to `state`. A terminal thread never leaves its state."""
+    thread = await locked(uow, thread_id)
+    if thread.state in TERMINAL_STATES or (
+        thread.state == state and thread.side_to_move == side_to_move
+    ):
+        return thread
+    thread.state = state
+    thread.side_to_move = None if state in TERMINAL_STATES else side_to_move
+    thread.last_activity_at = datetime.now(UTC)
+    snapshot(uow, thread)
+    return thread
+
+
+async def store_close_summary(uow: UnitOfWork, thread_id: UUID, side: Side, summary: str) -> None:
+    """The side's own close summary (`rep_sessions.close_summary`): for its org only,
+    never sent to the counterparty (§5). The first one written stands, so a retried
+    `close` or a late approval of a held one never replaces it.
+
+    The side's org gets a newer `thread` snapshot, which is what refreshes its views of
+    the thread: a summary written in the last turn, after the thread closed, would
+    otherwise reach them only on a reload. The counterparty gets none."""
+    row = await uow.session.get(
+        RepSession, (uow.world_id, thread_id, side), with_for_update=True, populate_existing=True
+    )
+    if row is None:
+        # Only a side whose representative took a turn can close; no retry fixes this.
+        raise ValueError(f"thread {thread_id} has no {side} representative session")
+    if row.close_summary is not None:
+        return
+    row.close_summary = summary.strip()
+    thread = await locked(uow, thread_id)
+    thread.last_activity_at = datetime.now(UTC)
+    await uow.session.flush()
+    uow.add_snapshot(thread, EventScope.thread(org_of(thread, side), thread.id))
+
+
+async def opening_lines(
+    session: AsyncSession, world_id: UUID, thread_ids: Collection[UUID]
+) -> dict[UUID, str]:
+    """Each thread's first message from the requester, as a title (`opening_title`;
+    threads with none are left out)."""
+    rows = await session.execute(
+        select(ThreadMessage.thread_id, ThreadMessage.body)
+        .join(
+            Thread,
+            (Thread.world_id == ThreadMessage.world_id) & (Thread.id == ThreadMessage.thread_id),
+        )
+        .where(
+            ThreadMessage.world_id == world_id,
+            ThreadMessage.thread_id.in_(thread_ids),
+            ThreadMessage.from_org_id == Thread.requester_org_id,
+            ThreadMessage.kind == "message",
+        )
+        .order_by(ThreadMessage.thread_id, ThreadMessage.seq)
+        .ext(distinct_on(ThreadMessage.thread_id))
+    )
+    return {thread_id: opening_title(body) for thread_id, body in rows.all()}
+
+
+# A leading sentence: up to its end mark, or the end of its line.
+_LEADING_SENTENCE: Final = re.compile(r"\s*([^\n.!?]*[.!?]*)")
+_NAMES_CLAUDE: Final = re.compile(r"\bClaude\b")
+
+
+def opening_title(body: str) -> str:
+    """A requester's opening message as a title: its first line once the leading
+    salutation and self-introduction ("Hello, this is Claude for …") are set aside.
+    Representatives introduce themselves, and the introduction names the sender, not
+    the request: left in, every request from an org reads the same. The message itself
+    is unchanged; a message that is all greeting keeps its first line."""
+    rest = body
+    while (sentence := _LEADING_SENTENCE.match(rest)) is not None and _is_greeting(
+        sentence.group(1)
+    ):
+        rest = rest[sentence.end() :]
+    return first_line(rest, BRIEF_TITLE_CHARS) or first_line(body, BRIEF_TITLE_CHARS)
+
+
+def _is_greeting(sentence: str) -> bool:
+    """A bare salutation ("Hello!", "Hi there.") or a sentence naming the sender."""
+    words = len(sentence.split())
+    return 0 < words <= 2 or (words > 0 and _NAMES_CLAUDE.search(sentence) is not None)
+
+
+def request_title(
+    org_id: UUID, request: NetworkRequest, *, requester: str, opening: str | None
+) -> str:
+    """How `org_id`'s members name `request`: the requester by its brief's first line;
+    a responder by the requester's first message on its thread (`opening`), else as a
+    request from `requester` (the org's name), since the brief is the requester's own."""
+    if org_id == request.requester_org_id:
+        return brief_title(request.brief)
+    return opening or f"Request from {requester}"
+
+
+def parties(thread: Thread) -> tuple[UUID, UUID]:
+    return (thread.requester_org_id, thread.responder_org_id)
+
+
+def side_of(thread: Thread, org_id: UUID) -> Side:
+    """The side `org_id` is on; raises `ValueError` for an org that isn't a party."""
+    if org_id == thread.requester_org_id:
+        return "requester"
+    if org_id == thread.responder_org_id:
+        return "responder"
+    raise ValueError(f"org {org_id} is not a party to thread {thread.id}")
+
+
+def org_of(thread: Thread, side: Side) -> UUID:
+    return thread.requester_org_id if side == "requester" else thread.responder_org_id
+
+
+def other(side: Side) -> Side:
+    return "responder" if side == "requester" else "requester"
+
+
+async def cassette_key(session: AsyncSession, thread: Thread) -> str:
+    """The thread's ScriptedModel key (module docstring)."""
+    scenario = await session.scalar(select(World.scenario).where(World.id == thread.world_id))
+    seeded = seeded_threads(scenario or "")
+    if thread.id in seeded:
+        return thread_key("", "", seeded_slug=seeded[thread.id])
+    slugs = dict(
+        (
+            await session.execute(
+                select(Org.id, Org.slug).where(
+                    Org.world_id == thread.world_id,
+                    Org.id.in_(parties(thread)),
+                )
+            )
+        ).all()
+    )
+    earlier = await session.scalars(
+        select(Thread.id).where(
+            Thread.world_id == thread.world_id,
+            Thread.requester_org_id == thread.requester_org_id,
+            Thread.responder_org_id == thread.responder_org_id,
+            tuple_(Thread.created_at, Thread.id) <= tuple_(thread.created_at, thread.id),
+        )
+    )
+    k = sum(1 for thread_id in earlier if thread_id not in seeded)
+    return thread_key(slugs[thread.requester_org_id], slugs[thread.responder_org_id], max(k, 1))
+
+
+@cache
+def seeded_threads(scenario: str) -> Mapping[UUID, str]:
+    """Seeded thread ids of a scenario, with their slugs (none for an unknown one)."""
+    try:
+        loaded = load_scenario(scenario)
+    except (ScenarioNotFound, ScenarioError):
+        return {}
+    return {seed_id(scenario, "thread", spec.slug): spec.slug for spec in loaded.threads}
+
+
+def row_data(row: Base) -> dict[str, JsonValue]:
+    """Every column but `world_id`, as JSON (the shape `entity.snapshot` carries)."""
+    columns = [attr.key for attr in sa_inspect(row).mapper.column_attrs if attr.key != "world_id"]
+    return {key: to_jsonable_python(getattr(row, key)) for key in columns}
+
+
+def snapshot(uow: UnitOfWork, thread: Thread) -> None:
+    """Queue the thread's snapshot to both parties' thread scope."""
+    for org_id in parties(thread):
+        uow.add_snapshot(thread, EventScope.thread(org_id, thread.id))
+
+
+async def locked(uow: UnitOfWork, thread_id: UUID) -> Thread:
+    """The thread, row-locked: serializes writers of one thread (seq, state)."""
+    thread = await uow.session.get(
+        Thread, (uow.world_id, thread_id), with_for_update=True, populate_existing=True
+    )
+    if thread is None:
+        raise repo.NotFoundInWorld(Thread, uow.world_id, thread_id)
+    return thread
+
+
+__all__ = [
+    "MAX_TURNS",
+    "MESSAGE_SNAPSHOT_COLUMNS",
+    "TERMINAL_STATES",
+    "THREAD_MESSAGE_ENTITY",
+    "add_access",
+    "append_message",
+    "cassette_key",
+    "locked",
+    "open",
+    "opening_lines",
+    "opening_title",
+    "org_of",
+    "other",
+    "parties",
+    "request_title",
+    "row_data",
+    "seeded_threads",
+    "set_state",
+    "side_of",
+    "snapshot",
+    "store_close_summary",
+]

@@ -1,14 +1,22 @@
 # secrets
 .env
-.env.local
+.env.*
+!.env.local.example
 *.tfvars
 !*.tfvars.example
+*.tfvars.json
+!*.tfvars.json.example
 
-# terraform
+# terraform (state and saved plans embed secrets: variables and generated passwords)
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
+tfplan
 crash.log
+crash.*.log
+.terraformrc
+terraform.rc
 
 # python
 .venv/
@@ -21,8 +29,16 @@ __pycache__/
 node_modules/
 dist/
 .vite/
+# Playwright's traces and failure screenshots (web/playwright.config.ts)
+test-results/
 
 # os / editors
 .DS_Store
 .idea/
 .vscode/
+
+# local object store (OBJECT_STORE=localfs)
+.data/
+
+# Claude Code personal settings
+.claude/settings.local.json

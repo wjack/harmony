@@ -1,0 +1,111 @@
+# Internal Claude in the suggested story (scenarios/harmony-demo/story.yaml,
+# REVISION_UNSTRUCTURED.md §10): Alex's first chat in the world, `chat:alex:1`. Keys:
+# src/harmony/agents/keys.py. Tools: agents/tools/internal.py.
+#
+# Turn 1 runs one search per part of the need (step 0 the characterization, step 1 the
+# holder; the screener verdicts are story_suggested_screen.yaml), then drafts the brief
+# and proposes the recipients: the outreach card pauses the turn at step 2, and it
+# resumes at step 3 once Alex approves. Turn 2 is woken when the request closes (both
+# conversations ended) and sums up in prose.
+scenario: harmony-demo
+entries:
+  - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: thinking
+        thinking: >-
+          Two parts: the characterization (powder XRD and SEM/EDS on 12 air-sensitive
+          powders by Nov 6) and an airtight holder for the transfer. Different kinds of
+          organization, so one search each, the characterization first.
+      - type: text
+        text: I'll screen the network for each part, starting with the characterization.
+      - type: tool_use
+        name: search_network
+        input:
+          need: >-
+            Powder XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders, with
+            standard reports by Nov 6. The powders must stay under argon, so the lab needs
+            air-free handling (glovebox loading or sealed holders).
+  - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: thinking
+        thinking: >-
+          Northlake is the strong fit for the measurements; Bayside and Ostrander only
+          partly fit. Now the holder.
+      - type: tool_use
+        name: search_network
+        input:
+          need: >-
+            An airtight holder to carry air-sensitive powders under argon to a Bruker D8
+            powder XRD dome mount, delivered by Nov 3.
+  - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 2}
+    content:
+      - type: thinking
+        thinking: >-
+          Northlake for the measurements and Ridgeline for the holder. Calder came up in
+          both searches but only does computation. One brief for both: the sample class
+          and count but not the compositions, the budget kept to ourselves, and a check
+          with Alex before agreeing to anything.
+      - type: text
+        text: |-
+          Two organizations are strong fits:
+
+          - **Northlake Characterization Core** for the XRD and SEM/EDS: a shared-instrument facility with air-free dome holders, open to external academic users. Their summary says turnaround is usually 5–10 business days with priority service by arrangement, so Nov 6 is the open question.
+          - **Ridgeline Fabrication** for the holder: they machine airtight sample holders and transfer vessels in 3–5 business days.
+
+          Calder Computational came up too, but it's a weak fit: it does DFT and modelling only, with no lab instruments, so I'd leave it out. Bayside and Ostrander run XRD, but Bayside can't handle air-sensitive samples and Ostrander is booked through December. Granite machines parts, but not sealed ones.
+
+          Here's the brief I'd send. It shares the sample class and count and that the powders are air-sensitive, but not their compositions, and it keeps the budget to us. The representatives will check with you before agreeing to a price, a date or an order.
+      - type: tool_use
+        name: send_network_request
+        input:
+          brief: |-
+            XRD and SEM/EDS on 12 air-sensitive cathode powders by Nov 6, and a holder
+
+            Henderson Lab (Dept. of Materials Science, Northlake University) needs two things:
+            - Powder XRD and SEM/EDS on 12 layered-oxide sodium-ion cathode powders, with standard reports by Fri Nov 6.
+            - An airtight holder to carry the powders under argon to a Bruker D8 powder XRD dome mount, delivered to the lab before Tue Nov 3.
+
+            You may tell counterparties the sample class and count, that the powders are air-sensitive and kept under argon (no air exposure at any point), the instrument and mount, the dates, and the shipping address: Henderson Lab, Bldg 4, Northlake campus. Don't share the compositions, dopant fractions or any results.
+
+            The budget is about $2,000 for both together; keep it to yourself. Ask for quotes with dates, and check with Alex before agreeing to a price, a date or an order.
+          recipients:
+            - org: northlake
+              reason: >-
+                Powder XRD and SEM/EDS with air-free dome holders; priority service by
+                arrangement.
+            - org: ridgeline
+              reason: >-
+                Machines airtight sample holders and transfer vessels in 3–5 business days.
+            - org: calder
+              reason: >-
+                Weak fit: DFT and modelling only, with no lab instruments. I'd leave it out.
+  - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 3}
+    content:
+      - type: text
+        text: >-
+          Sent. The representatives take it from here, and you'll see progress in this
+          chat. If one of them needs something only you can answer, or before agreeing to
+          a price, the question will come to you here.
+  - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 2, step: 0}
+    content:
+      - type: thinking
+        thinking: Both conversations have closed. Check the request status for how they ended.
+      - type: text
+        text: Both conversations have closed. Let me check where they ended up.
+      - type: tool_use
+        name: get_request_status
+        input: {}
+  - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 2, step: 1}
+    content:
+      - type: thinking
+        thinking: >-
+          $1,410 + $325 = $1,735, inside the ~$2,000 budget. The holder ships Oct 30,
+          before the powders must reach Northlake on Nov 3.
+      - type: text
+        text: |-
+          Both are done, and together they cover the whole request:
+
+          - **Northlake Characterization Core** booked the powder XRD for the morning of Wed Nov 4 and the SEM/EDS from Tue Nov 3, with standard reports by Thu Nov 5, for **$1,410** at their external academic rates. Ship the 12 powders sealed under argon to arrive by Tue Nov 3.
+          - **Ridgeline Fabrication** is machining the airtight transfer holder with Kalrez seals for **$325**. It ships to the lab by Fri Oct 30, in time to load the powders and send them to Northlake.
+
+          That's **$1,735** in total, inside your $2,000 budget.

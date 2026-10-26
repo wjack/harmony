@@ -1,0 +1,34 @@
+name: Set up the Temporal CLI
+description: >-
+  Installs a pinned, checksum-verified Temporal CLI on PATH. Tests start their own
+  local dev server from it (WorkflowEnvironment.start_local).
+inputs:
+  version:
+    description: Temporal CLI version; keep in step with the local install and compose.yaml.
+    default: "1.9.1"
+  sha256:
+    description: SHA-256 of temporal_cli_<version>_linux_amd64.tar.gz (from the release's checksums.txt).
+    default: 09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5
+runs:
+  using: composite
+  steps:
+    - name: Install the Temporal CLI
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        if [[ $RUNNER_OS != Linux || $RUNNER_ARCH != X64 ]]; then
+          echo "::error::setup-temporal-cli supports Linux x64 runners only"
+          exit 1
+        fi
+        archive="temporal_cli_${VERSION}_linux_amd64.tar.gz"
+        dest="$RUNNER_TEMP/temporal-cli"
+        mkdir -p "$dest"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+          "https://github.com/temporalio/cli/releases/download/v${VERSION}/${archive}"
+        echo "${SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict -
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$dest" temporal
+        echo "$dest" >> "$GITHUB_PATH"
+        "$dest/temporal" --version

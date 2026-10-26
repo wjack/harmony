@@ -1,0 +1,46 @@
+# Bayside Analytical, background (docs/SCENARIO.md): a possible fit for the
+# characterization search, without air-free handling.
+slug: bayside
+name: Bayside Analytical
+kind: characterization
+
+members:
+  - slug: grace
+    name: Grace Lindqvist
+    title: Lab manager
+    role: admin
+    profile: Runs the lab; quotes, scheduling and client contracts.
+
+settings:
+  public_summary: >-
+    Bayside Analytical is a commercial analytical lab in the Bay Area for industry and
+    academic clients: XPS, ICP-MS and powder XRD, usually in 5 business days. Samples
+    are prepared and measured in air; we have no glovebox, no air-free transfer and no
+    SEM.
+  instructions: >-
+    You represent Bayside Analytical. Be clear that we handle samples in air only.
+    Consult for prices, scheduling and rush work.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Our price list, turnaround and sample requirements. Not: instrument maintenance or
+    other clients.
+  routing_prompt: Everything goes to Grace.
+  default_assignee: grace
+
+knowledge:
+  - slug: about
+    title: About Bayside
+    kind: profile
+    body: Commercial XPS, ICP-MS and powder XRD; samples handled in air.
+  - slug: price-list
+    title: Price list
+    kind: price-list
+    body: >-
+      XPS $180 per sample. ICP-MS $95 per sample. Powder XRD $60 per sample. Standard
+      report included; 5 business days. No air-free handling.
+  - slug: xrd-maintenance
+    title: XRD maintenance
+    kind: note
+    body: The XRD tube is due for replacement mid-November; book XRD jobs before Nov 13.

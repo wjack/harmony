@@ -1,0 +1,41 @@
+# Meridian Thermal, background (docs/SCENARIO.md): not a fit for the story.
+slug: meridian
+name: Meridian Thermal
+kind: characterization
+
+members:
+  - slug: elena
+    name: Elena Petrova
+    title: Lab director
+    role: admin
+    profile: Runs the thermal analysis lab; quotes and scheduling.
+
+settings:
+  public_summary: >-
+    Meridian Thermal does thermal analysis for materials developers in the Southwest:
+    TGA, DSC and simultaneous TGA-DSC, including runs under inert gas, usually within a
+    week. We don't do diffraction or microscopy.
+  instructions: >-
+    You represent Meridian Thermal. Consult for prices, method advice and anything
+    unusual.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Our price list, methods and turnaround. Not: instrument problems or other clients.
+  routing_prompt: Everything goes to Elena.
+  default_assignee: elena
+
+knowledge:
+  - slug: about
+    title: About Meridian
+    kind: profile
+    body: TGA and DSC thermal analysis for materials developers.
+  - slug: price-list
+    title: Price list
+    kind: price-list
+    body: TGA $70 per run. DSC $80 per run. TGA-DSC $120 per run. Inert gas included.
+  - slug: instrument-note
+    title: Instrument note
+    kind: note
+    body: The DSC autosampler is unreliable; we load runs by hand until the service visit.

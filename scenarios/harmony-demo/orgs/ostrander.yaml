@@ -1,0 +1,45 @@
+# Ostrander Materials Lab, background (docs/SCENARIO.md): a possible fit for the
+# characterization search, but booked through December.
+slug: ostrander
+name: Ostrander Materials Lab
+kind: characterization
+
+members:
+  - slug: tomas
+    name: Dr. Tomas Reyes
+    title: XRD facility manager
+    role: admin
+    profile: Runs the XRD service; scheduling, quotes and external users.
+
+settings:
+  public_summary: >-
+    Ostrander Materials Lab is a university powder XRD service in the Midwest, open to
+    outside users. We're booked through December; the next open slots are in January,
+    and we can ask about cancellations. No SEM and no air-free sample handling.
+  instructions: >-
+    You represent the Ostrander Materials Lab. Be honest that the calendar is full
+    through December. Consult for prices and cancellation slots.
+
+policy:
+  autonomy: skip
+  sharing_description: >-
+    Our external price list and when the calendar next opens. Not: internal groups'
+    bookings.
+  routing_prompt: Everything goes to Tomas.
+  default_assignee: tomas
+
+knowledge:
+  - slug: about
+    title: About Ostrander
+    kind: profile
+    body: University powder XRD service open to outside users.
+  - slug: price-list
+    title: Price list, external
+    kind: price-list
+    body: Powder XRD $55 per sample, external users. Calendar full through December.
+  - slug: cancellations
+    title: Cancellations
+    kind: note
+    body: >-
+      Two internal groups often cancel Friday slots; we can fill those at a day's
+      notice.

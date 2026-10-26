@@ -1,0 +1,50 @@
+# Ridgeline Fabrication, a responder (docs/SCENARIO.md). It needs the seal material
+# before it quotes an airtight part, and Henderson's brief and records leave it out.
+slug: ridgeline
+name: Ridgeline Fabrication
+kind: fabrication
+featured: true
+
+members:
+  - slug: dana
+    name: Dana Okafor
+    title: Operations lead
+    role: admin
+    profile: Quotes, scheduling and everything else.
+
+settings:
+  public_summary: >-
+    Ridgeline Fabrication does precision machining for labs: vacuum and airtight sample
+    holders, transfer vessels and custom fixtures, usually in 3–5 business days. To
+    quote an airtight part we need drawings or the instrument model, and the seal
+    material.
+  instructions: >-
+    You represent Ridgeline Fabrication. Before quoting an airtight part, make sure you
+    have drawings or the instrument model, and the seal material. Consult the shop for
+    prices and lead times. You may confirm an order at list price and standard lead
+    time; consult for rush jobs or anything off the price list.
+
+policy:
+  autonomy: auto
+  sharing_description: >-
+    Prices, seal options and lead times from our price list, and what we need to quote
+    a part. Not: the shop's workload or other customers.
+  routing_prompt: Everything goes to Dana.
+  default_assignee: dana
+
+knowledge:
+  - slug: about
+    title: About Ridgeline
+    kind: profile
+    body: Precision machining for labs; we need drawings or the instrument model to quote.
+  - slug: price-list
+    title: Price list
+    kind: price-list
+    body: >-
+      Airtight powder transfer holder for a Bruker D8 dome mount, aluminum body: $240,
+      4 business days. Seal options: Viton (included) or Kalrez (+$85, recommended for
+      long Ar storage). The seal material must be specified before machining.
+  - slug: shop-load
+    title: Shop load
+    kind: note
+    body: The lathe is free this week; we can do 3 days if asked.

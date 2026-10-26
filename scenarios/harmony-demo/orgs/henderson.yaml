@@ -1,0 +1,86 @@
+# Henderson Lab, the requester (docs/SCENARIO.md).
+# On purpose, nothing here names a seal or gasket material: Ridgeline's question about
+# the holder's seal has to come back to Alex.
+slug: henderson
+name: Henderson Lab
+kind: research
+featured: true
+communities: [northlake-university]
+
+members:
+  - slug: alex
+    name: Alex Chen
+    title: PhD student
+    role: member
+    profile: >-
+      Runs the Na-ion cathode synthesis and owns sample logistics. Decides on his own
+      requests for external services within the lab's discretionary budget (about
+      $2,000 a month).
+  - slug: maya
+    name: Prof. Maya Henderson
+    title: Principal investigator
+    role: admin
+    profile: >-
+      Decides on spending above the discretionary budget, contracts and external
+      collaborations.
+
+settings:
+  public_summary: >-
+    Henderson Lab, Dept. of Materials Science, Northlake University, researches
+    sodium-ion cathodes made from Earth-abundant elements in the Pacific Northwest. On
+    Harmony we mostly request services (characterization, fabrication and compute),
+    and we can provide coin-cell cycling capacity on request.
+  instructions: >-
+    You represent Henderson Lab to other organizations. Your brief says what the lab
+    needs and what you may tell counterparties. Get quotes with dates, and consult the
+    lab before agreeing to a price, a date or an order, or whenever a counterparty asks
+    something the brief doesn't answer. Never guess on the lab's behalf.
+
+policy:
+  autonomy: auto
+  sharing_description: >-
+    The sample class and count, that samples are air-sensitive and how they must be
+    handled, instrument and mounting details, dates, and the lab's shipping address.
+    Not: compositions, dopant fractions, unpublished results or the lab's budget.
+  routing_prompt: >-
+    Questions about samples and logistics, and go-aheads on a member's own request
+    within the lab's discretionary budget, go to that member (Alex for his requests).
+    Spending above the budget, contracts and collaborations go to Maya.
+  default_assignee: alex
+
+knowledge:
+  - slug: about
+    title: About Henderson Lab
+    kind: profile
+    body: >-
+      Henderson Lab (Dept. of Materials Science, Northlake University) researches
+      sodium-ion cathodes made from Earth-abundant elements.
+  - slug: lab-profile
+    title: Lab profile
+    kind: profile
+    body: >-
+      Henderson Lab, Dept. of Materials Science, Northlake University; PI Prof. Maya
+      Henderson. Battery materials research on sodium-ion cathodes from Earth-abundant
+      elements. Coin-cell cycling capacity available on request. Shipping address:
+      Henderson Lab, Bldg 4, Northlake campus.
+  - slug: project-nac-12
+    title: Project NAC-12
+    kind: project
+    author: alex
+    body: >-
+      12 layered-oxide cathode powders in the NaₓMnₐFe_bNi_cO₂ family, synthesized in
+      October 2026 and stored in an Ar glovebox. Air-sensitive: moisture uptake within
+      minutes of exposure.
+  - slug: dopant-compositions
+    title: Dopant compositions
+    kind: note
+    author: alex
+    body: >-
+      Exact Mg/Ti dopant fractions for each NAC-12 sample. Unpublished; do not share
+      outside the lab.
+  - slug: budget
+    title: External services budget
+    kind: budget
+    body: >-
+      About $2,000 discretionary this month for external characterization and parts.
+      Members decide on their own requests within it; Maya decides on anything above.

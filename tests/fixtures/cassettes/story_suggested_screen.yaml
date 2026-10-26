@@ -1,0 +1,154 @@
+# Discovery screener verdicts for the suggested story's two searches (internal turn 1
+# of `chat:alex:1`): step 0 is the characterization search, step 1 the holder search.
+# One entry per screened org per search: every org except the requester, Henderson.
+# Output schema: agents/discovery.py SCREENER_OUTPUT_SCHEMA, a fit and a one-line
+# reason drawn from the org's public summary. Keys: agents/keys.py.
+#
+# Together: 2 strong (Northlake, Ridgeline) and 4 possible (Bayside, Ostrander,
+# Granite, Summit). Calder is the near miss: computation only.
+scenario: harmony-demo
+entries:
+
+  # --- Search 0: characterization
+  - match: {org: northlake, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "strong", "reason": "Shared-instrument core with powder XRD (Bruker D8, air-free dome holders) and SEM/EDS; turnaround 5–10 business days, priority service by arrangement."}
+  - match: {org: bayside, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "possible", "reason": "Commercial lab with powder XRD, but its summary says samples are handled in air and it has no SEM."}
+  - match: {org: ostrander, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "possible", "reason": "University powder XRD service, but booked through December, with no SEM or air-free handling."}
+  - match: {org: calder, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Computation only; its summary says it has no laboratory instruments."}
+  - match: {org: ridgeline, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Machines sample holders and fixtures; it doesn't run measurements."}
+  - match: {org: vantage, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "A sourcing intermediary for battery OEMs; it lists no instruments of its own."}
+  - match: {org: summit, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Packs and ships air-sensitive samples but doesn't measure them."}
+  - match: {org: pinecrest, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Supplies sodium salts and precursors; no characterization."}
+  - match: {org: harbor, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Builds pilot pouch cells; no materials characterization."}
+  - match: {org: meridian, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Thermal analysis (TGA, DSC) only; no diffraction or microscopy."}
+  - match: {org: ridgeway, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "A foundation giving seed funding, not laboratory services."}
+  - match: {org: lumen, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Curates datasets; it doesn't run measurements."}
+  - match: {org: granite, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "General CNC machining; no measurement services."}
+  - match: {org: tidewater, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Electrochemical cycling and impedance; not XRD or SEM."}
+
+  # --- Search 1: the holder
+  - match: {org: ridgeline, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "strong", "reason": "Machines vacuum and airtight sample holders and transfer vessels for labs, in 3–5 business days."}
+  - match: {org: granite, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "possible", "reason": "General CNC machining from drawings, but its summary says it doesn't make vacuum or sealed parts."}
+  - match: {org: summit, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "possible", "reason": "Packs air-sensitive samples under argon in sealed canisters, but doesn't make instrument holders."}
+  - match: {org: northlake, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "A characterization facility; it loads samples into its own dome holders but doesn't make them."}
+  - match: {org: calder, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Computation only; no fabrication."}
+  - match: {org: vantage, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "A sourcing intermediary; it doesn't make parts."}
+  - match: {org: bayside, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "An analytical lab; it doesn't make parts."}
+  - match: {org: ostrander, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "A university XRD service; it doesn't make parts."}
+  - match: {org: pinecrest, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Supplies precursors; it doesn't make parts."}
+  - match: {org: harbor, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Builds pilot pouch cells, not sample holders."}
+  - match: {org: meridian, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Thermal analysis only; it doesn't make parts."}
+  - match: {org: ridgeway, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "A funder, not a fabricator."}
+  - match: {org: lumen, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Curates datasets; it doesn't make parts."}
+  - match: {org: tidewater, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
+    content:
+      - type: text
+        text: >-
+          {"fit": "no", "reason": "Electrochemical testing; it doesn't make parts."}

@@ -1,0 +1,26 @@
+# An allowlist: the build context holds only what the image needs, so a new secret or
+# scratch file never reaches the builder by default. (infra/minio has its own context.)
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!alembic.ini
+!src
+!migrations
+!scenarios
+!web
+# ScriptedModel's cassettes (CASSETTE_DIR's default): MODEL_MODE=scripted, the hosted
+# default, plays them. Nothing else under tests/ enters the image.
+!tests/fixtures/cassettes
+
+# Never in the context, even inside an allowed directory.
+**/.env*
+**/node_modules
+**/.venv
+**/.git
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store
+web/dist
+web/coverage

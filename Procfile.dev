@@ -1,0 +1,6 @@
+# The worker's graceful shutdown stays well under honcho's 5 s kill wait and watchfiles'
+# SIGINT timeout: past it, in-flight model calls are cancelled and settle their spend
+# into the ledger before the process exits (a SIGKILL would lose it). Render keeps 90 s.
+api: uvicorn harmony.api.app:create_app --factory --reload --reload-dir src --host 127.0.0.1 --port 8000
+worker: watchfiles --filter python --sigint-timeout 10 "harmony worker --graceful-shutdown 2" src
+web: pnpm -C web dev

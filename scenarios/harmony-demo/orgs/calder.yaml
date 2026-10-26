@@ -1,0 +1,42 @@
+# Calder Computational, the near miss: computation only, no instruments (docs/SCENARIO.md).
+slug: calder
+name: Calder Computational
+kind: computation
+featured: true
+
+members:
+  - slug: priya
+    name: Priya Nair
+    title: Principal
+    role: admin
+    profile: Runs every engagement; quotes, scheduling and contracts.
+
+settings:
+  public_summary: >-
+    Calder Computational runs DFT and machine-learned potentials for battery materials:
+    structure prediction, and voltage and stability screening, in about two weeks. We
+    have no laboratory instruments.
+  instructions: >-
+    You represent Calder Computational. Be clear that we do computation only and have
+    no laboratory instruments. Consult for rates, scheduling and anything else.
+
+policy:
+  autonomy: auto
+  sharing_description: >-
+    Our services, rates and typical turnaround. Not: compute capacity or other clients.
+  routing_prompt: Everything goes to Priya.
+  default_assignee: priya
+
+knowledge:
+  - slug: about
+    title: About Calder
+    kind: profile
+    body: Computational materials screening for battery developers. No lab instruments.
+  - slug: services-and-rates
+    title: Services and rates
+    kind: price-list
+    body: DFT screening $900 per composition family; turnaround 2 weeks.
+  - slug: capacity
+    title: Compute capacity
+    kind: note
+    body: Cluster allocation renews Nov 15; until then we can take one new family a week.
