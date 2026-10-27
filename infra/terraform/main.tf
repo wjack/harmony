@@ -16,6 +16,7 @@ locals {
     APP_ENV = "prod"
     # Prod refuses anything else: the hosted app has no scripted mode.
     MODEL_MODE              = "live"
+    MODEL_OVERRIDE          = var.model_override
     SESSION_SECRET          = random_password.session_secret.result
     ADMIN_SECRET            = random_password.admin_secret.result
     ACCESS_CODE             = local.access_code

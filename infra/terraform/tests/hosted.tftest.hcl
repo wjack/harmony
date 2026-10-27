@@ -9,6 +9,7 @@ mock_provider "temporalcloud" {}
 
 variables {
   anthropic_api_key        = "sk-ant-test-only"
+  model_override           = "claude-haiku-5-5"
   access_code              = null
   client_ip_header         = "true-client-ip"
   lineage_budget_usd       = 11
@@ -26,6 +27,11 @@ run "both_services_get_the_live_settings" {
   assert {
     condition     = local.app_env.APP_ENV == "prod" && local.app_env.MODEL_MODE == "live"
     error_message = "Both services must run with APP_ENV=prod and MODEL_MODE=live."
+  }
+
+  assert {
+    condition     = local.app_env.MODEL_OVERRIDE == "claude-haiku-5-5"
+    error_message = "Both services must get MODEL_OVERRIDE from var.model_override."
   }
 
   assert {
@@ -116,6 +122,16 @@ run "a_15_character_passcode_is_refused" {
   }
 
   expect_failures = [var.access_code]
+}
+
+run "an_unknown_model_override_is_refused" {
+  command = plan
+
+  variables {
+    model_override = "claude-haiku-5"
+  }
+
+  expect_failures = [var.model_override]
 }
 
 run "a_passcode_with_a_leading_space_is_refused" {

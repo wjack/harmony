@@ -9,6 +9,10 @@
 # Required: the production key, from its own Console workspace with a spend limit.
 anthropic_api_key = ""
 
+# The model every role runs on in prod: Haiku 5.5 by default (user, 2026-10-26);
+# "none" runs the production mix (Opus 5.5 for featured orgs and the synthesizer).
+# model_override = "claude-haiku-5-5"
+
 # The master passcode: 16 or more printable ASCII characters, no whitespace at either
 # end. Unset, the generated one is used (`scripts/tf.sh output -raw access_code`).
 # access_code = ""

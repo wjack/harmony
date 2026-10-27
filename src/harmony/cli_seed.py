@@ -63,7 +63,9 @@ async def _seed(scenario: str, root: Path) -> tuple[UUID, dict[str, int]]:
     engine = engine_from_settings(settings, application_name="harmony-seed")
     try:
         sessionmaker = create_sessionmaker(engine)
-        world_id = await load_world(sessionmaker, scenario, build_sha=settings.build_sha, root=root)
+        world_id = await load_world(
+            sessionmaker, scenario, build_sha=settings.world_build, root=root
+        )
         return world_id, await _row_counts(sessionmaker, world_id)
     finally:
         await engine.dispose()

@@ -82,7 +82,7 @@ def get_world_service(services: ServicesDep) -> WorldService:
     temporal = services.temporal
     return WorldService(
         services.sessionmaker,
-        build_sha=services.settings.build_sha,
+        build_sha=services.settings.world_build,
         retirer=get_retirer(services),
         requests=(
             TemporalRequestStarter(temporal, services.sessionmaker)

@@ -45,6 +45,9 @@ ClientIpHeader = Literal["x-forwarded-for", "true-client-ip", "cf-connecting-ip"
 
 LOCAL_DATABASE_URL = "postgresql://harmony:harmony@localhost:5432/harmony"
 LOCAL_MODEL_OVERRIDE = "claude-haiku-5-5"
+# What prod may pin every role to. The hosted demo runs Haiku 5.5 everywhere for now
+# (user, 2026-10-26); any other value fails closed.
+PROD_MODEL_OVERRIDES = frozenset({"claude-haiku-5-5", "claude-opus-5-5"})
 # Used only when APP_ENV is local or ci and SESSION_SECRET is unset; prod refuses it.
 _INSECURE_DEV_SESSION_SECRET = "harmony-insecure-dev-session-secret"
 _MIN_PROD_SECRET_LEN = 32
@@ -105,7 +108,8 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     model_mode: ModelMode = "scripted"
     # Every role runs on this model when set. Defaults to Haiku 5.5 when APP_ENV=local;
-    # set MODEL_OVERRIDE=none to run the production model mix locally.
+    # set MODEL_OVERRIDE=none to run the production model mix locally. In prod it is
+    # unset (the production mix) or one of PROD_MODEL_OVERRIDES.
     model_override: str | None = None
     # ScriptedModel's cassettes (MODEL_MODE=scripted): a directory of YAML files. The
     # image ships this directory (the only part of tests/ in it); a scripted call
@@ -213,7 +217,8 @@ class Settings(BaseSettings):
         return self
 
     def _check_prod(self) -> None:
-        """Prod fails closed: live models, the gate on, and every hosted cap set."""
+        """Prod fails closed: live models (the production mix or one known model for every
+        role), the gate on, and every hosted cap set."""
         secret = self.session_secret.get_secret_value() if self.session_secret else ""
         if len(secret) < _MIN_PROD_SECRET_LEN:
             raise ValueError(
@@ -222,8 +227,9 @@ class Settings(BaseSettings):
             )
         if self.model_mode != "live":
             raise ValueError("MODEL_MODE must be live when APP_ENV=prod")
-        if self.model_override is not None:
-            raise ValueError("MODEL_OVERRIDE must be unset when APP_ENV=prod")
+        if self.model_override is not None and self.model_override not in PROD_MODEL_OVERRIDES:
+            allowed = ", ".join(sorted(PROD_MODEL_OVERRIDES))
+            raise ValueError(f"MODEL_OVERRIDE must be unset or one of {allowed} when APP_ENV=prod")
         _check_access_code(self.access_code.get_secret_value() if self.access_code else "")
         caps = {
             "DAILY_BUDGET_USD": self.daily_budget_usd,
@@ -235,6 +241,16 @@ class Settings(BaseSettings):
             raise ValueError(f"{', '.join(missing)} must be set when APP_ENV=prod")
 
     # --- Derived values -------------------------------------------------------------
+
+    @property
+    def world_build(self) -> str:
+        """What a world is pinned to (ARCHITECTURE §7, Deploys): the build SHA, plus the
+        model override when one is set. A MODEL_OVERRIDE change ships without a new build,
+        and it must fork every world too, so no transcript (with its thinking blocks) is
+        replayed to a model that didn't write it."""
+        if self.model_override is None:
+            return self.build_sha
+        return f"{self.build_sha}+{self.model_override}"
 
     def session_secret_value(self) -> str:
         """The cookie-signing secret (a fixed dev value outside prod when unset)."""

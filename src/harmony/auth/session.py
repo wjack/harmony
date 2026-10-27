@@ -168,7 +168,7 @@ async def current_actor(
     if session_id is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"no session; {_START}")
     resolved = await _resolve(services.sessionmaker, session_id, world)
-    if resolved is not None and resolved.build_sha != services.settings.build_sha:
+    if resolved is not None and resolved.build_sha != services.settings.world_build:
         await worlds.ensure_current_build(session_id, world)
         resolved = await _resolve(services.sessionmaker, session_id, world)
     if resolved is None:

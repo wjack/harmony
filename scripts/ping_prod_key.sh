@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Check the production Anthropic key with the request shapes the hosted app sends
-# (LIVE_DEMO_PLAN 3.8; deploy runbook step 7): `harmony llm ping --live --model opus`
-# (a streamed featured internal turn, with both betas), then `--model haiku` (the
-# screener). Two paid calls on the hosted key, about $0.01; run it only once the user
-# has approved that spend.
+# (LIVE_DEMO_PLAN 3.8; deploy runbook step 7): a streamed featured internal turn, then
+# the screener (`harmony llm ping --live --model haiku`). The featured turn is on Haiku
+# 5.5 (`--model haiku-featured`), as prod runs while Terraform's `model_override` pins
+# every role to Haiku (user, 2026-10-26); `--production-mix` pings it on Opus instead
+# (`--model opus`, with both betas). Two paid calls on the hosted key, about $0.01; run
+# it only once the user has approved that spend.
 #
-#   scripts/ping_prod_key.sh
+#   scripts/ping_prod_key.sh [--production-mix]
 #
 # The key is `anthropic_api_key` in infra/terraform/terraform.tfvars (HARMONY_TFVARS_FILE
 # overrides the path). Python reads it in process and hands it to each ping as
@@ -21,7 +23,16 @@ tfvars="${HARMONY_TFVARS_FILE:-$repo_root/infra/terraform/terraform.tfvars}"
 export PATH="$PATH:$repo_root/.venv/bin:/opt/homebrew/bin"
 python="$(command -v python3)"
 
-exec "$python" -I - "$tfvars" <<'PY'
+case "${1:-}" in
+  "") featured=haiku-featured ;;
+  --production-mix) featured=opus ;;
+  *)
+    echo "usage: scripts/ping_prod_key.sh [--production-mix]" >&2
+    exit 2
+    ;;
+esac
+
+exec "$python" -I - "$tfvars" "$featured" <<'PY'
 """Read anthropic_api_key from terraform.tfvars and ping with it, once per model."""
 
 import os
@@ -59,6 +70,7 @@ def read_key(tfvars: Path) -> str:
 
 def main() -> None:
     tfvars = Path(sys.argv[1])
+    featured = sys.argv[2]
     key = read_key(tfvars)
     env = os.environ | {
         "ANTHROPIC_API_KEY": key,
@@ -68,7 +80,7 @@ def main() -> None:
     }
     print(f"ping_prod_key.sh: using {NAME} from {tfvars}", flush=True)
     failed = False
-    for model in ("opus", "haiku"):
+    for model in (featured, "haiku"):
         print(f"--- harmony llm ping --live --model {model}", flush=True)
         result = subprocess.run(
             ["harmony", "llm", "ping", "--live", "--model", model],

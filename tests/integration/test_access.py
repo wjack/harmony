@@ -336,7 +336,7 @@ async def test_a_seeded_title_names_the_thread_on_both_sides(app: FastAPI, tmp_p
     def worlds(services: ServicesDep) -> WorldService:
         return WorldService(
             services.sessionmaker,
-            build_sha=services.settings.build_sha,
+            build_sha=services.settings.world_build,
             retirer=SyncRetirer(services.sessionmaker),
             scenarios_dir=scenarios,
         )

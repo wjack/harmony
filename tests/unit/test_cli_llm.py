@@ -37,6 +37,17 @@ def test_the_opus_ping_is_a_streamed_featured_internal_turn() -> None:
     assert tool["eager_input_streaming"] is True
 
 
+def test_the_haiku_featured_ping_is_that_turn_on_haiku() -> None:
+    request = cli_llm.ping_request("haiku-featured")
+    body = request.body
+
+    assert check_request(request) == []
+    assert (body["model"], request.key.role) == (HAIKU_5_5, "internal")
+    assert as_object(body["thinking"]) == {"type": "adaptive"}
+    [tool] = objects(body["tools"])
+    assert tool["eager_input_streaming"] is True
+
+
 def test_the_haiku_ping_is_the_screener_shape() -> None:
     request = cli_llm.ping_request("haiku")
     body = request.body
@@ -53,7 +64,10 @@ def test_the_haiku_ping_is_the_screener_shape() -> None:
     assert "tools" not in body
 
 
-@pytest.mark.parametrize(("model", "served"), [("opus", OPUS_5_5), ("haiku", HAIKU_5_5)])
+@pytest.mark.parametrize(
+    ("model", "served"),
+    [("opus", OPUS_5_5), ("haiku-featured", HAIKU_5_5), ("haiku", HAIKU_5_5)],
+)
 def test_the_dry_run_prints_the_body_and_sends_nothing(
     model: cli_llm.PingModel, served: str
 ) -> None:

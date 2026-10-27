@@ -117,9 +117,21 @@ def test_prod_refuses_scripted_models() -> None:
         prod_settings(model_mode="scripted")
 
 
-def test_prod_refuses_a_model_override() -> None:
+def test_prod_may_pin_every_role_to_a_known_model() -> None:
+    assert prod_settings(model_override="claude-haiku-5-5").model_override == "claude-haiku-5-5"
+    assert prod_settings(model_override="none").model_override is None
+
+
+def test_worlds_pin_to_the_build_and_the_model_override() -> None:
+    # A MODEL_OVERRIDE change ships without a new build SHA; it must still fork worlds.
+    assert prod_settings(build_sha="abc123").world_build == "abc123"
+    pinned = prod_settings(build_sha="abc123", model_override="claude-haiku-5-5")
+    assert pinned.world_build == "abc123+claude-haiku-5-5"
+
+
+def test_prod_refuses_an_unknown_model_override() -> None:
     with pytest.raises(ValidationError, match="MODEL_OVERRIDE"):
-        prod_settings(model_override="claude-haiku-5-5")
+        prod_settings(model_override="claude-haiku-5")
 
 
 def test_a_refusal_never_prints_a_secret_from_the_environment(
@@ -138,7 +150,7 @@ def test_a_refusal_never_prints_a_secret_from_the_environment(
     env = secrets | {
         "APP_ENV": "prod",
         "MODEL_MODE": "live",
-        "MODEL_OVERRIDE": "claude-haiku-5-5",
+        "MODEL_OVERRIDE": "claude-haiku-5",
         "DAILY_BUDGET_USD": "60",
         "GLOBAL_BUDGET_USD": "250",
         "CLIENT_DAILY_BUDGET_USD": "25",
@@ -148,7 +160,7 @@ def test_a_refusal_never_prints_a_secret_from_the_environment(
     with pytest.raises(ValidationError) as refused:
         make()
     text = str(refused.value)
-    assert "MODEL_OVERRIDE must be unset" in text
+    assert "MODEL_OVERRIDE must be unset or one of" in text
     for secret in secrets.values():
         assert not any(secret[i : i + 8] in text for i in range(len(secret) - 7)), secret
 

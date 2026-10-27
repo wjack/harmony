@@ -110,6 +110,18 @@ variable "anthropic_api_key" {
   }
 }
 
+variable "model_override" {
+  description = "MODEL_OVERRIDE for both services: the one model every role runs on, or \"none\" for the production mix (Opus 5.5 for featured orgs and the synthesizer, Haiku 5.5 for the rest). The hosted demo runs Haiku 5.5 everywhere for now (user, 2026-10-26)."
+  type        = string
+  default     = "claude-haiku-5-5"
+
+  validation {
+    # The app's own prod check (config.PROD_MODEL_OVERRIDES), plus "none".
+    condition     = contains(["none", "claude-haiku-5-5", "claude-opus-5-5"], var.model_override)
+    error_message = "model_override must be none, claude-haiku-5-5 or claude-opus-5-5."
+  }
+}
+
 variable "access_code" {
   description = "The master passcode for the whole app (ACCESS_CODE). Unset, the generated random_password.access_code is used; read it with `scripts/tf.sh output -raw access_code`. A passphrase of four or more words works."
   type        = string

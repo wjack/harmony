@@ -1,11 +1,14 @@
 """`harmony llm`: model client utilities.
 
-`harmony llm ping --model opus|haiku` builds one small request in a production shape,
+`harmony llm ping --model opus|haiku-featured|haiku` builds one small request in a
+production shape,
 checks it against the request contract and prints it with its worst-case reservation,
 without sending anything. The shapes are the ones whose betas and fields a workspace
 can reject (3.1):
 - `opus`: a featured internal turn streamed to the UI, so `thinking.display` is
   `updates`, both Opus betas are sent, and its one client tool streams eagerly;
+- `haiku-featured`: the same turn on Haiku 5.5, as prod sends it while MODEL_OVERRIDE
+  pins every role to Haiku;
 - `haiku`: the screener, with thinking disabled and a JSON-schema `output_config.format`.
 
 `--live` sends it: one small call through `BudgetGuard` (so a missing ledger refuses
@@ -32,8 +35,12 @@ from harmony.llm.wire import JsonObject, as_object, as_str, canonical_json, obje
 
 app = typer.Typer(add_completion=False, help="Model client utilities.")
 
-PingModel = Literal["opus", "haiku"]
-PING_MODELS: Final[dict[PingModel, str]] = {"opus": OPUS_5_5, "haiku": HAIKU_5_5}
+PingModel = Literal["opus", "haiku-featured", "haiku"]
+PING_MODELS: Final[dict[PingModel, str]] = {
+    "opus": OPUS_5_5,
+    "haiku-featured": HAIKU_5_5,
+    "haiku": HAIKU_5_5,
+}
 PING_MAX_TOKENS = 1024
 PING_PROMPT = "Reply with the single word: pong"
 # The streamed Opus shape needs a client tool; the prompt doesn't call for it.
@@ -65,7 +72,9 @@ def ping(
     model: Annotated[
         PingModel,
         typer.Option(
-            "--model", help="opus: a streamed featured internal turn; haiku: a screener call."
+            "--model",
+            help="opus: a streamed featured internal turn; haiku-featured: that turn on "
+            "Haiku 5.5; haiku: a screener call.",
         ),
     ],
     live: Annotated[
@@ -99,7 +108,7 @@ def ping(
 
 def ping_request(model: PingModel) -> ModelRequest:
     messages: list[JsonObject] = [{"role": "user", "content": PING_PROMPT}]
-    if model == "opus":
+    if model != "haiku":
         return build_request(
             _ping_key("internal"),
             tier="featured",

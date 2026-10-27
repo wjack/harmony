@@ -127,6 +127,7 @@ def test_tfvars_from_env_creates_a_private_file(tmp_path: Path) -> None:
 # --- ping_prod_key.sh -----------------------------------------------------------------
 
 PROD_KEY = 'sk-ant-fixture-"quoted"-prod-0123'
+PROD_KEY_PLAIN = "sk-ant-fixture-plain-prod-0123"
 HARMONY_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"$STUB_DIR/argv.log"
 {
@@ -137,7 +138,9 @@ printf '%s\\n' "$*" >>"$STUB_DIR/argv.log"
 """
 
 
-def _ping(tmp_path: Path, tfvars_text: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+def _ping(
+    tmp_path: Path, tfvars_text: str, *args: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     stubs = tmp_path / "bin"
     _stub(stubs, "harmony", HARMONY_STUB)
     tfvars = tmp_path / "terraform.tfvars"
@@ -151,7 +154,7 @@ def _ping(tmp_path: Path, tfvars_text: str) -> tuple[subprocess.CompletedProcess
     )
     env.pop("MODEL_MODE", None)
     assert shutil.which("harmony", path=env["PATH"]) == str(stubs / "harmony")
-    return _run(SCRIPTS / "ping_prod_key.sh", env=env), stubs
+    return _run(SCRIPTS / "ping_prod_key.sh", *args, env=env), stubs
 
 
 def test_ping_prod_key_hands_the_key_over_in_the_environment_only(tmp_path: Path) -> None:
@@ -167,7 +170,7 @@ def test_ping_prod_key_hands_the_key_over_in_the_environment_only(tmp_path: Path
     assert "sk-ant" not in result.stdout + result.stderr
     argv = (stubs / "argv.log").read_text()
     assert argv.splitlines() == [
-        "llm ping --live --model opus",
+        "llm ping --live --model haiku-featured",
         "llm ping --live --model haiku",
     ]
     assert PROD_KEY not in argv
@@ -175,6 +178,26 @@ def test_ping_prod_key_hands_the_key_over_in_the_environment_only(tmp_path: Path
         f"key={PROD_KEY}",
         "app_env=local override=none project=harmony-hosted mode=<unset>",
     ] * 2
+
+
+def test_ping_prod_key_pings_the_featured_turn_on_opus_for_the_production_mix(
+    tmp_path: Path,
+) -> None:
+    result, stubs = _ping(tmp_path, f'anthropic_api_key = "{PROD_KEY_PLAIN}"\n', "--production-mix")
+
+    assert result.returncode == 0, result.stderr
+    assert (stubs / "argv.log").read_text().splitlines() == [
+        "llm ping --live --model opus",
+        "llm ping --live --model haiku",
+    ]
+
+
+def test_ping_prod_key_refuses_an_unknown_argument(tmp_path: Path) -> None:
+    result, stubs = _ping(tmp_path, f'anthropic_api_key = "{PROD_KEY_PLAIN}"\n', "--opus")
+
+    assert result.returncode == 2
+    assert "usage:" in result.stderr
+    assert not (stubs / "argv.log").exists()
 
 
 @pytest.mark.parametrize(

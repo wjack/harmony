@@ -391,7 +391,7 @@ sequenceDiagram
   4. No batch jobs: Temporal Cloud allows one per namespace.
   5. Every world workflow has a 24 h execution timeout as a backstop. It spans the whole continue-as-new chain, so a long-lived workflow (Conversation, Replay) ends 24 h after its first start at the latest.
   6. The admin wipe is a loop of single-world retirements.
-- **Deploys:** a world created under another build SHA is forked fresh on the next visit and the old one retired, so a deploy never replays live workflows on changed code. `workflow.patched()` is used only for a change that must reach live workflows. CI runs `Replayer` over saved walkthrough histories.
+- **Deploys:** a world created under another build SHA (or another `MODEL_OVERRIDE`: worlds pin to `Settings.world_build`) is forked fresh on the next visit and the old one retired, so a deploy never replays live workflows on changed code. `workflow.patched()` is used only for a change that must reach live workflows. CI runs `Replayer` over saved walkthrough histories.
 - **Temporal UI links** appear only in local dev (`:8233`). The hosted demo shows an in-app history drawer from `fetch_history()` instead, because Temporal Cloud's UI needs a login.
 
 ## 8. Realtime

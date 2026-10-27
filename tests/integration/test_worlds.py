@@ -122,7 +122,7 @@ async def test_start_creates_the_session_and_its_world_lazily(
 
     [world] = (await _worlds(db_sessionmaker)).values()
     assert str(world.id) == started["world_id"]
-    assert world.build_sha == app_settings.build_sha
+    assert world.build_sha == app_settings.world_build
     row = await _visitor_row(db_sessionmaker, started["session_id"])
     assert row.budget_lineage == world.budget_lineage
     assert row.desk_member_id == demo_id("member", "alex")
@@ -295,7 +295,7 @@ async def test_concurrent_resets_of_one_world_fork_it_once(
     async with visitor(app) as v:
         started = await v.start()
     service = WorldService(
-        db_sessionmaker, build_sha=app_settings.build_sha, retirer=SyncRetirer(db_sessionmaker)
+        db_sessionmaker, build_sha=app_settings.world_build, retirer=SyncRetirer(db_sessionmaker)
     )
     session_id, old = UUID(started["session_id"]), UUID(started["world_id"])
     switches = await asyncio.gather(
@@ -336,6 +336,11 @@ class _RecordingStarter:
             await session.execute(insert(WorldWorkflow).values(rows).on_conflict_do_nothing())
 
 
+def _world_build(settings: Settings, build_sha: str) -> str:
+    """What a world made by build `build_sha` is pinned to: the SHA plus any model override."""
+    return settings.model_copy(update={"build_sha": build_sha}).world_build
+
+
 def _starting(
     app: FastAPI,
     sm: Sessionmaker,
@@ -361,7 +366,7 @@ async def test_creating_a_world_starts_no_seeded_request(
     starter = _RecordingStarter(db_sessionmaker)
     service = WorldService(
         db_sessionmaker,
-        build_sha=app_settings.build_sha,
+        build_sha=app_settings.world_build,
         retirer=SyncRetirer(db_sessionmaker),
         requests=starter,
     )
@@ -387,7 +392,7 @@ async def test_the_first_act_as_into_a_party_org_starts_the_seeded_request(
     app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build)
     async with visitor(app) as v:
         world = UUID((await v.start())["world_id"])
         await v.act_as("maya")
@@ -412,7 +417,7 @@ async def test_a_double_clicked_act_as_starts_it_once(
     app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build)
     async with visitor(app) as v:
         world = UUID((await v.start())["world_id"])
         helen = (await v.member_ids())["helen"]
@@ -426,7 +431,7 @@ async def test_a_fork_that_keeps_a_party_member_starts_it_in_the_new_world(
     app: FastAPI, app_settings: Settings, db_engine: AsyncEngine, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build)
     async with visitor(app) as v:
         old = UUID((await v.start())["world_id"])
         await v.act_as("helen")
@@ -436,7 +441,7 @@ async def test_a_fork_that_keeps_a_party_member_starts_it_in_the_new_world(
         build_app(app_settings, db_engine, build_sha="the-next-build"),
         db_sessionmaker,
         starter,
-        build_sha="the-next-build",
+        build_sha=_world_build(app_settings, "the-next-build"),
     )
     async with visitor(deployed, cookies) as v:
         current = await v.session()
@@ -452,7 +457,7 @@ async def test_a_seeded_request_waits_while_live_calls_cant_run(
     app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha, caps=LIVE_CAPS)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build, caps=LIVE_CAPS)
     await set_live(db_sessionmaker, enabled=False)
     async with visitor(app) as v:
         world = UUID((await v.start())["world_id"])
@@ -470,7 +475,7 @@ async def test_a_fork_while_live_calls_cant_run_starts_it_once_they_can(
     app: FastAPI, app_settings: Settings, db_engine: AsyncEngine, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha, caps=LIVE_CAPS)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build, caps=LIVE_CAPS)
     await set_live(db_sessionmaker, enabled=False)
     async with visitor(app) as v:
         await v.start()
@@ -481,7 +486,7 @@ async def test_a_fork_while_live_calls_cant_run_starts_it_once_they_can(
         build_app(app_settings, db_engine, build_sha="the-next-build"),
         db_sessionmaker,
         starter,
-        build_sha="the-next-build",
+        build_sha=_world_build(app_settings, "the-next-build"),
         caps=LIVE_CAPS,
     )
     async with visitor(deployed, cookies) as v:
@@ -498,7 +503,7 @@ async def test_a_failed_request_start_still_lets_the_visitor_act(
     app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker, fail=True)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build)
     async with visitor(app) as v:
         world = UUID((await v.start())["world_id"])
         switched = await v.act_as("helen")
@@ -523,7 +528,9 @@ async def test_a_world_from_another_build_is_forked_on_the_next_visit(
     assert current["world_id"] != started["world_id"]
     assert current["member"]["slug"] == "raj"
     worlds = await _worlds(db_sessionmaker)
-    assert worlds[UUID(current["world_id"])].build_sha == "the-next-build"
+    assert worlds[UUID(current["world_id"])].build_sha == _world_build(
+        app_settings, "the-next-build"
+    )
     assert worlds[UUID(started["world_id"])].status == "retired"
 
 
@@ -564,7 +571,10 @@ async def test_a_world_whose_scenario_a_later_build_removed_forks_into_the_defau
     assert current["session_id"] == str(session_id)
     worlds = await _worlds(db_sessionmaker)
     forked = worlds[UUID(current["world_id"])]
-    assert (forked.scenario, forked.build_sha) == ("harmony-demo", "build-b")
+    assert (forked.scenario, forked.build_sha) == (
+        "harmony-demo",
+        _world_build(app_settings, "build-b"),
+    )
     assert {world.budget_lineage for world in worlds.values()} == {lineage}
     assert {w.status for w in worlds.values() if w.scenario == "ghost"} == {"retired"}
 
