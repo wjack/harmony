@@ -8,7 +8,9 @@
  *
  * Then the Vantage request, which Helen's first switch into Northlake starts: she uses
  * Edit on the consult that waits for her, approves, and reopens the conversation once
- * Vantage closes it. Vantage's side is checked by switching to Jordan in the same
+ * Vantage closes it. She reopens in Ask, so Edit is checked while Claude's reopened
+ * message waits for her: the cassette's reopened run closes again moments after that
+ * message is sent. Vantage's side is checked by switching to Jordan in the same
  * session, since another browser context would get a world of its own (LIVE_DEMO_PLAN
  * 3.3). The texts are §1.9's, which the cassettes are written for.
  */
@@ -197,7 +199,15 @@ test("Helen tells Claude what to do differently, approves, and reopens; Vantage 
     await expect(box(page).getByRole("radio", { name: "Edit" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  await test.step("she reopens it with what Claude should pick up", async () => {
+  await test.step("she sets Northlake to Ask and reopens it with what Claude should pick up", async () => {
+    // In Ask, Claude's reopened message waits for her, so the Edit check below sees the
+    // conversation open (the reopened run closes again a second or two after it's sent).
+    await page.goto("/customize/harmony?section=autonomy");
+    await page.getByRole("radiogroup", { name: "Default mode" }).getByText("Ask", { exact: true }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText(/^Settings saved/)).toBeVisible();
+
+    await page.goto(thread);
     await closedRow(page).getByRole("button", { name: "Reopen" }).click();
     const prompt = page.getByRole("region", { name: `Reopen with ${VANTAGE}` });
     await prompt.getByRole("textbox", { name: "What should Claude pick up?" }).fill(REOPEN_TEXT);
@@ -205,6 +215,17 @@ test("Helen tells Claude what to do differently, approves, and reopens; Vantage 
     await expect(
       conversation(page).getByRole("article", { name: /^Helen (is reopening|reopened) the conversation$/ }),
     ).toBeVisible(TURNS);
+  });
+
+  await test.step("while Claude's message waits for her, Edit works again; she approves it", async () => {
+    const approve = card(page).getByRole("button", { name: "Approve and send" });
+    await expect(approve).toBeVisible(TURNS);
+    const edit = box(page).getByRole("radio", { name: "Edit" });
+    await expect(edit).not.toHaveAttribute("aria-disabled", "true");
+    await edit.click();
+    await expect(box(page).getByRole("textbox", { name: "Tell Claude" })).toBeVisible();
+    await approve.click();
+    await expect(approve).toBeHidden(TURNS);
   });
 
   await test.step("Jordan sees that Northlake reopened it, not what Helen typed, then Northlake's message", async () => {
@@ -215,14 +236,5 @@ test("Helen tells Claude what to do differently, approves, and reopens; Vantage 
     ).toBeVisible(TURNS);
     await expect(conversation(page)).toContainText("general capabilities sheet", TURNS);
     await expect(page.getByText(REOPEN_TEXT)).toHaveCount(0);
-  });
-
-  await test.step("back as Helen, Edit works again", async () => {
-    await switchAccount(page, "Jordan Pike", "Dr. Helen Ward");
-    await page.goto(thread);
-    const edit = box(page).getByRole("radio", { name: "Edit" });
-    await expect(edit).not.toHaveAttribute("aria-disabled", "true", TURNS);
-    await edit.click();
-    await expect(box(page).getByRole("textbox", { name: "Tell Claude" })).toBeVisible();
   });
 });
