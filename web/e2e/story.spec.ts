@@ -3,10 +3,10 @@
  * against the real API, worker, Postgres and Temporal (scripts/e2e_ui.sh).
  *
  * Alex sends the suggested message, approves the outreach for Northlake and Ridgeline
- * and answers Ridgeline's seal question inline. Helen approves Northlake's flagged
- * answer from her inbox. Alex says yes to both, both conversations close and Claude
- * sums up. Then the network view, what Northlake's representative saw, and
- * Customize → Harmony's sharing.
+ * and answers Ridgeline's seal question inline. Helen opens Northlake's flagged answer
+ * from the sidebar's Needs you and approves it. Alex says yes to both, both
+ * conversations close and Claude sums up. Then the network view, what Northlake's
+ * representative saw, and Customize → Harmony's sharing.
  *
  * The cassettes are keyed by turn, not by what is typed, so the test follows the
  * story's path: Calder is left out, as the walkthrough says. Every browser context is
@@ -16,18 +16,17 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { unlock } from "./unlock";
+
 /** Long enough for several model turns on both sides (representative, consult, sharing check). */
 const TURNS = { timeout: 90_000 };
 
 const NORTHLAKE = "Northlake Characterization Core";
 const RIDGELINE = "Ridgeline Fabrication";
 const CALDER = "Calder Computational";
-/**
- * How Northlake's inbox names the request: by Henderson's first message to it, since
- * the brief (and so its first line) is Henderson's own, past the representative's
- * self-introduction, which every request from Henderson shares.
- */
-const NORTHLAKE_TITLE = /^We need powder XRD and SEM\/EDS on 12 layered-oxide/;
+/** The request's title as Northlake's representative wrote it (the scripted cassette's). */
+const NORTHLAKE_TITLE = "XRD and SEM/EDS quote";
+const PHONE = { width: 390, height: 844 };
 
 test.describe.configure({ timeout: 6 * 60_000 });
 
@@ -37,13 +36,36 @@ async function switchAccount(page: Page, from: string, to: string): Promise<void
   await expect(page.getByRole("button", { name: `Account: ${to}` })).toBeVisible();
 }
 
+function sidebar(page: Page): Locator {
+  return page.getByRole("navigation", { name: "Sidebar" });
+}
+
 /** Follows a sidebar link; `name` is a prefix, since a badge can follow it ("Requests 2 need you"). */
 async function openFromSidebar(page: Page, name: string): Promise<void> {
-  await page
-    .getByRole("navigation", { name: "Sidebar" })
+  await sidebar(page)
     .getByRole("link", { name: new RegExp(`^${name}`) })
     .first()
     .click();
+}
+
+/** Opens a chat from the sidebar's Recents, below the requests that share its scroll area. */
+async function openChat(page: Page, title: string): Promise<void> {
+  await sidebar(page)
+    .getByRole("region", { name: "Recents" })
+    .getByRole("link", { name: new RegExp(`^${title}`) })
+    .first()
+    .click();
+}
+
+/** Opens Details beside the request, unless the member left it open last time. */
+async function openDetails(page: Page): Promise<Locator> {
+  // Exact: once the panel is open, its "Close details" button would match too.
+  const toggle = page.getByRole("button", { name: "Details", exact: true });
+  await expect(toggle).toBeVisible(TURNS);
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const details = page.getByRole("complementary", { name: "Properties" });
+  await expect(details).toBeVisible();
+  return details;
 }
 
 /** Answers the open inline question from `org`, in the chat. */
@@ -58,7 +80,7 @@ async function answerInline(page: Page, org: string, text: string): Promise<void
 /** The live status card's row for `org`. */
 function statusRow(page: Page, org: string): Locator {
   return page
-    .getByRole("region", { name: "Network request" })
+    .getByRole("region", { name: "Harmony Network Request", exact: true })
     .last()
     .getByRole("listitem")
     .filter({ hasText: org });
@@ -126,9 +148,9 @@ async function cutShortText(card: Locator): Promise<string[]> {
     );
 }
 
-/** The properties rail's values that are cut short: content wider than the box showing it. */
-async function clippedValues(rail: Locator): Promise<string[]> {
-  return rail
+/** The Details panel's values that are cut short: content wider than the box showing it. */
+async function clippedValues(details: Locator): Promise<string[]> {
+  return details
     .locator("dd, dd *")
     .evaluateAll((values: Measured[]) =>
       values.filter((value) => value.scrollWidth > value.clientWidth + 1).map((value) => value.textContent ?? ""),
@@ -137,6 +159,7 @@ async function clippedValues(rail: Locator): Promise<string[]> {
 
 // A test of its own: each visitor gets a fresh world, so this one has no request in flight.
 test("before any request is in flight, the network view's note sits clear of every card", async ({ page }) => {
+  await unlock(page);
   await page.goto("/");
   await page.getByRole("dialog").getByRole("button", { name: /^Network view/ }).click();
   await expect(page).toHaveURL(/\/network/);
@@ -150,6 +173,7 @@ test("before any request is in flight, the network view's note sits clear of eve
 });
 
 test("the suggested story, from Alex's message to both conversations closed", async ({ page }) => {
+  await unlock(page);
   await test.step("Alex sends the suggested message", async () => {
     await page.goto("/");
     await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
@@ -169,7 +193,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
   await test.step("the outreach card lists Calder as not a fit, and its first option leaves it out", async () => {
     await expect(page.getByText("Send this request to 2 organizations?")).toBeVisible(TURNS);
-    const brief = page.getByRole("region", { name: "Network request" }).first();
+    const brief = page.getByRole("region", { name: "Harmony Network Request", exact: true }).first();
     await expect(brief).toContainText("Henderson Lab");
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) await expect(brief).toContainText(org);
     await expect(brief.getByRole("listitem").filter({ hasText: CALDER })).toContainText("Not a fit");
@@ -177,7 +201,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
     const first = page.getByRole("option", { name: /Send to 2 organizations/ });
     await expect(first).not.toContainText(CALDER);
     await first.click();
-    await expect(statusRow(page, CALDER)).toContainText("Screened", TURNS);
+    await expect(statusRow(page, CALDER)).toContainText("Not sent", TURNS);
   });
 
   await test.step("Ridgeline's question reaches Alex inline, and he answers", async () => {
@@ -202,11 +226,11 @@ test("the suggested story, from Alex's message to both conversations closed", as
     expect(await edgeLabelsOverCards(page)).toBe(0);
   });
 
-  await test.step("on a 1366×768 laptop the account menu opens below the demo bar, Log out in view", async () => {
+  await test.step("on a 1366×768 laptop the account menu opens below the demo bar, Lock Harmony in view", async () => {
     await page.setViewportSize({ width: 1366, height: 768 });
     await page.getByRole("button", { name: "Account: Alex Chen" }).click();
     const menu = page.getByRole("menu");
-    await expect(menu.getByRole("menuitem", { name: "Log out" })).toBeInViewport({ ratio: 1 });
+    await expect(menu.getByRole("menuitem", { name: "Lock Harmony" })).toBeInViewport({ ratio: 1 });
     const [bar, opened] = await Promise.all([
       page.locator('header[aria-label="Demo controls"]').boundingBox(),
       menu.boundingBox(),
@@ -217,37 +241,48 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  await test.step("as Helen, the inbox explains why Northlake's answer needs her, and she approves it", async () => {
+  await test.step("as Helen, the request explains why Northlake's answer came to her, and she approves it", async () => {
     await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
-    await openFromSidebar(page, "Requests");
-    await page.getByText(NORTHLAKE_TITLE).first().click();
+    const needsYou = sidebar(page).getByRole("region", { name: "Needs you" });
+    await needsYou.getByRole("link").filter({ hasText: NORTHLAKE_TITLE }).first().click();
 
-    await expect(page.getByText("Why this needs you:")).toBeVisible(TURNS);
-    // The properties rail and its Activity log show at the default laptop width, every
-    // value in full.
-    const rail = page.getByRole("complementary", { name: "Properties" });
-    await expect(rail).toBeVisible();
-    await expect(rail).toContainText("Dr. Helen Ward");
-    await expect(rail).toContainText("Henderson Lab");
-    expect(await clippedValues(rail)).toEqual([]);
+    const card = page.getByRole("region", { name: "Needs your decision" });
+    await expect(card.getByRole("region", { name: "Why it came to you" })).toBeVisible(TURNS);
+    // Details beside the transcript at the default laptop width, every value in full.
+    const details = await openDetails(page);
+    await expect(details).toContainText("Dr. Helen Ward");
+    await expect(details).toContainText("Henderson Lab");
+    expect(await clippedValues(details)).toEqual([]);
     await expect(page.getByText(/internal reserve slots/).first()).toBeVisible();
     const lookedAt = page.getByRole("region", { name: "What Claude looked at" });
     await expect(lookedAt).toContainText("Public calendar");
     await expect(lookedAt).toContainText("Raj's note, reserve XRD block");
 
     // The decision reads in full at the end of the thread: the whole question and draft.
-    const card = page.getByRole("region", { name: "Needs your decision" });
     await expect(card.getByRole("heading", { level: 2 })).toBeVisible();
     expect(await cutShortText(card)).toEqual([]);
 
-    const approve = page.getByRole("region", { name: "Your decision" }).getByRole("button", { name: "Approve & send" });
+    await test.step("on a 390×844 phone the request opens at the card's question, under a title that fits", async () => {
+      await page.setViewportSize(PHONE);
+      await page.reload();
+      await expect(card.getByRole("heading", { level: 2 })).toBeInViewport({ ratio: 1, ...TURNS });
+      const title = page.getByRole("heading", { level: 1, name: NORTHLAKE_TITLE });
+      await expect(title).toBeVisible();
+      const overflow = await title.evaluateAll((titles: Measured[]) =>
+        titles.map((each) => each.scrollWidth - each.clientWidth),
+      );
+      expect(overflow).toEqual([0]);
+      await page.setViewportSize({ width: 1440, height: 900 });
+    });
+
+    const approve = page.getByRole("region", { name: "Your decision" }).getByRole("button", { name: "Approve and send" });
     await approve.click();
     await expect(approve).toBeHidden(TURNS);
   });
 
   await test.step("back as Alex, he says yes to both and both conversations close", async () => {
     await switchAccount(page, "Dr. Helen Ward", "Alex Chen");
-    await openFromSidebar(page, "Find a lab that can run XRD");
+    await openChat(page, "Find a lab that can run XRD");
     await answerInline(page, NORTHLAKE, "Yes, go ahead with Northlake.");
     await answerInline(page, RIDGELINE, "Yes, go ahead with Ridgeline.");
 
@@ -286,9 +321,13 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
   await test.step("Northlake's representative saw the released answer, never Raj's note", async () => {
     await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
-    await openFromSidebar(page, "Requests");
-    await page.getByText(NORTHLAKE_TITLE).first().click();
-    await page.getByRole("button", { name: "What our representative saw" }).first().click();
+    // Settled, it's one of her recent requests.
+    await sidebar(page)
+      .getByRole("region", { name: "Recent requests" })
+      .getByRole("link", { name: `${NORTHLAKE_TITLE}, with Henderson Lab` })
+      .click();
+    const details = await openDetails(page);
+    await details.getByRole("button", { name: /^What our representative saw/ }).click();
     const saw = page.getByRole("dialog", { name: "What our representative saw" });
     await expect(saw.getByRole("region", { name: "Released answers" })).toContainText("Wed Nov 4");
     await expect(saw).not.toContainText("Raj's note");

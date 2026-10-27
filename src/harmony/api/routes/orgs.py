@@ -92,6 +92,9 @@ class HarmonySettingsView(_View):
     directory_visibility: DirectoryVisibility
     routing_prompt: str
     default_assignee: MemberRef | None
+    # Internal Claude sends Harmony Network Requests without review by default; a chat
+    # may override it (`PATCH /api/conversations/{id}`).
+    send_without_confirmation: bool
     members: list[MemberProfileView]
     # The `rep_policy` row's version (optimistic concurrency for PUT).
     policy_version: int
@@ -114,6 +117,7 @@ class HarmonySettingsUpdate(BaseModel):
     directory_visibility: DirectoryVisibility | None = None
     routing_prompt: str | None = Field(default=None, max_length=PROSE_MAX_CHARS)
     default_assignee_id: UUID | None = None
+    send_without_confirmation: bool | None = None
     # Members' profiles to replace, by member id; members left out are unchanged.
     member_profiles: dict[UUID, Annotated[str, Field(max_length=PROSE_MAX_CHARS)]] | None = None
 
@@ -321,6 +325,7 @@ async def _settings_view(db: AsyncSession, actor: Actor, org: Org) -> HarmonySet
         default_assignee=refs.get(policy.default_assignee_id)
         if policy.default_assignee_id is not None
         else None,
+        send_without_confirmation=policy.send_without_confirmation,
         members=[
             MemberProfileView(member=refs[m.id], role=m.role, title=m.title, profile=m.profile)
             for m in members

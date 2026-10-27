@@ -3,8 +3,12 @@
 `StoryDecisions` follows the story: approve the outreach to the orgs its beats expect
 to hear from (leaving out a near miss such as Calder), and resolve each escalation by
 the next `humans` rule that matches it (else approve the draft as written).
-`PromptDecisions` (`--interactive`) asks at each of those points, with the story's
-choice as the default.
+`ApproveAll` (`--approve all`) approves every listed recipient and each escalation's
+draft as written. `PromptDecisions` (`--interactive`) asks at each of those points,
+with the story's choice as the default.
+
+Approvals always name their recipients, as the web does: the server's default applies
+only to an approval that names none.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from dataclasses import dataclass
 from typing import Protocol, get_args
 from uuid import UUID
 
-from harmony.agents.models import EscalationAction, MemberRef, OutreachCardItem
+from harmony.agents.models import CardRecipient, EscalationAction, MemberRef, OutreachCardItem
 from harmony.api.routes.cards import ApproveCard, RejectCard
 from harmony.api.routes.escalations import ResolveEscalation
 from harmony.db.models.choices import EscalationKind
@@ -75,14 +79,41 @@ def expected_orgs(story: StorySpec) -> set[str]:
 
 
 def story_recipients(story: StorySpec, card: OutreachCardItem) -> ApproveCard:
-    """The card approved for the recipients the story expects to hear from, or as
-    proposed when that would keep none or drop none. The story decides rather than
-    the card's fits, which say how each org was screened, not what the story needs."""
+    """The card approved for the recipients the story expects to hear from, or for the
+    ones it proposes when the story expects none of them. The story decides rather
+    than the card's fits, which say how each org was screened, not what the story
+    needs."""
     expected = expected_orgs(story)
     kept = [r.org.id for r in card.recipients if r.org.slug in expected]
-    if not kept or len(kept) == len(card.recipients):
-        return ApproveCard()
-    return ApproveCard(recipients=kept)
+    return ApproveCard(recipients=kept or [r.org.id for r in proposed(card.recipients)])
+
+
+def proposed(recipients: Sequence[CardRecipient]) -> list[CardRecipient]:
+    """The rows the card ticks by default: suggested ones, else those whose fit isn't
+    `no` (a card from before suggestions), else all (`requests.default_recipients`)."""
+    return (
+        [r for r in recipients if r.suggested]
+        or [r for r in recipients if r.fit != "no"]
+        or list(recipients)
+    )
+
+
+def as_drafted(pending: PendingEscalation) -> ResolveEscalation:
+    """The draft approved as written; a consult with no draft is declined."""
+    if pending.kind == "consult" and not pending.draft:
+        return ResolveEscalation(action="decline", text=NO_DRAFT_TEXT)
+    return ResolveEscalation(action="approve", draft_rev=pending.draft_rev)
+
+
+class ApproveAll:
+    """Every listed recipient, every draft as written: a free-form request run to its
+    end (`--approve all`)."""
+
+    async def outreach(self, card: OutreachCardItem) -> CardChoice:
+        return ApproveCard(recipients=[r.org.id for r in card.recipients])
+
+    async def escalation(self, pending: PendingEscalation) -> ResolveEscalation:
+        return as_drafted(pending)
 
 
 class StoryDecisions:
@@ -119,11 +150,9 @@ class StoryDecisions:
 
     async def escalation(self, pending: PendingEscalation) -> ResolveEscalation:
         rule = self.rule_for(pending)
-        action: EscalationAction = rule.action if rule is not None else "approve"
-        text = rule.text if rule is not None else None
-        if pending.kind == "consult" and action == "approve" and text is None and not pending.draft:
-            return ResolveEscalation(action="decline", text=NO_DRAFT_TEXT)
-        return ResolveEscalation(action=action, text=text, draft_rev=pending.draft_rev)
+        if rule is None or (rule.action == "approve" and rule.text is None):
+            return as_drafted(pending)
+        return ResolveEscalation(action=rule.action, text=rule.text, draft_rev=pending.draft_rev)
 
 
 type Ask = Callable[[str, str], str]

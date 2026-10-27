@@ -1,8 +1,9 @@
 """The P1–P2 contract (docs/P1_P2_CONTRACT.md): every route is declared and typed.
 
-`ROUTES` must list every route the P1–P2 routers declare, so a route added without a
-contract line fails here. Each route documents its errors as `ApiProblem` bodies, and
-its behaviour is tested with its domain elsewhere.
+`ROUTES` must list every route the P1–P2 routers declare, and `LIVE_ROUTES` every
+route of the live phase's, so a route added without a contract line fails here. Each
+route documents its errors as `ApiProblem` bodies, and its behaviour is tested with its
+domain elsewhere.
 
 Also pins the small contract invariants that aren't routes: the snapshot entity types,
 the `demo.needs_human` event, and the worker registration.
@@ -10,6 +11,7 @@ the `demo.needs_human` event, and the worker registration.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -18,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from pydantic import TypeAdapter, ValidationError
 
-from harmony.api.app import P1_P2_ROUTERS, create_app
+from harmony.api.app import LIVE_ROUTERS, P1_P2_ROUTERS, create_app
 from harmony.db.models import SNAPSHOT_ENTITIES
 from harmony.events.schemas import (
     APPEND_ONLY_ENTITY_TYPES,
@@ -39,6 +41,7 @@ ROUTES: list[tuple[str, str]] = [
     ("GET", "/api/conversations"),
     ("POST", "/api/conversations"),
     ("GET", "/api/conversations/{conversation_id}"),
+    ("PATCH", "/api/conversations/{conversation_id}"),
     ("POST", "/api/conversations/{conversation_id}/messages"),
     ("POST", "/api/cards/{card_id}/approve"),
     ("POST", "/api/cards/{card_id}/reject"),
@@ -58,20 +61,44 @@ ROUTES: list[tuple[str, str]] = [
     ("GET", "/api/demo/story"),
 ]
 
+# Every live-phase route (the "Live phase" section), with the JSON body it takes, its
+# success status and the JSON body it answers: the models L0 fixed while these routes
+# were stubs answering 501. `GET /api/gate` answers the passcode page, lock no body.
+LIVE_ROUTES: dict[tuple[str, str], tuple[str | None, str, str | None]] = {
+    ("GET", "/api/gate"): (None, "200", None),
+    ("POST", "/api/gate"): ("GateUnlock", "200", "GateUnlocked"),
+    ("POST", "/api/gate/lock"): (None, "204", None),
+    ("GET", "/api/budget"): (None, "200", "BudgetView"),
+    ("GET", "/api/admin/spend"): (None, "200", "AdminSpendView"),
+    ("POST", "/api/admin/live"): ("LiveToggle", "200", "LiveState"),
+    ("GET", "/api/admin/worlds/{world_id}"): (None, "200", "AdminWorldView"),
+    ("GET", "/api/admin/client-key"): (None, "200", "ClientKeyView"),
+}
+# Live routes behind a visitor session: their 401 is the session's, as on P1–P2 routes.
+# Every other live 401 is the gate's `passcode_required` problem.
+SESSION_LIVE_ROUTES = {("GET", "/api/budget")}
+
 
 def _app() -> FastAPI:
     return create_app(settings_without_dotenv(app_env="ci"))
 
 
-def test_the_table_lists_every_p1_p2_route() -> None:
-    declared = {
+def _declared(routers: tuple[Any, ...]) -> set[tuple[str, str]]:
+    return {
         (method, "/api" + route.path)
-        for module in P1_P2_ROUTERS
+        for module in routers
         for route in module.router.routes
         if isinstance(route, APIRoute)
         for method in route.methods or ()
     }
-    assert declared == set(ROUTES)
+
+
+def test_the_table_lists_every_p1_p2_route() -> None:
+    assert _declared(P1_P2_ROUTERS) == set(ROUTES)
+
+
+def test_the_table_lists_every_live_route() -> None:
+    assert _declared(LIVE_ROUTERS) == set(LIVE_ROUTES)
 
 
 def test_openapi_documents_every_error_as_a_problem_body() -> None:
@@ -87,6 +114,47 @@ def test_openapi_documents_every_error_as_a_problem_body() -> None:
                 continue
             ref = response["content"]["application/json"]["schema"]["$ref"]
             assert ref == "#/components/schemas/ApiProblem", (method, template, code)
+
+
+def test_live_routes_document_every_error_as_a_problem_body() -> None:
+    schema = _app().openapi()
+    for method, template in LIVE_ROUTES:
+        responses = schema["paths"][template][method.lower()]["responses"]
+        for code, response in responses.items():
+            if not code.startswith(("4", "5")) or code == "422":
+                continue
+            if code == "401" and (method, template) in SESSION_LIVE_ROUTES:
+                continue
+            ref = response["content"]["application/json"]["schema"]["$ref"]
+            assert ref == "#/components/schemas/ApiProblem", (method, template, code)
+
+
+def _json_schema(content: dict[str, Any] | None) -> str | None:
+    """The component a request or response body's JSON refers to, if it has one."""
+    schema: dict[str, Any] = (content or {}).get("application/json", {}).get("schema", {})
+    ref: str | None = schema.get("$ref")
+    return ref.removeprefix("#/components/schemas/") if ref else None
+
+
+def test_live_routes_answer_with_the_typed_bodies_the_contract_fixed() -> None:
+    """The stubs' typed shapes are the built routes' own, and no stub's 501 is left."""
+    schema = _app().openapi()
+    for (method, template), (takes, success, answers) in LIVE_ROUTES.items():
+        operation = schema["paths"][template][method.lower()]
+        where = (method, template)
+        assert _json_schema(operation.get("requestBody", {}).get("content")) == takes, where
+        responses: dict[str, Any] = operation["responses"]
+        assert [code for code in responses if code.startswith("2")] == [success], where
+        assert _json_schema(responses[success].get("content")) == answers, where
+        assert "501" not in responses, where
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_the_health_check_answers_get_and_head(method: str) -> None:
+    transport = httpx.ASGITransport(app=_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        response = await c.request(method, "/api/healthz")
+    assert response.status_code == 200
 
 
 def test_a_request_is_only_ever_active_or_closed() -> None:

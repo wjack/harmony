@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApiClient } from "../api/client";
 import { createQueryClient } from "../api/queryClient";
+import type { MemberView } from "../api/types";
 import { AppProviders } from "../app/AppProviders";
 import { fetchStreamSnapshot } from "../app/snapshot";
 import { fixtureFetch, type FixtureRequest } from "../fixtures";
@@ -30,9 +31,9 @@ interface Gate {
   router: ReturnType<typeof createMemoryRouter>;
 }
 
-/** `/customize/harmony?<query>` as Helen, with each write held until `gate.open()`. */
-function renderSettings(query: string, options: CustomizeFixtureOptions = {}): Gate {
-  const base = customizeRoutes(members.helen, options);
+/** `/customize/harmony?<query>` as Helen (or `actingAs`), with each write held until `gate.open()`. */
+function renderSettings(query: string, options: CustomizeFixtureOptions = {}, actingAs: MemberView = members.helen): Gate {
+  const base = customizeRoutes(actingAs, options);
   let open: () => void = () => undefined;
   const opened = new Promise<void>((resolve) => {
     open = resolve;
@@ -243,4 +244,38 @@ it("leaves without asking when nothing is unsaved", async () => {
   expect(unload.defaultPrevented).toBe(false);
   await act(() => router.navigate("/requests"));
   expect(screen.getByText("Requests")).toBeTruthy();
+});
+
+describe("sending Harmony Network Requests", () => {
+  const SEND = "Sending Harmony Network Requests";
+
+  it("saves the organization's default, warning while it sends without review", async () => {
+    const gate = renderSettings("section=autonomy");
+    gate.open();
+    const modes = await screen.findByRole("radiogroup", { name: SEND });
+    expect(within(modes).getByRole("radio", { name: /Review before sending/ })).toHaveProperty("checked", true);
+    expect(screen.queryByText("Requests go out before anyone reads them.")).toBeNull();
+    screen.getByText("Members can change this for one chat from the composer's + menu.");
+
+    fireEvent.click(within(modes).getByRole("radio", { name: /Send without review/ }));
+    expect(screen.getByRole("alert").textContent).toContain("Requests go out before anyone reads them.");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+    });
+    expect(gate.writes).toEqual([{ route: SETTINGS, body: { policy_version: 7, send_without_confirmation: true } }]);
+    expect(within(modes).getByRole("radio", { name: /Send without review/ })).toHaveProperty("checked", true);
+    expect(screen.getByRole("alert").textContent).toContain("Requests go out before anyone reads them.");
+  });
+
+  it("is read-only for a member who isn't an admin", async () => {
+    renderSettings("section=autonomy", { patch: { send_without_confirmation: true } }, members.raj).open();
+    const modes = await screen.findByRole("radiogroup", { name: SEND });
+
+    const send = within(modes).getByRole("radio", { name: /Send without review/ });
+    expect(send).toHaveProperty("checked", true);
+    for (const radio of within(modes).getAllByRole("radio")) expect(radio).toHaveProperty("disabled", true);
+    expect(screen.getByRole("alert").textContent).toContain("Requests go out before anyone reads them.");
+  });
 });

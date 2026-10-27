@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { ApiClient } from "../api/client";
 import type { RealtimeDispatcher } from "../realtime/dispatcher";
 import { ApiContext, DispatcherContext } from "./context";
+import { useGateLock } from "./lock";
 
 export interface AppServices {
   api: ApiClient;
@@ -12,6 +13,7 @@ export interface AppServices {
 }
 
 export function AppProviders({ api, queryClient, dispatcher, children }: AppServices & { children: ReactNode }) {
+  useGateLock(api, dispatcher);
   return (
     <QueryClientProvider client={queryClient}>
       <ApiContext value={api}>

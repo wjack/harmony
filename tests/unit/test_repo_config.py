@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import ipaddress
 import re
 import shlex
 import shutil
@@ -15,10 +16,11 @@ import pytest
 import yaml
 from honcho.environ import parse_procfile
 from honcho.manager import KILL_WAIT
+from pydantic import SecretStr
 
 from harmony.config import Settings
 from harmony.temporal.worker import scripted_model
-from tests.conftest import settings_without_dotenv
+from tests.conftest import prod_settings, settings_without_dotenv
 
 ROOT = Path(__file__).parents[2]
 
@@ -77,6 +79,26 @@ def _terraform_block(source: str, header: str) -> str:
     return source[start:end]
 
 
+def test_every_render_service_carries_its_own_env() -> None:
+    """Each service gets its env through `env_vars`; an env group would be one more
+    resource whose link Render applies separately from the service's deploy."""
+    source = (ROOT / "infra" / "terraform" / "modules" / "render" / "main.tf").read_text()
+    assert "render_env_group" not in source
+    for header in (
+        'resource "render_web_service" "web"',
+        'resource "render_background_worker" "worker"',
+    ):
+        assert re.search(r"^\s*env_vars\s*=", _terraform_block(source, header), re.M), header
+
+
+def test_the_tfvars_example_holds_names_only() -> None:
+    """terraform.tfvars.example is committed: every assignment in it is empty or
+    commented out, so copying it can't carry a real value along."""
+    example = (ROOT / "infra" / "terraform" / "terraform.tfvars.example").read_text()
+    assignments = re.findall(r"^\s*(\w+)\s*=\s*(.*)$", example, re.M)
+    assert assignments == [("anthropic_api_key", '""')]
+
+
 def test_every_render_service_migrates_before_its_new_code_starts() -> None:
     """Render deploys web and the worker independently; a worker that started without
     migrating could run new activity code against the old schema."""
@@ -121,6 +143,18 @@ def _ignored(path: str) -> bool:
     return result.returncode == 0
 
 
+def test_the_env_example_names_real_settings_with_valid_values() -> None:
+    """.env.local is copied from the example, and Settings ignores a key it doesn't
+    know, so a misspelt name there would silently do nothing."""
+    example = ROOT / ".env.local.example"
+    app_settings = example.read_text().split("# --- App settings", 1)[1]
+    names = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", app_settings, re.M))
+    known = {name.upper() for name in Settings.model_fields} | {"BUILD_SHA"}
+    assert names
+    assert names <= known, names - known
+    Settings(_env_file=example)  # pyright: ignore[reportCallIssue]
+
+
 @pytest.mark.parametrize("path", SECRET_BEARING)
 def test_files_that_carry_production_secrets_are_ignored(path: str) -> None:
     assert _ignored(path), f"{path} could be committed"
@@ -148,9 +182,10 @@ def _in_docker_context(path: str) -> bool:
     return included
 
 
-def test_the_image_ships_the_cassettes_scripted_mode_plays() -> None:
-    """The hosted worker defaults to MODEL_MODE=scripted and reads CASSETTE_DIR, which
-    defaults to the repo's tests/fixtures/cassettes, so the image must carry them."""
+def test_the_image_ships_the_cassettes_compose_smoke_plays() -> None:
+    """CI's compose-smoke runs the image with MODEL_MODE=scripted, which reads
+    CASSETTE_DIR, by default the repo's tests/fixtures/cassettes, so the image must carry
+    them. (Production never plays them: prod refuses scripted mode.)"""
     cassettes = Settings.model_fields["cassette_dir"].default
     assert cassettes == ROOT / "tests" / "fixtures" / "cassettes"
     files = sorted(path.relative_to(ROOT).as_posix() for path in cassettes.glob("*.yaml"))
@@ -166,12 +201,47 @@ def test_the_image_ships_the_cassettes_scripted_mode_plays() -> None:
     assert any("./tests/fixtures/cassettes/" in line and "--parents" in line for line in copies)
 
 
-@pytest.mark.parametrize("app_env", ["ci", "prod"])
-def test_a_deployed_scripted_worker_without_cassettes_refuses_to_start(
-    tmp_path: Path, app_env: str
-) -> None:
+def _cmd(dockerfile: str) -> list[str]:
+    line = next(line for line in dockerfile.splitlines() if line.startswith("CMD "))
+    return shlex.split(line.removeprefix("CMD "))
+
+
+def test_the_image_trusts_forwarded_headers_from_private_addresses_only() -> None:
+    """With `--forwarded-allow-ips='*'` any client could set request.client, and with
+    it the access log's address, by sending its own X-Forwarded-For."""
+    argv = _cmd((ROOT / "Dockerfile").read_text())
+    assert "--proxy-headers" in argv
+    allowed = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--forwarded-allow-ips="))
+    networks = [ipaddress.ip_network(entry) for entry in allowed.split(",")]
+    assert networks
+    assert all(network.is_private for network in networks), allowed
+
+
+def _compose_smoke_value(name: str) -> str:
+    script = (ROOT / "scripts" / "compose_smoke.sh").read_text()
+    match = re.search(rf"^export {name}=(\S+)$", script, re.M)
+    assert match, f"compose_smoke.sh doesn't export {name}"
+    return match[1]
+
+
+def test_compose_smoke_unlocks_with_the_ci_stacks_passcode() -> None:
+    """compose.ci.yaml sets the master passcode; compose_smoke.sh hands the same value
+    to Playwright (E2E_PASSCODE) and to the shell and Python checks (HARMONY_PASSCODE)."""
+    # A regex, not yaml: compose.ci.yaml uses Compose's own tags (!override, !reset).
+    stack = (ROOT / "compose.ci.yaml").read_text()
+    passcodes = re.findall(r"^\s+ACCESS_CODE:\s*(\S+)$", stack, re.M)
+    assert len(passcodes) == 1, passcodes
+    passcode = passcodes[0]
+    assert _compose_smoke_value("E2E_PASSCODE") == passcode
+    assert _compose_smoke_value("HARMONY_PASSCODE") == '"$E2E_PASSCODE"'
+    # A passcode production would accept, so CI's gate runs as the hosted one does.
+    prod_settings(access_code=SecretStr(passcode))
+
+
+def test_a_deployed_scripted_worker_without_cassettes_refuses_to_start(tmp_path: Path) -> None:
+    # Prod refuses MODEL_MODE=scripted outright (test_config), so CI is the deployed case.
     settings = settings_without_dotenv(
-        app_env=app_env, session_secret="x" * 40, cassette_dir=tmp_path / "missing"
+        app_env="ci", session_secret="x" * 40, cassette_dir=tmp_path / "missing"
     )
     with pytest.raises(RuntimeError, match="no cassettes"):
         scripted_model(settings)

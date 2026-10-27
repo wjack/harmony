@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { ApiError } from "../api/client";
 import { useSession } from "../app/queries";
+import { useSeenInChat } from "../requests/seen";
 import { IconButton } from "../shell/ui/Button";
 import { useUnavailable } from "../shell/unavailable";
 import { cx } from "../shell/ui/cx";
@@ -14,18 +15,19 @@ import {
   usePostMessage,
   useRejectCard,
   useResolveQuestion,
+  useSetSendMode,
 } from "./api";
 import { OutreachApproval } from "./cards/OutreachApproval";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
+import { budgetLine, failureLine, useBudgetState } from "./failureCopy";
 import { optimisticBlock, pendingCard, settledMessages, toBlocks } from "./items";
 import { useChatStream, useConversationLive } from "./live";
 import { removeOptimistic, useOptimistic } from "./optimistic";
-import { outreachRecipients } from "./recipients";
-import { plural } from "./format";
+import { initialDraft, outreachTitle, type OutreachDraft } from "./outreachDraft";
 import { describeFailure, problemOf } from "./problem";
 import { Transcript } from "./Transcript";
-import type { ApproveCard, ConversationDetail, OutreachCardItem } from "./types";
+import type { ApproveCard, ConversationDetail } from "./types";
 import { useStickToBottom } from "./useStickToBottom";
 
 /** The "Want to be notified…" strip, attached to the top of the composer. */
@@ -40,13 +42,10 @@ function ComposerBanner({ children, onClose }: { children: ReactNode; onClose: (
   );
 }
 
-function cardTitle(card: OutreachCardItem): string {
-  return `Send this request to ${plural(outreachRecipients(card).proposed.size, "organization")}?`;
-}
-
 function ChatView({ detail, conversationId }: { detail: ConversationDetail; conversationId: string }) {
   const session = useSession();
   const memberId = session.data?.member.id ?? null;
+  useSeenInChat(conversationId, session.data?.member.id);
   const unavailable = useUnavailable();
   const optimistic = useOptimistic(conversationId);
 
@@ -54,6 +53,8 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   const approve = useApproveCard(conversationId);
   const reject = useRejectCard(conversationId);
   const resolve = useResolveQuestion(conversationId);
+  const setSendMode = useSetSendMode(conversationId);
+  const budget = useBudgetState();
 
   const [draft, setDraft] = useState("");
   const [dismissedCard, setDismissedCard] = useState<string | null>(null);
@@ -61,6 +62,8 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
   /** The card's "Something else" text by card id, so putting the card away keeps it. */
   const [cardFeedback, setCardFeedback] = useState<Record<string, string>>({});
+  /** The card's ticks and rewording by card id, kept the same way. */
+  const [cardDrafts, setCardDrafts] = useState<Record<string, OutreachDraft>>({});
 
   useConversationLive(conversationId, detail.items);
 
@@ -89,6 +92,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
     }
   }
   const cardOpen = card !== null && dismissedCard !== card.card_id;
+  const cardDraft = card === null ? null : (cardDrafts[card.card_id] ?? initialDraft(card));
   const working = isWorking(detail) || unsent.length > 0;
   const streaming = useChatStream(conversationId, detail.items, working);
   const showSpark = working && card === null;
@@ -96,7 +100,8 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   const requestIds = detail.items.flatMap((item) => (item.type === "request_status" ? [item.request_id] : []));
   // Once every request has closed, nothing more will arrive.
   const awaitingNetwork = useAnyRequestActive(requestIds);
-  const showBanner = awaitingNetwork && !bannerClosed && !cardOpen;
+  // The composer's own budget strip says more than this one while a cap is spent.
+  const showBanner = awaitingNetwork && !bannerClosed && !cardOpen && budgetLine(budget) === null;
 
   const { scrollRef, contentRef, atBottom, onScroll, toBottom } = useStickToBottom([
     blocks.length,
@@ -146,10 +151,11 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
             memberId={memberId}
             working={working}
             showSpark={showSpark}
-            failed={detail.turn_failed && !working}
+            failure={detail.turn_failure !== null && !working ? failureLine(detail.turn_failure, budget) : null}
             streaming={streaming}
             answering={resolve.isPending ? resolve.variables.escalationId : null}
             answerErrors={answerErrors}
+            blocked={budgetLine(budget)}
             onAnswer={(escalationId, text) => {
               setAnswerErrors((current) => without(current, escalationId));
               resolve.mutate(
@@ -179,12 +185,19 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
             <ArrowDown size={16} strokeWidth={1.8} />
           </button>
         )}
-        {cardOpen ? (
+        {cardOpen && cardDraft !== null ? (
           <OutreachApproval
             key={card.card_id}
             item={card}
             busy={cardBusy}
             error={cardError}
+            draft={cardDraft}
+            onDraftChange={(update) => {
+              setCardDrafts((current) => ({
+                ...current,
+                [card.card_id]: update(current[card.card_id] ?? initialDraft(card)),
+              }));
+            }}
             {...feedbackProps(card.card_id)}
             onApprove={(body) => {
               approveCard(card.card_id, body);
@@ -207,7 +220,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
                 Responses from the network will appear here as they arrive.
               </ComposerBanner>
             )}
-            {card !== null && (
+            {card !== null && cardDraft !== null && (
               <button
                 type="button"
                 onClick={() => {
@@ -216,7 +229,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
                 }}
                 className="mx-2.5 -mb-3 flex w-[calc(100%-20px)] items-center gap-2 rounded-t-[14px] bg-bubble pt-2 pr-3 pb-5 pl-4 text-left text-[14px] text-secondary transition-colors hover:text-ink"
               >
-                <span className="min-w-0 flex-1 truncate">{cardTitle(card)}</span>
+                <span className="min-w-0 flex-1 truncate">{outreachTitle(cardDraft)}</span>
                 <span className="shrink-0 rounded-control bg-primary px-2.5 py-1 text-[13px] font-medium text-on-primary">
                   Review
                 </span>
@@ -231,10 +244,19 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
               autoFocus
               placeholder={card === null ? "Reply…" : "Tell Claude what to change instead…"}
               onUnavailable={unavailable}
+              sendMode={detail.send_mode}
+              onSendModeChange={(override) => {
+                setSendMode.mutate(override);
+              }}
             />
             {post.isError && (
               <p role="alert" className="mt-2 text-center text-[12.5px] text-danger">
                 {describeFailure(post.error)}
+              </p>
+            )}
+            {setSendMode.isError && (
+              <p role="alert" className="mt-2 text-center text-[12.5px] text-danger">
+                Couldn&apos;t change how this chat sends requests: {describeFailure(setSendMode.error)}
               </p>
             )}
             <p className="mt-2 text-center text-[12px] text-muted">

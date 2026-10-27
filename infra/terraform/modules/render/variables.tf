@@ -40,7 +40,13 @@ variable "postgres_disk_size_gb" {
 }
 
 variable "app_env" {
-  description = "Environment shared by web and worker (harmony.config keys). Null values are omitted."
+  description = "Env both services get (harmony.config keys); the module adds DATABASE_URL."
+  type        = map(string)
+  sensitive   = true
+}
+
+variable "worker_env" {
+  description = "Env only the worker gets: the model key and its capacity settings."
   type        = map(string)
   sensitive   = true
 }

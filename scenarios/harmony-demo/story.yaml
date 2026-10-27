@@ -1,7 +1,9 @@
 # The suggested story (docs/SCENARIO.md, REVISION_UNSTRUCTURED.md §10). Format:
 # StorySpec in src/harmony/seeds/schema.py.
 #
-# A suggestion, not a script: nothing here forces what Claude does. It holds
+# A suggestion, not a script: nothing here forces what Claude does, and in the hosted
+# demo live models play every side, so the step bodies say what is likely ("for
+# example", "likely") and never state an outcome as fact. It holds
 # - the suggestion chip and the network view's suggested recipients;
 # - the walkthrough's steps (GET /api/demo/story), each with the beat that shows it
 #   happened (`expect`), which `harmony run` checks and P1's live runs count;
@@ -28,41 +30,44 @@ steps:
     act_as: alex
     body: >-
       As Alex Chen, a PhD student in the Henderson Lab, send the suggested message.
-      Claude screens every organization on the network and drafts a brief for the ones
-      that fit.
+      Claude will likely search the network, screen the organizations it finds and draft
+      a brief for the ones that look like a fit.
   - id: approve-outreach
     title: Approve the outreach
     act_as: alex
     body: >-
-      Read the brief: it shares the sample class and count, not the compositions, and
-      keeps the budget to Henderson Lab. Edit it if you like. Calder is listed as a weak
-      fit and starts unticked, so the first option sends to Northlake and Ridgeline.
+      Read the brief and each organization's ask: the shared brief gives the sample
+      class and count, and each ask holds that organization's part and its limit. Edit
+      either if you like. A near miss, for example Calder (computation only), is likely
+      listed as a weak fit and left unticked.
     expect: {beat: outreach_approved}
   - id: seal-question
     title: Answer Ridgeline's question
     act_as: alex
     done_on: needs_human
     body: >-
-      Ridgeline needs the holder's seal material before it can quote, and nobody wrote
-      it down. Henderson Lab's Claude searched the lab's records and couldn't find it,
-      so the question comes to you in the chat.
+      Ridgeline will likely need the holder's seal material before it can quote, and
+      nobody wrote it down. When Henderson Lab's Claude can't find it in the lab's
+      records, the question comes to you in the chat.
     expect: {beat: inline_question, org: ridgeline, member: alex}
   - id: seal-answer
     title: Release your answer
     act_as: alex
     body: >-
-      Answer "Kalrez, please. The powders may sit under argon for a few weeks." Your
-      answer goes back to this conversation only, and Ridgeline quotes $325.
+      Answer, for example, "Kalrez, please. The powders may sit under argon for a few
+      weeks." Your answer goes back to this conversation only, and Ridgeline can then
+      quote: about $325 at its list prices.
     expect: {beat: resolved, org: henderson, member: alex, action: approve}
   - id: northlake-routed
     title: Switch to Dr. Helen Ward
     act_as: helen
     done_on: needs_human
     body: >-
-      Northlake's public XRD calendar is full until Nov 10. Northlake's Claude read the
-      calendar and Raj's note about a reserve block on Wed Nov 4, and drafted a yes. The
-      sharing check stopped it: reserve slots aren't in what Northlake shares, so it
-      came to you with that reason.
+      Northlake's public XRD calendar is full until Nov 10, but Raj's note keeps a
+      reserve block on Wed Nov 4. If Northlake's Claude drafts a yes that uses it, the
+      sharing check will likely stop the draft, because reserve slots aren't in what
+      Northlake shares, and it comes to you with that reason. Vantage, another lab, may
+      also be asking Northlake; its thread can appear here too.
     expect: {beat: routed, org: northlake, member: helen}
   - id: northlake-approved
     title: Approve Northlake's answer
@@ -70,34 +75,35 @@ steps:
     body: >-
       See what Claude looked at, edit the draft if you like, and approve it. It goes to
       this conversation only; to share reserve slots from now on, you would edit what
-      Northlake shares with Henderson Lab. Northlake proposes $1,410 with results by
-      Nov 5.
+      Northlake shares with Henderson Lab. Northlake will likely propose about $1,410,
+      with results by Nov 5.
     expect: {beat: resolved, org: northlake, member: helen, action: approve}
   - id: go-ahead
     title: Say yes to both
     act_as: alex
     done_on: needs_human
     body: >-
-      Back as Alex: before agreeing to anything, Henderson Lab's representative checks
-      with you, once for Northlake's $1,410 and once for Ridgeline's $325. Say yes to
-      both.
+      Back as Alex: before agreeing to a price, Henderson Lab's representative will
+      likely check with you, for example once for Northlake's quote and once for
+      Ridgeline's. Say yes if they look right.
     expect: {beat: inline_question, org: northlake, member: alex}
   - id: closed
     title: Both conversations close
     act_as: alex
     body: >-
-      Northlake and Ridgeline confirm, and each side closes with a summary for its own
-      organization. Claude sums up: $1,735 in total, inside your budget. The network
-      view shows both conversations Closed, and Calder Screened.
+      Once Northlake and Ridgeline confirm, each side closes with a summary for its own
+      organization, and Claude sums up in the chat: about $1,735 in total if the quotes
+      match the list prices, inside your budget. The network view shows the closed
+      conversations, and Calder as Screened if it was left out.
     expect: {beat: closed, orgs: [northlake, ridgeline]}
   - id: what-it-saw
     title: See what Northlake's representative saw
     act_as: helen
     body: >-
-      In Requests, open the conversation's "What our representative saw": Northlake's
-      summary, instructions and sharing description, and the answer you approved. Raj's
-      note never reached it. Customize → Harmony → Sharing is where you'd change what
-      Northlake shares.
+      Open the request from the sidebar, then Details → What our representative saw:
+      Northlake's summary, instructions and sharing description, and the answer you
+      approved. Raj's note never reached it. Customize → Harmony → Sharing is where
+      you'd change what Northlake shares.
   - id: big-run
     title: Switch to the big run
     body: Open the network view and switch it to the big run.

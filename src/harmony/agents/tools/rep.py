@@ -14,7 +14,11 @@
   with an empty body marks the point in the thread, and the counterparty's
   representative gets a `closed` notice. On a thread the counterparty closed, `close`
   only stores this side's summary (its one last turn). A `close` is never held, even
-  in *Ask*: nothing it writes reaches the counterparty but the marker.
+  in *Ask*: nothing it writes reaches the counterparty but the marker. It is refused
+  while the counterparty has sent no message: a closed thread can't be reopened, and
+  the way to wait for a reply is to end the turn (LIVE_DEMO_PLAN 3.13 E1). Before this
+  side has sent one either (its opener declined, say), there is no reply to wait for:
+  the refusal says that ending the turn without sending ends the conversation.
 
 Every call first checks, under the thread's row lock, that this side may act now: the
 thread is live, nothing of this side's waits on a person, and it is this side's turn
@@ -25,9 +29,11 @@ applied then: a retried turn never decides again, so a mode changed in between c
 send a held message or hold a sent one. Calls run one at a time
 (`disable_parallel_tool_use`).
 
-A response with text and no tool call is a `send_message` only when the turn has sent
-nothing yet: the model answered in prose instead of calling the tool. Text after the
-turn's messages is the model's own and stays in its transcript.
+A response with text and no tool call is a `send_message` only when it answers the
+turn's opening (the runtime passes no other to `text_reply`), the turn has sent nothing
+yet and it had something to answer (`RepToolScope.bare_text_sends`): the model answered
+in prose instead of calling the tool. Other text, after a refused `close` say, is the
+model's own and stays in its transcript.
 
 Owner: R-agents (the tool names, schemas and input models are the contract's).
 """
@@ -65,15 +71,17 @@ CLOSE: Final = "close"
 SEND_MESSAGE_TOOL: Final[ToolDefinition] = {
     "name": SEND_MESSAGE,
     "description": (
-        "Send a message to the counterparty's representative. You may send more than "
-        "one in a turn; your turn ends when you stop calling tools."
+        "Send a message to the counterparty's representative. They read the text exactly "
+        "as written. Never send notes about the conversation (status, 'awaiting your "
+        "reply', who sent it). You may send more than one in a turn; your turn ends when "
+        "you stop calling tools, and then they reply."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The message as the counterparty will read it.",
+                "description": "The message, exactly as the counterparty will read it.",
             }
         },
         "required": ["text"],
@@ -107,8 +115,10 @@ CONSULT_TOOL: Final[ToolDefinition] = {
 CLOSE_TOOL: Final[ToolDefinition] = {
     "name": CLOSE,
     "description": (
-        "End the conversation for both sides. The summary is for your own organization "
-        "only and is never sent to the counterparty."
+        "End the conversation for good, for both sides, once it's settled or clearly "
+        "going nowhere. Not for waiting: to wait for their reply, stop calling tools. "
+        "The summary is for your own organization only and is never sent to the "
+        "counterparty."
     ),
     "input_schema": {
         "type": "object",
@@ -157,8 +167,24 @@ REP_INPUTS: Final[dict[str, type[_Input]]] = {
 
 # A bare text reply is `send_message` under this pseudo tool_use_id (its side-effect id).
 TEXT_REPLY_ID: Final = "text"
-SENT: Final = "Sent."
+# The `send_message` result: how to wait, since a bare "Sent." reads as a cue to say more.
+SENT: Final = (
+    "Sent. {counterparty} reads it exactly as written and replies after your turn ends. "
+    "To wait for their reply, end your turn now: stop calling tools."
+)
 CLOSED: Final = "Closed. Nothing more reaches the counterparty."
+# A `close` before the counterparty has written anything.
+NOT_REPLIED: Final = (
+    "{counterparty} hasn't replied yet. To wait for their reply, end your turn: stop "
+    "calling tools. `close` ends the conversation for good."
+)
+# A `close` before either side has written anything: the thread expires once this
+# turn ends with nothing sent (`ThreadWorkflow`).
+NOTHING_SENT: Final = (
+    "Nothing from you has reached {counterparty}, so there is no conversation to close. "
+    "If you end your turn without sending, it ends there. To reach them, use "
+    "`send_message`."
+)
 # The held draft's reason (the inbox derives its own "Why this needs you").
 _ASK_HOLD: Final = "A teammate approves every message in Ask mode."
 _HELD_KIND: Final[EscalationKind] = "outbound_review"
@@ -173,6 +199,8 @@ class RepToolScope(_Input):
     org_id: UUID
     counterparty_org_id: UUID
     turn_id: UUID
+    # See `TurnContext.bare_text_sends`.
+    bare_text_sends: bool = True
 
 
 class _Refused(Exception):
@@ -218,9 +246,11 @@ class RepToolExecutor:
         return execution
 
     async def text_reply(self, text: str, *, step_idx: int) -> ToolExecution | None:
-        """A bare text reply is a `send_message` when the turn has sent nothing else
-        (module docstring)."""
+        """A bare text reply is a `send_message` when the turn has sent nothing else and
+        had something to answer (module docstring)."""
         scope = self._scope
+        if not scope.bare_text_sends:
+            return None
         effect_id = side_effect_id(scope.turn_id, step_idx, TEXT_REPLY_ID)
         async with self._sessionmaker() as session:
             sent = await session.scalars(
@@ -242,7 +272,9 @@ class RepToolExecutor:
         world_id = self._scope.world_id
         message = await repo.get(session, ThreadMessage, world_id, effect_id)
         if message is not None:
-            return _sent(message)
+            if message.kind == "close":
+                return _closed(message)
+            return _sent(message, await self._counterparty(session))
         held = await repo.get(session, Escalation, world_id, _held_id(effect_id))
         if held is not None:
             return _held(held)
@@ -274,6 +306,20 @@ class RepToolExecutor:
             session, scope.world_id, thread_id=thread.id, turn_id=scope.turn_id
         ):
             raise _Refused("It isn't your turn. Wait for the counterparty's reply.")
+        if isinstance(args, CloseInput) and not await _has_written(
+            session, scope.world_id, thread_id=thread.id, org_id=scope.counterparty_org_id
+        ):
+            wrote = await _has_written(
+                session, scope.world_id, thread_id=thread.id, org_id=scope.org_id
+            )
+            refusal = NOT_REPLIED if wrote else NOTHING_SENT
+            raise _Refused(refusal.format(counterparty=await self._counterparty(session)))
+
+    async def _counterparty(self, session: AsyncSession) -> str:
+        """The counterparty's name, as the representative's prompt gives it."""
+        scope = self._scope
+        org = await repo.get_required(session, Org, scope.world_id, scope.counterparty_org_id)
+        return " ".join(org.name.split())
 
     async def _mode(self, session: AsyncSession) -> Autonomy:
         """The side's mode toward the counterparty, read live at the decision (§3)."""
@@ -314,7 +360,7 @@ class RepToolExecutor:
             provenance="agent",
             turn_id=scope.turn_id,
         )
-        return _sent(message)
+        return _sent(message, await self._counterparty(uow.session))
 
     async def _close(
         self, uow: UnitOfWork, thread: Thread, summary: str, message_id: UUID
@@ -345,7 +391,7 @@ class RepToolExecutor:
             kind="closed",
             text=context.closed_notice(org.name),
         )
-        return _sent(message)
+        return _closed(message)
 
     async def _consult(
         self, uow: UnitOfWork, question: str, consult_id: UUID, tool_use_id: str
@@ -401,11 +447,19 @@ def _held_id(message_id: UUID) -> UUID:
     return uuid5(message_id, _HELD_KIND)
 
 
-def _sent(message: ThreadMessage) -> ToolExecution:
-    effect = MessageSent(message_id=message.id, message_kind=message.kind)
-    if message.kind == "close":
-        return ToolExecution(ends_turn=True, owed_result=CLOSED, effect=effect)
-    return ToolExecution(result=SENT, effect=effect)
+def _sent(message: ThreadMessage, counterparty: str) -> ToolExecution:
+    return ToolExecution(
+        result=SENT.format(counterparty=counterparty),
+        effect=MessageSent(message_id=message.id, message_kind=message.kind),
+    )
+
+
+def _closed(message: ThreadMessage) -> ToolExecution:
+    return ToolExecution(
+        ends_turn=True,
+        owed_result=CLOSED,
+        effect=MessageSent(message_id=message.id, message_kind=message.kind),
+    )
 
 
 def _held(escalation: Escalation) -> ToolExecution:
@@ -430,6 +484,23 @@ async def _sent_this_turn(
             ThreadMessage.world_id == world_id,
             ThreadMessage.thread_id == thread_id,
             ThreadMessage.turn_id == turn_id,
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
+async def _has_written(
+    session: AsyncSession, world_id: UUID, *, thread_id: UUID, org_id: UUID
+) -> bool:
+    """Whether `org_id` has sent a message on the thread (a close marker isn't one)."""
+    found = await session.scalar(
+        select(ThreadMessage.id)
+        .where(
+            ThreadMessage.world_id == world_id,
+            ThreadMessage.thread_id == thread_id,
+            ThreadMessage.from_org_id == org_id,
+            ThreadMessage.kind == "message",
         )
         .limit(1)
     )
@@ -463,6 +534,8 @@ __all__ = [
     "CLOSE",
     "CLOSED",
     "CONSULT",
+    "NOTHING_SENT",
+    "NOT_REPLIED",
     "REP_INPUTS",
     "REP_TOOLS",
     "SEND_MESSAGE",

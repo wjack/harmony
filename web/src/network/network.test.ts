@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 // The server's entity types (events/schemas.py `EntityType`), read as text.
 import serverSchemas from "../../../src/harmony/events/schemas.py?raw";
+import { ApiError } from "../api/client";
 import type { EventEnvelope, MemberView } from "../api/types";
+import { stoppedLine } from "../chat/failureCopy";
 import {
   REQUEST_CONVERSATION_ID,
   THREAD_NORTHLAKE,
@@ -15,8 +17,11 @@ import {
   networkNeedsHuman,
   networkOrgs,
   networkQuestion,
+  networkStopped,
+  THREAD_RIDGELINE,
 } from "../fixtures/network";
 import { memberDirectory, members, orgs, WORLD_ID } from "../fixtures/shell";
+import { isMissingWorld } from "./api";
 import { formatWait } from "./format";
 import { boundsOf, READABLE_ZOOM, readableFrame } from "./geometry";
 import {
@@ -30,8 +35,16 @@ import {
   ringedOrgIds,
   type NetworkLayout,
 } from "./layout";
-import { GRAPH_ENTITY_TYPES, lensSignal, lensStreamUrl } from "./lens";
-import { countParticipants, countsLine, edgeLabel, edgeStyle, noRequestText, threadStatus } from "./status";
+import { GRAPH_ENTITY_TYPES, lensSignal, lensStreamUrl, TYPING_TTL_MS } from "./lens";
+import {
+  closingLine,
+  countParticipants,
+  countsLine,
+  edgeLabel,
+  edgeStyle,
+  noRequestText,
+  threadStatus,
+} from "./status";
 import type { NetworkNode, NetworkView } from "./types";
 import { readableRecipients, resolveWait, waitAction, waitMeta, type WaitContext } from "./waiting";
 
@@ -171,24 +184,39 @@ describe("status", () => {
     const [northlake, ridgeline] = networkNeedsHuman.edges;
     if (northlake === undefined || ridgeline === undefined) throw new Error("no edges");
     const parties = [orgs.henderson.name, orgs.northlake.name];
-    expect(edgeLabel(northlake, parties)).toBe(northlake.latest_line);
-    expect(edgeLabel(ridgeline, parties)).toBe(ridgeline.latest_line);
-    expect(edgeLabel(northlake, parties)).not.toBeNull();
+    expect(edgeLabel(northlake, parties, "ok")).toBe(northlake.latest_line);
+    expect(edgeLabel(ridgeline, parties, "ok")).toBe(ridgeline.latest_line);
+    expect(edgeLabel(northlake, parties, "ok")).not.toBeNull();
     // A thread the viewer can't open: the color says it.
-    expect(edgeLabel({ ...northlake, latest_line: null }, parties)).toBeNull();
+    expect(edgeLabel({ ...northlake, latest_line: null }, parties, "ok")).toBeNull();
     // The line names its sender in full; the edge has room for the short name.
     const attributed = { ...northlake, latest_line: `${orgs.northlake.name}: Yes: Nov 4.` };
-    expect(edgeLabel(attributed, parties)).toBe("Northlake: Yes: Nov 4.");
-    expect(edgeLabel(attributed, [orgs.henderson.name])).toBe(attributed.latest_line);
+    expect(edgeLabel(attributed, parties, "ok")).toBe("Northlake: Yes: Nov 4.");
+    expect(edgeLabel(attributed, [orgs.henderson.name], "ok")).toBe(attributed.latest_line);
 
     const closed = networkClosed.edges.find((edge) => edge.thread_id === THREAD_NORTHLAKE);
     if (closed === undefined) throw new Error("no closed edge");
-    expect(edgeLabel(closed, parties)).toBe(closed.close_summary);
-    expect(edgeLabel({ ...closed, close_summary: null }, parties)).toBe("Closed");
-    expect(edgeLabel({ ...closed, state: "expired", close_summary: null }, parties)).toBe("Expired");
+    expect(edgeLabel(closed, parties, "ok")).toBe(closed.close_summary);
+    expect(edgeLabel({ ...closed, close_summary: null }, parties, "ok")).toBe("Closed");
+    expect(edgeLabel({ ...closed, state: "expired", close_summary: null }, parties, "ok")).toBe("Expired");
     expect(edgeStyle("closed").ended).toBe(true);
     expect(edgeStyle("awaiting_principal").tone).toBe("warning");
   });
+
+  it("says a thread the system stopped is Closed, and why, by the budget's state now", () => {
+    const stopped = networkStopped.edges.find((edge) => edge.thread_id === THREAD_RIDGELINE);
+    if (stopped === undefined) throw new Error("no stopped edge");
+    const parties = [orgs.henderson.name, orgs.ridgeline.name];
+    expect(stopped.stop_reason).toBe("daily_budget");
+    expect(edgeLabel(stopped, parties, "daily_exhausted")).toBe("Closed: The daily live-model budget ran out.");
+    expect(edgeLabel(stopped, parties, "ok")).toBe("Closed: The daily live-model budget was busy or nearly used up.");
+    expect(closingLine(stopped, "daily_exhausted")).toBe(stoppedLine("daily_budget", "daily_exhausted"));
+    // After the other side refused, our side's last turn wrote a summary: it shows.
+    const summarized = { ...stopped, stop_reason: "refused" as const, close_summary: "They declined; no quote." };
+    expect(edgeLabel(summarized, parties, "ok")).toBe("They declined; no quote.");
+    expect(closingLine(summarized, "ok")).toBe("They declined; no quote.");
+  });
+
 
   it("states a thread in the words its recipient's pill uses", () => {
     expect(threadStatus("awaiting_principal", "needs_human").label).toBe("Needs human");
@@ -512,5 +540,27 @@ describe("edge labels", () => {
     const gap = firstColumn - (anchor.x + NODE_WIDTH);
     // Centred in the gap, with room each side.
     expect(gap - EDGE_LABEL_MAX_WIDTH).toBeGreaterThanOrEqual(16);
+  });
+});
+
+describe("isMissingWorld", () => {
+  it("reads the API's own 401 as a world the session hasn't started", () => {
+    expect(isMissingWorld(new ApiError(401, "401 no network world", null, "no network world"))).toBe(true);
+  });
+
+  it("never reads the passcode gate's 401 as a missing world", () => {
+    const gate = { detail: "Enter the passcode.", code: "passcode_required" };
+    expect(isMissingWorld(new ApiError(401, "401 Enter the passcode.", gate, gate.detail))).toBe(false);
+  });
+
+  it("is false for anything else", () => {
+    expect(isMissingWorld(new ApiError(404, "404 not found"))).toBe(false);
+    expect(isMissingWorld(new Error("offline"))).toBe(false);
+  });
+});
+
+describe("typing", () => {
+  it("keeps an edge moving past one late heartbeat (they come every 5 s)", () => {
+    expect(TYPING_TTL_MS).toBe(8_000);
   });
 });

@@ -1,7 +1,7 @@
 """`ConversationWorkflow`: one internal Claude chat (§5, §12). ID `w:{world}:conv:{id}`.
 
 The API never calls the model: it signal-with-starts this workflow (`member_message`,
-`USE_EXISTING`) and the workflow runs internal turns on `harmony-model`, one at a time:
+`USE_EXISTING`) and the workflow runs internal turns on `harmony-chat`, one at a time:
 
 1. wait until there's a queued member message or a `closed` network update (every
    thread of a request has ended), with no turn in flight and no card pending. A
@@ -17,7 +17,10 @@ The API never calls the model: it signal-with-starts this workflow (`member_mess
    request R sent to ..." or "rejected: <feedback>"). A message sent before the card
    was raised waits for the next turn, as the API told the member. A `closed` update
    whose turn failed or was refused never reached the transcript, so it goes again
-   with the next turn (it doesn't wake one itself);
+   with the next turn (it doesn't wake one itself). A card raised in a chat that sends
+   without review (`card_auto`) is approved by the workflow itself, with no Update and
+   nobody to wait for; if the approval can't be stored, it is rejected with the reason
+   and the turn resumes with "Couldn't send: ..." (3.10);
 4. at an idle point, continue as new with `ConversationCarry` once the run has taken
    `turns_per_run` turns or Temporal suggests it (a message signalled meanwhile is
    carried, or handled first: queued work always runs before the continue); after
@@ -30,8 +33,8 @@ the resolution (`NetworkActivities.apply_card_resolution`), and the run loop the
 handler can't tell whether the resolution was stored (another got there first, or the
 apply failed after its commit), the loop reads the card back (`settled_card`): a card
 that isn't pending any more is resumed with what it settled to, so the chat never stays
-paused on it. A failed turn leaves `turn_failed` set (the chat says Claude couldn't
-reply) until the next turn.
+paused on it. A failed or refused turn leaves `turn_failure` set (the chat says why
+Claude couldn't reply: a spend cap, a model error, a refusal) until the next turn.
 
 `resolve_card` may arrive while the turn that raised the card is still finishing (the
 card row commits before the activity returns): the validator accepts it while a turn is
@@ -51,6 +54,7 @@ from temporalio.workflow import ActivityConfig
 
 with workflow.unsafe.imports_passed_through():
     from harmony.agents.models import CardResolution
+    from harmony.db.models.choices import FailureReason
     from harmony.temporal.activities.agents import (
         AgentActivities,
         CardOutcome,
@@ -63,10 +67,12 @@ with workflow.unsafe.imports_passed_through():
         SettledCardInput,
         StartRequestInput,
     )
+    from harmony.temporal.failures import failure_reason
     from harmony.temporal.policies import (
+        WORLD_RETIRED,
+        chat_activity_options,
         main_activity_options,
         mirror_activity_options,
-        model_activity_options,
     )
     from harmony.temporal.workflows.payloads import (
         CARD_NOT_PENDING_ERROR,
@@ -92,6 +98,8 @@ class _Paused:
     next_step: int
     card_id: UUID
     tool_use_id: str
+    # Sent without review: the workflow settles it, never a member.
+    auto: bool = False
 
 
 @workflow.defn
@@ -103,11 +111,12 @@ class ConversationWorkflow:
         self._network_updates: list[NetworkUpdate] = list(conversation.carried.network_updates)
         self._turns = conversation.carried.turns
         self._closed_requests: set[UUID] = set(conversation.carried.closed_request_ids)
-        # Updates a turn took and never stored: it failed, or was refused, and its note
-        # went with the call that wasn't stored. They go with the next turn without
-        # waking one, so a failure that keeps happening can't loop.
+        # Updates a failed or refused turn took, whose note may not have been stored
+        # (a turn that failed after its first call stored them). They go with the next
+        # turn without waking one, so a failure that keeps happening can't loop, and
+        # that turn's activity drops any note the chat already holds.
         self._undelivered: list[NetworkUpdate] = list(conversation.carried.undelivered_updates)
-        self._turn_failed = conversation.carried.turn_failed
+        self._turn_failure: FailureReason | None = conversation.carried.turn_failure
         self._turn_in_flight = False
         self._pending_card_id: UUID | None = None
         self._paused: _Paused | None = None
@@ -197,7 +206,7 @@ class ConversationWorkflow:
             turn_in_flight=self._turn_in_flight,
             pending_card_id=self._pending_card_id,
             turns=self._turns,
-            turn_failed=self._turn_failed,
+            turn_failure=self._turn_failure,
         )
 
     # --- The loop ---------------------------------------------------------------------
@@ -243,6 +252,10 @@ class ConversationWorkflow:
         self._applied = None
         self._paused = None
         self._pending_card_id = None
+        # The turn resumes once the request has started: the chat reads busy until then
+        # too, or the refetch the settled card prompts would find it idle and stop
+        # following the resumed turn.
+        self._turn_in_flight = True
         request_id = applied.resolved.request_id
         if applied.resolved.status == "approved" and request_id is not None:
             await self._start_request(request_id)
@@ -302,7 +315,7 @@ class ConversationWorkflow:
     ) -> None:
         conversation = self._input
         self._turn_in_flight = True
-        self._turn_failed = False
+        self._turn_failure = None
         try:
             result = await workflow.execute_activity_method(
                 AgentActivities.internal_turn,
@@ -319,34 +332,83 @@ class ConversationWorkflow:
                     network_updates=updates,
                     card=card,
                 ),
-                **model_activity_options(),
+                **chat_activity_options(),
             )
         except ActivityError as failed:
-            # The chat stays usable: it says Claude couldn't reply, and the member's
+            # The chat stays usable: it says why Claude couldn't reply, and the member's
             # next message starts a new turn.
             workflow.logger.warning("internal turn %s failed: %s", turn_id, failed)
-            self._turn_failed = True
+            self._turn_failure = failure_reason(failed)
             self._undelivered = [*updates, *self._undelivered]
             return
         finally:
             self._turn_in_flight = False
         if result.stop == "refusal":
+            self._turn_failure = "refused"
             self._undelivered = [*updates, *self._undelivered]
         if result.stop == "awaiting_card" and result.card_id is not None:
-            self._paused = _Paused(
+            paused = _Paused(
                 turn_id=turn_id,
                 turn=turn,
                 next_step=result.next_step,
                 card_id=result.card_id,
                 tool_use_id=result.card_tool_use_id or "",
+                auto=result.card_auto,
             )
-            self._pending_card_id = result.card_id
+            self._paused = paused
+            if paused.auto:
+                # Nobody needs to act: the chat stays busy through the send and the resume.
+                self._turn_in_flight = True
+                await self._send_without_review(paused)
+            else:
+                self._pending_card_id = result.card_id
+
+    async def _send_without_review(self, paused: _Paused) -> None:
+        """Approve a card the chat sends without review, as its owner, retrying until
+        it is stored; `_settle_card` then starts the request and resumes the turn. An
+        approval no retry can store (no recipient left, say) rejects the card with the
+        reason instead, so the turn resumes knowing nothing went out. Only a retired
+        world ends the run."""
+        owner = self._input.owner_member_id
+        self._resolving = True
+        try:
+            try:
+                self._applied = await self._apply(
+                    CardResolution(
+                        card_id=paused.card_id, decision="approve", member_id=owner, auto=True
+                    ),
+                    options=mirror_activity_options(),
+                )
+            except ApplicationError as failed:
+                if failed.type == WORLD_RETIRED:
+                    raise
+                workflow.logger.warning("sending card %s failed: %s", paused.card_id, failed)
+                self._applied = await self._reject_unsent(paused, reason=failed.message)
+        finally:
+            self._resolving = False
+
+    async def _reject_unsent(self, paused: _Paused, *, reason: str) -> CardResolutionApplied | None:
+        resolution = CardResolution(
+            card_id=paused.card_id,
+            decision="reject",
+            member_id=self._input.owner_member_id,
+            feedback=reason,
+            auto=True,
+        )
+        try:
+            return await self._apply(resolution, options=mirror_activity_options())
+        except ApplicationError as failed:
+            if failed.type != CARD_NOT_PENDING_ERROR:
+                raise
+            return await self._settled(paused)
 
     def _is_pending(self, card_id: UUID) -> bool:
-        """Whether `card_id` is the paused card and nothing has settled it yet."""
+        """Whether `card_id` is the paused card, a member's to settle, and nothing has
+        settled it yet."""
         paused = self._paused
         return (
             paused is not None
+            and not paused.auto
             and paused.card_id == card_id
             and self._applied is None
             and not self._resolving
@@ -408,7 +470,7 @@ class ConversationWorkflow:
                     turns=self._turns,
                     closed_request_ids=sorted(self._closed_requests),
                     undelivered_updates=list(self._undelivered),
-                    turn_failed=self._turn_failed,
+                    turn_failure=self._turn_failure,
                 )
             }
         )

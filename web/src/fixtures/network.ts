@@ -21,10 +21,11 @@
  * "waiting 4m" reads as it would live.
  */
 import type { MemberDirectory, MemberRef, MemberView, OrgRef, SessionView } from "../api/types";
+import type { FailureReason } from "../chat/failureCopy";
 import type { RequestStatusView } from "../chat/types";
 import type { NetworkEdge, NetworkNode, NetworkRequestRef, NetworkView, ParticipantStatus } from "../network/types";
 import { brief, LINES, REQUEST_TITLE, SUMMARIES } from "./chat";
-import { problem, type FixtureRequest, type FixtureRoutes } from "./index";
+import { json, problem, type FixtureRequest, type FixtureRoutes } from "./index";
 import { WORLD_ID, conversations, members, memberDirectory, orgs as castOrgs, shellRoutes } from "./shell";
 
 const LOADED_AT = Date.now();
@@ -110,6 +111,8 @@ interface Thread {
   latest: string;
   /** Each side's closing summary, by org id: only its own org reads it. */
   summaries?: Readonly<Record<string, string>>;
+  /** Why the system, not a person, closed it (LIVE_DEMO_PLAN 3.5). */
+  stopReason?: FailureReason;
   /** Members with a `thread_access` row; a party org's admins see it regardless. */
   access: readonly string[];
 }
@@ -174,6 +177,7 @@ function view(stage: Stage, reader: Reader): NetworkView {
       latest_line: sees(thread) ? thread.latest : null,
       turn_count: sees(thread) ? thread.turns : null,
       close_summary: reader === null ? null : (thread.summaries?.[reader.org.id] ?? null),
+      stop_reason: thread.stopReason ?? null,
       last_activity_at: minutesAgo(thread.minutes),
     }),
   );
@@ -199,10 +203,22 @@ function storyThread(
   minutes: number,
   latest: string,
   summaries?: Readonly<Record<string, string>>,
+  stopReason?: FailureReason,
 ): Thread {
   const threadId = to.id === castOrgs.northlake.id ? THREAD_NORTHLAKE : THREAD_RIDGELINE;
   // Alex's representative routes the requester side to him.
-  return { id: threadId, from: castOrgs.henderson, to, state, turns, minutes, latest, summaries, access: [members.alex.id] };
+  return {
+    id: threadId,
+    from: castOrgs.henderson,
+    to,
+    state,
+    turns,
+    minutes,
+    latest,
+    summaries,
+    stopReason,
+    access: [members.alex.id],
+  };
 }
 
 function deskStage(partial: Partial<Stage> & Pick<Stage, "recipients" | "threads">): Stage {
@@ -260,6 +276,22 @@ const STAGES = {
     ],
   }),
 
+  /**
+   * Today's live budget ran out mid-story: Ridgeline's thread closed before it replied,
+   * with no summary, while Northlake's goes on.
+   */
+  stopped: deskStage({
+    recipients: {
+      northlake: { participant: "replied", fit: "strong" },
+      ridgeline: { participant: "closed", fit: "strong" },
+      calder,
+    },
+    threads: [
+      storyThread(castOrgs.northlake, "active", 2, 1, LINES.northlakeChecking),
+      storyThread(castOrgs.ridgeline, "closed", 1, 6, LINES.ridgelineOpening, undefined, "daily_budget"),
+    ],
+  }),
+
   /** The end of the story: both threads closed, each side with its own summary. */
   closed: deskStage({
     requests: [{ ...request, status: "closed" }, olderRequest],
@@ -293,6 +325,7 @@ export const networkMessaging = deskNetwork("messaging");
 export const networkQuestion = deskNetwork("question");
 export const networkNeedsHuman = deskNetwork("needs_human");
 export const networkClosed = deskNetwork("closed");
+export const networkStopped = deskNetwork("stopped");
 
 // --- The big run (the network world) ------------------------------------------------
 
@@ -461,7 +494,8 @@ export function networkRoutes(
 ): FixtureRoutes {
   let bigRunStarted = options.bigRun ?? true;
   const shell = shellRoutes(options.actingAs ?? members.alex);
-  const missingWorld = () => problem(401, "not_found", "no network world; POST /api/session/start");
+  // The API's own 401 is a plain FastAPI error, without a problem code (`auth/session.py`).
+  const missingWorld = () => json({ detail: "no network world; POST /api/session/start" }, 401);
   const deskSession = async (request: FixtureRequest): Promise<SessionView | null> => {
     const handler = shell["GET /api/session"];
     const base = typeof handler === "function" ? await handler(request) : handler;

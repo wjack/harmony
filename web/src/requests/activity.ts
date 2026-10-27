@@ -20,6 +20,8 @@ function resolutionText(escalation: EscalationView): string {
       return escalation.kind === "consult" ? "declined to answer" : "declined the reply";
     case "take_over":
       return "replied directly";
+    case "revise":
+      return "sent the reply back to Claude";
     case undefined:
       return "resolved the item";
   }

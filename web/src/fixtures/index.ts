@@ -9,7 +9,7 @@
  */
 import { createApiClient, CURSOR_HEADER, type ApiClient, type ApiPaths } from "../api/client";
 
-type Method = "get" | "post" | "put" | "delete";
+type Method = "get" | "post" | "put" | "patch" | "delete";
 
 /** "GET /api/inbox", for every method and path the schema declares. */
 export type RouteKey = {

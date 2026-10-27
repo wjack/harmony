@@ -123,8 +123,10 @@ class EscalationDraft(CreatedAt, WorldScoped, Base):
     escalation_id: Mapped[UUID] = mapped_column(primary_key=True)
     draft_rev: Mapped[int] = mapped_column(Integer, primary_key=True)
     answer: Mapped[str]
-    # Assignees plus a one-line reason.
+    # Assignees, each with why it is theirs (`agents.models.Route`).
     route: Mapped[JsonObject | None]
     rationale: Mapped[str] = mapped_column(server_default=text("''"))
+    # The decision in one line, for the reviewer's card; NULL on older drafts.
+    short_question: Mapped[str | None]
     # The turn that wrote it: for a consult, the answerer's (what it looked at).
     turn_id: Mapped[UUID | None]

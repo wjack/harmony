@@ -1,8 +1,10 @@
-import { ArrowRight, CalendarDays, RotateCcw, SlidersHorizontal, Wallet, WifiOff, X } from "lucide-react";
+import { ArrowRight, CalendarDays, CircleSlash, RotateCcw, SlidersHorizontal, Wallet, WifiOff, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { SessionView } from "../api/types";
+import { useBudget } from "../app/budget";
 import { useMembers } from "../app/queries";
+import { budgetLine } from "../chat/failureCopy";
 import { firstName, shortOrgName } from "../shell/names";
 import { Avatar, cx } from "../shell/ui";
 import { useFollowAlert } from "./accounts";
@@ -14,8 +16,6 @@ import { formatWorldDate, useWorldDate } from "./worldClock";
 interface DemoBarProps {
   /** Null before the visitor has started a session. */
   session: SessionView | null;
-  /** Live budget left, in USD, when the API reports it. */
-  budgetRemainingUsd?: number | null;
   /** The API can't be reached (the dispatcher is retrying). */
   offline?: boolean;
   /** The live event stream dropped and hasn't come back yet: what's on screen may be stale. */
@@ -27,7 +27,7 @@ interface DemoBarProps {
  * product on purpose, so demo controls are never mistaken for Claude: who you're acting
  * as, the world date, budget, cross-account alerts and Reset.
  */
-export function DemoBar({ session, budgetRemainingUsd = null, offline = false, reconnecting = false }: DemoBarProps) {
+export function DemoBar({ session, offline = false, reconnecting = false }: DemoBarProps) {
   const worldDate = useWorldDate(session?.world);
   const alerts = useNeedsHumanAlerts();
 
@@ -70,16 +70,7 @@ export function DemoBar({ session, budgetRemainingUsd = null, offline = false, r
               <span className="font-medium tabular-nums">{formatWorldDate(worldDate)}</span>
             </span>
           )}
-          {budgetRemainingUsd !== null && (
-            <>
-              <Divider />
-              <span className="flex shrink-0 items-center gap-1.5 px-1.5" title="Live model budget left">
-                <Wallet size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
-                <span className="text-demo-muted">Budget</span>
-                <span className="font-medium tabular-nums">${budgetRemainingUsd.toFixed(2)} left</span>
-              </span>
-            </>
-          )}
+          <Budget />
         </>
       )}
 
@@ -100,6 +91,47 @@ export function DemoBar({ session, budgetRemainingUsd = null, offline = false, r
         </BarButton>
       )}
     </header>
+  );
+}
+
+/**
+ * "Live · $7.40 left", or the line for the cap that stops live turns (LIVE_DEMO_PLAN
+ * 3.5). Nothing while hosted caps are off. It opens Demo controls' "Model and spend".
+ */
+function Budget() {
+  const budget = useBudget().data;
+  if (budget?.live !== true) return null;
+  const line = budgetLine(budget.state);
+  const remaining = budget.session?.remaining_usd;
+  return (
+    <>
+      <Divider />
+      <button
+        type="button"
+        title="This session's live-model budget"
+        onClick={() => {
+          openDemoControls("controls");
+        }}
+        className={cx(
+          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 transition-colors hover:bg-demo-surface",
+          line !== null && "text-demo-alert-text",
+        )}
+      >
+        {line === null ? (
+          <>
+            <Wallet size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
+            <span className="font-medium tabular-nums">
+              {remaining === undefined ? "Live" : `Live · $${remaining.toFixed(2)} left`}
+            </span>
+          </>
+        ) : (
+          <>
+            <CircleSlash size={13} strokeWidth={1.75} className="text-demo-alert-muted" aria-hidden />
+            {line}
+          </>
+        )}
+      </button>
+    </>
   );
 }
 

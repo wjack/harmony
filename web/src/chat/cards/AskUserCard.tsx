@@ -2,14 +2,18 @@ import { ArrowRight, Pencil, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { Button, IconButton } from "../../shell/ui/Button";
+import { ClampedText } from "../../shell/ui/ClampedText";
 import { cx } from "../../shell/ui/cx";
+import { BudgetStrip } from "../BudgetStrip";
 
 export interface AskOption {
   id: string;
   label: ReactNode;
-  /** A muted second line. */
+  /** A muted line under the label, clamped to two lines with "View more". */
   hint?: ReactNode;
   onSelect: () => void;
+  /** Picking it answers the card, so Claude takes a turn: it holds while `blocked`. */
+  startsTurn?: boolean;
 }
 
 export interface AskUserCardProps {
@@ -26,6 +30,12 @@ export interface AskUserCardProps {
   /** ×, Esc and Skip: put the card away and use the composer. */
   onDismiss: () => void;
   busy?: boolean;
+  /**
+   * Why live turns can't start now (a spend cap is spent, or live models are paused),
+   * shown on the card's top edge: until it clears, the options that start one and
+   * "Something else" hold, and the rest (opening a panel, Skip) still work.
+   */
+  blocked?: string | null;
   error?: string | null;
   /** Replaces the option list (a sub-step such as picking recipients). */
   panel?: ReactNode;
@@ -60,6 +70,7 @@ export function AskUserCard({
   onOther,
   onDismiss,
   busy = false,
+  blocked = null,
   error = null,
   panel,
   onBack,
@@ -68,7 +79,7 @@ export function AskUserCard({
 }: AskUserCardProps) {
   const [focused, setFocused] = useState(0);
   const [armed, setArmed] = useState(!arriving);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const otherRef = useRef<HTMLInputElement | null>(null);
@@ -104,16 +115,19 @@ export function AskUserCard({
 
   const optionId = (index: number) => `${labelledBy}-option-${index}`;
 
+  const holds = (option: AskOption) => option.startsTurn === true && blocked !== null;
+
   const pick = (index: number) => {
     if (busy || !armed) return;
     if (index === otherIndex) {
       otherRef.current?.focus();
       return;
     }
-    options[index]?.onSelect();
+    const option = options[index];
+    if (option !== undefined && !holds(option)) option.onSelect();
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
       if (inPanel && onBack !== undefined) onBack();
@@ -152,7 +166,7 @@ export function AskUserCard({
 
   const submitOther = () => {
     const text = other.trim();
-    if (text === "" || busy) return;
+    if (text === "" || busy || blocked !== null) return;
     onOther(text);
   };
 
@@ -165,9 +179,11 @@ export function AskUserCard({
 
   return (
     <div>
-      <div
+      {blocked !== null && <BudgetStrip line={blocked} />}
+      <section
         ref={rootRef}
         tabIndex={-1}
+        aria-labelledby={labelledBy}
         onKeyDown={onKeyDown}
         className="relative rounded-composer border border-border bg-surface shadow-composer outline-none animate-pop-in"
       >
@@ -198,18 +214,20 @@ export function AskUserCard({
                   id={optionId(index)}
                   role="option"
                   aria-selected={focused === index}
-                  aria-disabled={busy || !armed}
+                  aria-disabled={busy || !armed || holds(option)}
                   onMouseEnter={() => {
                     setFocused(index);
                   }}
-                  onClick={() => {
+                  onClick={(event) => {
                     setFocused(index);
+                    // "View more" inside the option only unfolds its hint.
+                    if (event.target instanceof Element && event.target.closest("button") !== null) return;
                     pick(index);
                   }}
                   className={cx(
                     "flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 transition-colors",
                     focused === index && "bg-hover/70",
-                    busy && "cursor-default opacity-60",
+                    (busy || holds(option)) && "cursor-default opacity-60",
                   )}
                 >
                   <span
@@ -220,12 +238,14 @@ export function AskUserCard({
                   >
                     {index + 1}
                   </span>
-                  <span className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1">
                     <span className="block text-[15.5px] leading-5 text-ink">{option.label}</span>
                     {option.hint !== undefined && (
-                      <span className="mt-0.5 block truncate text-[13px] leading-5 text-muted">{option.hint}</span>
+                      <ClampedText lines={2} className="mt-0.5 text-[13px] leading-5 text-muted">
+                        {option.hint}
+                      </ClampedText>
                     )}
-                  </span>
+                  </div>
                   {focused === index && <ArrowRight size={16} strokeWidth={1.6} className="shrink-0 text-muted" />}
                 </div>
               </div>
@@ -273,7 +293,7 @@ export function AskUserCard({
                   Skip
                 </Button>
               ) : (
-                <Button size="md" variant="primary" disabled={busy} onClick={submitOther}>
+                <Button size="md" variant="primary" disabled={busy || blocked !== null} onClick={submitOther}>
                   Send
                 </Button>
               )}
@@ -285,7 +305,7 @@ export function AskUserCard({
             {error}
           </p>
         )}
-      </div>
+      </section>
       <p className="mt-2 text-center text-[12px] text-muted">
         {!inPanel ? (
           <>

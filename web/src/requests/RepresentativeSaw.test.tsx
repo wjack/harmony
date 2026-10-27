@@ -29,6 +29,7 @@ function show(representative: RepresentativeContext): HTMLElement {
       <RepresentativeSaw
         open
         onOpenChange={() => undefined}
+        returnFocus={() => undefined}
         us={orgs.northlake}
         them={orgs.henderson}
         representative={representative}

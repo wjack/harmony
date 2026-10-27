@@ -26,9 +26,12 @@ make dev        # api :8000, worker and Vite, with reload
 ```
 
 `.env.local` holds the real keys and is gitignored; start from `.env.local.example`.
-`MODEL_MODE=scripted` is the default everywhere and makes no model calls. Temporal's
-UI runs at <http://localhost:8233>, and MinIO is opt-in:
-`docker compose --profile storage up -d --build minio`.
+`MODEL_MODE=scripted` is the default for local runs, tests and CI, and makes no model
+calls; production is live only. `ACCESS_CODE` is optional locally: setting it gates
+`make dev` behind the passcode page, and `harmony run` unlocks itself. Temporal's UI
+runs at <http://localhost:8233>, and MinIO is opt-in:
+`docker compose --profile storage up -d --build minio` (`harmony storage check` puts,
+gets and deletes a probe object through whichever store `OBJECT_STORE` selects).
 
 ## Checks
 
@@ -56,15 +59,97 @@ and spend checks, and stops both afterwards.
 The compose smoke checks include the Playwright story in `web/e2e`, which `make e2e-ui`
 runs on its own. Install the browser once with
 `pnpm -C web exec playwright install --only-shell chromium`. To drive an app you already
-run with `MODEL_MODE=scripted` instead of the image, set `E2E_BASE_URL`.
+run with `MODEL_MODE=scripted` and `ACCESS_CODE` set instead of the image, set
+`E2E_BASE_URL` and `E2E_PASSCODE` (that app's `ACCESS_CODE`). The compose stack runs
+with the gate on (`compose.ci.yaml`'s throwaway passcode), and the shell and Python
+checks unlock with `HARMONY_PASSCODE`.
 
 ## Infrastructure
 
-`infra/terraform` holds the Render and Temporal Cloud modules, with local state.
-`scripts/tf.sh <terraform args>` loads `.env.local` into `TF_VAR_*` without echoing it;
-P0 never runs `terraform apply`.
+`infra/terraform` holds the Render and Temporal Cloud modules (14 resources), with local
+state. `scripts/tf.sh <terraform args>` loads `.env.local` into the environment without
+echoing it, runs Terraform under `umask 077` and keeps every state file at mode 600;
+`apply` is refused unless `HARMONY_TF_ALLOW_APPLY=1`, which is set only once the user has
+approved a deploy. `infra/terraform/terraform.tfvars` (gitignored; start from
+`terraform.tfvars.example`) wins over `.env.local`: it holds `anthropic_api_key`, the
+hosted workspace's key, and optionally the master passcode, the caps and the provider
+credentials, which `scripts/tfvars_from_env.sh` copies over from `.env.local`.
+
+## Deploy
+
+The runbook is [docs/LIVE_DEMO_PLAN.md](docs/LIVE_DEMO_PLAN.md) section 6. Every step that
+spends money, pushes, merges, applies or redeploys waits for the user's explicit approval.
+
+- **Step 1, preconditions:** the live phase merged on `p0-foundations`, integration
+  green, and the plan's section 5 (local live verification on Haiku 5.5) done.
+- **Step 1a, the production-mix check, local, once** (about $3 of Opus on the dev key,
+  ceiling $10; needs approval). With the dev stack and `MODEL_OVERRIDE=none` on the
+  command line: `harmony llm ping --live --model opus`, one
+  `harmony run harmony-demo --story suggested --live`, and in the browser one typed chat
+  as Alex (Opus, "Opus 5.5 · Adaptive") and one as Bayside (Haiku).
+- **Steps 2–5:** commit, push, CI green, merge to `main`, each as approved.
+- **Step 6, bootstrap by hand:** connect GitHub to Render, set the production Console
+  workspace's spend limit, optionally set `access_code` and the caps in
+  `terraform.tfvars`, then run `scripts/tfvars_from_env.sh`.
+- **Step 7:** `scripts/ping_prod_key.sh`, two calls on the production key (about $0.01).
+- **Steps 8–9b:** `scripts/tf.sh plan` (14 resources to add), then
+  `HARMONY_TF_ALLOW_APPLY=1 scripts/tf.sh apply`; `make doctor` confirms the state is
+  mode 600, and both first deploys are checked.
+- **Step 10, post-deploy checks without spend.** Secrets go from Terraform's outputs
+  straight into the checks' environment, never to the terminal:
+
+  ```sh
+  HARMONY_BASE_URL="$(scripts/tf.sh output -raw web_url)" \
+  HARMONY_PASSCODE="$(scripts/tf.sh output -raw access_code)" \
+  HARMONY_ADMIN_SECRET="$(scripts/tf.sh output -raw admin_secret)" \
+    uv run python scripts/hosted_check.py --build-sha "$(git rev-parse origin/main)" \
+      --save-jar "$TMPDIR/harmony.cookies.json"
+  # also --client-key, --reset-retires and (while paused) --refused-turn
+  scripts/hosted_admin.sh status            # or pause, resume, wipe --yes
+  ```
+
+  `--save-jar` keeps the default run's cookies (mode 600) for the rotation drill's
+  `--previous-jar`. It refuses a path inside the repository: the jar holds a working gate
+  cookie until the rotation. `--refused-turn` needs hosted caps (the hosted app, or a
+  local live stack with `HOSTED_CAPS_IN_DEV=1`); on compose-smoke it stops at once.
+  `--build-sha` is required: healthz must report main's HEAD, not an older build Render
+  kept live. Then `harmony storage check` in Render Shell on the web service; if the API
+  is ever down, `harmony live pause` there is the kill switch.
+  The six-wrong-attempts check runs last: it blocks the laptop's unlocks for 15 minutes,
+  and every `hosted_check.py` mode unlocks afresh (a 429 is reported as the per-client
+  limit, with its `Retry-After`).
+- **Steps 11–14:** first live use, SSE across a deploy (`hosted_check.py --across-deploy`),
+  the rotation drill, and the user shares the URL and the passcode. The rotation drill
+  captures the old passcode before the apply, which replaces what the output returns:
+
+  ```sh
+  export HARMONY_PREVIOUS_PASSCODE="$(scripts/tf.sh output -raw access_code)"
+  ```
+
+  Then change it one of two ways:
+
+  ```sh
+  # A passcode set in terraform.tfvars: edit access_code there, then
+  HARMONY_TF_ALLOW_APPLY=1 scripts/tf.sh apply
+  ```
+
+  ```sh
+  # The generated passcode (terraform.tfvars doesn't set access_code):
+  HARMONY_TF_ALLOW_APPLY=1 scripts/tf.sh apply -replace=random_password.access_code
+  ```
+
+  While terraform.tfvars sets `access_code`, `-replace` changes nothing, and a `-replace`
+  given only to `plan` rotates nothing either. Redeploy both services, then:
+
+  ```sh
+  HARMONY_BASE_URL="$(scripts/tf.sh output -raw web_url)" \
+  HARMONY_PASSCODE="$(scripts/tf.sh output -raw access_code)" \
+    uv run python scripts/hosted_check.py --rotation --previous-jar "$TMPDIR/harmony.cookies.json"
+  rm "$TMPDIR/harmony.cookies.json"
+  ```
 
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, and the source of truth.
 - [docs/P0_PLAN.md](docs/P0_PLAN.md): the P0 (foundations) build spec and task split.
+- [docs/LIVE_DEMO_PLAN.md](docs/LIVE_DEMO_PLAN.md): the live demo phase and the deploy runbook.

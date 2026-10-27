@@ -83,8 +83,12 @@ export function lensSignal(envelope: EventEnvelope): LensSignal {
   }
 }
 
-/** How long an edge keeps animating after the last typing frame (they come ~1/s). */
-export const TYPING_TTL_MS = 3_500;
+/**
+ * How long an edge keeps animating after the last typing frame. The worker sends one
+ * every 5 s for a whole turn, thinking included (LIVE_DEMO_PLAN 3.5), so one late frame
+ * doesn't stop it.
+ */
+export const TYPING_TTL_MS = 8_000;
 const REFRESH_DEBOUNCE_MS = 250;
 export const RETRY_MIN_MS = 2_000;
 const RETRY_MAX_MS = 30_000;

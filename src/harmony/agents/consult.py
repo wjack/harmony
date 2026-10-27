@@ -5,8 +5,9 @@
    `ANSWERER_TOOLS` (the org's records as they are now, through `RecordReader`), from
    prompts/consult.md, and ends in the structured draft (`CONSULT_OUTPUT_SCHEMA`,
    validated as `ConsultDraft`). The prompt says how the answer will be released under
-   the mode toward this counterparty, and on the requester side who sent the request
-   and its brief (org context the member approved, R§7). A refusal, an invalid draft or
+   the mode toward this counterparty, and on the requester side who sent the request,
+   its brief and what it asks this counterparty (org context the member approved, R§7).
+   A refusal, an invalid draft or
    a loop that runs out of steps is `AnswerFailed`: the consult goes to the default
    assignee with no draft.
 2. `check_sharing`: the sharing check (R§4.3), which the caller runs only when
@@ -75,6 +76,8 @@ ANSWER_MAX_TOKENS: Final = 16_000
 SHARING_CHECK_MAX_TOKENS: Final = 4_000
 # The `consult` result when a member answered the counterparty themselves.
 TAKEN_OVER: Final = "A member of your side wrote to the counterparty directly."
+# The `send_message` result when a member declined the held message and gave no reason.
+HELD_DECLINED: Final = "Not sent: your side didn't approve it."
 # The verdict stored when the mode became *Auto* after the caller decided no check was
 # needed: the draft goes to a person rather than out unchecked.
 UNCHECKED: Final = "The sharing check didn't run on this answer, so a teammate reviews it."
@@ -97,6 +100,9 @@ class ConsultDraft(_Model):
     # Used only when a person is needed (§6).
     route: Route | None
     rationale: str
+    # The decision in one line, for the teammate who reviews it; drafts from before
+    # it was asked for have none.
+    short_question: str | None = None
 
 
 class SharingCheck(_Model):
@@ -447,8 +453,9 @@ _REDRAFT_REVIEW: Final = (
 async def _request_text(
     session: AsyncSession, parties: _Parties, consult: Consult, members: Sequence[Member]
 ) -> str:
-    """On the requester side, who sent the request and the brief they approved; on the
-    responder side, only that the counterparty came with one."""
+    """On the requester side, who sent the request, the brief they approved and what it
+    asks this counterparty; on the responder side, only that the counterparty came with
+    one."""
     org_name, counterparty_name = parties.names()
     if consult.side == "responder":
         return (
@@ -460,10 +467,18 @@ async def _request_text(
     )
     sender = next((m for m in members if m.id == request.created_by_member_id), None)
     who = f"{sender.name} (`{sender.slug}`)" if sender is not None else f"Someone at {org_name}"
-    return (
-        f"{who} sent the request this conversation is part of, and approved its brief:\n\n"
-        + context.quoted("brief", request.brief)
-    )
+    if await context.sent_without_review(session, request):
+        sent = (
+            f"Claude wrote the request this conversation is part of for {who}, and it went "
+            "out without their review (this chat's setting). Its brief:"
+        )
+    else:
+        sent = f"{who} sent the request this conversation is part of, and approved its brief:"
+    text = f"{sent}\n\n" + context.quoted("brief", request.brief)
+    ask = context.recipient_ask(request, parties.counterparty.id)
+    if ask is not None:
+        text += f"\n\nWhat it asks {counterparty_name}:\n\n" + context.quoted("ask", ask)
+    return text
 
 
 def _members_text(members: Sequence[Member]) -> str:
@@ -739,20 +754,45 @@ def result_text(action: EscalationAction, text: str) -> str:
             return _with_note("Your side declined to answer.", text)
         case "take_over":
             return _sent_instead(TAKEN_OVER, text)
+        case "revise":
+            raise ValueError("only a held message can be sent back to be revised")
 
 
-def held_result(action: EscalationAction, *, text: str, drafted: str) -> str:
+def held_result(
+    action: EscalationAction, *, text: str, drafted: str, member_name: str | None = None
+) -> str:
     """The `send_message` result once a person settled the held message: what crossed
-    when it isn't what the representative wrote, quoted like `result_text`."""
+    when it isn't what the representative wrote, quoted like `result_text`. A revise
+    names who asked by first name (`member_name`, the resolver's name)."""
     match action:
         case "approve" if text.strip() and text.strip() != drafted.strip():
             return "Sent as your side edited it:\n" + context.quote_released(text)
         case "approve":
             return "Sent, approved by your side."
         case "decline":
-            return _with_note("Not sent: your side didn't approve it.", text)
+            return _with_note(HELD_DECLINED, text)
         case "take_over":
             return _sent_instead(f"Not sent: {TAKEN_OVER}", text)
+        case "revise":
+            # The member's note is an instruction to the representative, never text
+            # it may pass on, so it is quoted as a note, not as released text.
+            return (
+                f"Not sent: {_first_name(member_name) or 'a teammate'} asked you to change it. "
+                "Their note is for you only; don't pass it on:\n"
+                + context.quote_note(text)
+                + "\nRewrite the message and send it again, or consult if you need to."
+            )
+
+
+_HONORIFICS: Final = frozenset(
+    {"dr", "dr.", "prof", "prof.", "mr", "mr.", "ms", "ms.", "mrs", "mrs."}
+)
+
+
+def _first_name(name: str | None) -> str | None:
+    """'Dr. Helen Ward' -> 'Helen', as the web's `firstName` addresses people."""
+    parts = [part for part in (name or "").split() if part.lower() not in _HONORIFICS]
+    return parts[0] if parts else None
 
 
 def _with_note(said: str, note: str) -> str:
@@ -794,18 +834,44 @@ CONSULT_OUTPUT_SCHEMA: Final[JsonObject] = {
                 {
                     "type": "object",
                     "properties": {
-                        "assignees": {"type": "array", "items": {"type": "string"}},
-                        "reason": {"type": "string"},
+                        "assignees": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "member": {"type": "string", "description": "A member slug."},
+                                    "why": {
+                                        "type": "string",
+                                        "description": "One short clause, addressed to that "
+                                        "person: 'you run XRD and SEM'.",
+                                    },
+                                },
+                                "required": ["member", "why"],
+                                "additionalProperties": False,
+                            },
+                        }
                     },
-                    "required": ["assignees", "reason"],
+                    "required": ["assignees"],
                     "additionalProperties": False,
                 },
                 {"type": "null"},
             ]
         },
         "rationale": {"type": "string"},
+        "short_question": {
+            "type": "string",
+            "description": "The decision or question for the teammate who reviews this, "
+            "in one line of at most about 15 words.",
+        },
     },
-    "required": ["answer", "needs_human", "needs_human_reason", "route", "rationale"],
+    "required": [
+        "answer",
+        "needs_human",
+        "needs_human_reason",
+        "route",
+        "rationale",
+        "short_question",
+    ],
     "additionalProperties": False,
 }
 
@@ -824,6 +890,7 @@ SHARING_CHECK_OUTPUT_SCHEMA: Final[JsonObject] = {
 __all__ = [
     "ANSWER_MAX_TOKENS",
     "CONSULT_OUTPUT_SCHEMA",
+    "HELD_DECLINED",
     "SHARING_CHECK_MAX_TOKENS",
     "SHARING_CHECK_OUTPUT_SCHEMA",
     "TAKEN_OVER",

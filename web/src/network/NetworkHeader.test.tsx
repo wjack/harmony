@@ -3,11 +3,15 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "../shell/ui";
+import { closeUnavailable, unavailableStore } from "../shell/unavailable";
 import { WorldSwitch } from "./NetworkHeader";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  closeUnavailable();
+});
 
-it("shows the big run as coming later, not as a world to open", () => {
+it("shows the big run as coming later: it opens the not-available dialog, not a world", () => {
   const onChange = vi.fn();
   render(
     <TooltipProvider>
@@ -15,10 +19,11 @@ it("shows the big run as coming later, not as a world to open", () => {
     </TooltipProvider>,
   );
   const bigRun = screen.getByRole("radio", { name: "Big run" });
-  expect(bigRun.getAttribute("aria-disabled")).toBe("true");
+  expect(bigRun.getAttribute("aria-checked")).toBe("false");
   expect(bigRun.getAttribute("aria-description")).toMatch(/^Coming later/);
   fireEvent.click(bigRun);
   expect(onChange).not.toHaveBeenCalled();
+  expect(unavailableStore.getState().feature).toBe("The big run");
 
   // Whoever is already there can still go back to the desk.
   cleanup();

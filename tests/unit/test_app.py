@@ -12,7 +12,8 @@ from tests.conftest import settings_without_dotenv
 
 
 def _app(dist: Path) -> FastAPI:
-    return create_app(settings_without_dotenv(app_env="ci", web_dist_dir=dist))
+    # The gate stays off whatever the environment says; tests/unit/test_gate.py has it on.
+    return create_app(settings_without_dotenv(app_env="ci", web_dist_dir=dist, access_code=None))
 
 
 @pytest.fixture

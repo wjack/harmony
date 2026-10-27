@@ -14,6 +14,11 @@
 - `stop_reason == "refusal"` is checked before anything reads the content; the
   category is logged and returned. A served model that differs from the requested
   one (a server-side fallback) is logged, not raised.
+- The provider's own spend limit (a 402 `billing_error`, or the workspace usage-limit
+  message) is `BudgetExhausted(kind="provider")`, never retried; `on_provider_limit`
+  (the guard's `block_provider`) then stops hosted calls before they reach the API
+  (3.4). The message match is deliberately narrow, and a listed risk: a reworded
+  message falls back to its status's ordinary mapping.
 
 Only this module imports the SDK.
 """
@@ -24,7 +29,9 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import Iterable, Mapping
+import re
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from decimal import Decimal
 from typing import Final, cast
 
 import anthropic
@@ -38,7 +45,7 @@ from harmony.llm import (
     ModelResult,
     StreamEventCallback,
 )
-from harmony.llm.errors import BadRequest, ModelCallError
+from harmony.llm.errors import BadRequest, BudgetExhausted, ModelCallError
 from harmony.llm.usage import StreamUsageTracker
 from harmony.llm.wire import JsonObject, as_int, as_str
 
@@ -63,6 +70,14 @@ _NON_RETRYABLE_ERROR_TYPES: Final = frozenset(
         "request_too_large",
     }
 )
+# The provider's spend limit: a billing error, or the Console's workspace usage limit.
+_BILLING_STATUS: Final = 402
+_BILLING_ERROR_TYPE: Final = "billing_error"
+_USAGE_LIMIT_MESSAGE: Final = re.compile(
+    r"you have reached your specified (?:workspace )?api usage limits?", re.IGNORECASE
+)
+
+ProviderLimitHook = Callable[[], Awaitable[None]]
 
 
 class AnthropicModel:
@@ -71,12 +86,16 @@ class AnthropicModel:
         client: anthropic.AsyncAnthropic,
         *,
         heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
+        on_provider_limit: ProviderLimitHook | None = None,
     ) -> None:
         self._client = client
         self._heartbeat_interval = heartbeat_interval_s
+        self._on_provider_limit = on_provider_limit
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> AnthropicModel:
+    def from_settings(
+        cls, settings: Settings, *, on_provider_limit: ProviderLimitHook | None = None
+    ) -> AnthropicModel:
         if settings.anthropic_api_key is None:
             raise BadRequest("ANTHROPIC_API_KEY is not set; live calls need it")
         client = anthropic.AsyncAnthropic(
@@ -84,7 +103,7 @@ class AnthropicModel:
             max_retries=1,
             timeout=anthropic.Timeout(SDK_TIMEOUT_S, connect=SDK_CONNECT_TIMEOUT_S),
         )
-        return cls(client)
+        return cls(client, on_provider_limit=on_provider_limit)
 
     async def call(
         self,
@@ -129,6 +148,9 @@ class AnthropicModel:
                     )
                 final = await stream.get_final_message()
         except anthropic.APIStatusError as exc:
+            if _is_provider_limit(exc):
+                await self._provider_limited()
+                raise _provider_limit_error(exc) from exc
             raise _status_error(exc, tracker) from exc
         except anthropic.APIConnectionError as exc:
             raise ModelCallError(
@@ -179,6 +201,16 @@ class AnthropicModel:
     async def aclose(self) -> None:
         await self._client.close()
 
+    async def _provider_limited(self) -> None:
+        if self._on_provider_limit is None:
+            return
+        try:
+            await self._on_provider_limit()
+        except Exception:
+            # The call still fails as `provider`; only the local block is lost, and the
+            # next call meets the same provider error and tries again.
+            log.exception("could not record the provider's spend-limit block")
+
     async def _tick(self, heartbeat: HeartbeatCallback) -> None:
         # Adaptive thinking with omitted display can stream nothing for minutes.
         while True:
@@ -198,6 +230,25 @@ def _raw_event(event: object) -> Mapping[str, JsonValue] | None:
     return None
 
 
+def _is_provider_limit(exc: anthropic.APIStatusError) -> bool:
+    if exc.status_code == _BILLING_STATUS or _error_type(exc.body) == _BILLING_ERROR_TYPE:
+        return True
+    return _USAGE_LIMIT_MESSAGE.search(_error_message(exc)) is not None
+
+
+def _provider_limit_error(exc: anthropic.APIStatusError) -> BudgetExhausted:
+    log.error("the provider's spend limit refused a call: %s %s", exc.status_code, exc.message)
+    zero = Decimal(0)
+    return BudgetExhausted(
+        f"the provider's spend limit refused the call (API error {exc.status_code}): {exc.message}",
+        kind="provider",
+        budget="provider",
+        cap_usd=zero,
+        committed_usd=zero,
+        requested_usd=zero,
+    )
+
+
 def _status_error(exc: anthropic.APIStatusError, tracker: StreamUsageTracker) -> ModelCallError:
     error_type = _error_type(exc.body)
     message = f"API error {exc.status_code} ({error_type or 'unknown'}): {exc.message}"
@@ -207,12 +258,20 @@ def _status_error(exc: anthropic.APIStatusError, tracker: StreamUsageTracker) ->
 
 
 def _error_type(body: object) -> str | None:
+    return _error_field(body, "type")
+
+
+def _error_message(exc: anthropic.APIStatusError) -> str:
+    return _error_field(exc.body, "message") or exc.message
+
+
+def _error_field(body: object, name: str) -> str | None:
     if not isinstance(body, Mapping):
         return None
     error = cast(Mapping[str, object], body).get("error")
     if isinstance(error, Mapping):
-        kind = cast(Mapping[str, object], error).get("type")
-        return kind if isinstance(kind, str) else None
+        value = cast(Mapping[str, object], error).get(name)
+        return value if isinstance(value, str) else None
     return None
 
 

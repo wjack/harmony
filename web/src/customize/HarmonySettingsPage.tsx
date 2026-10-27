@@ -89,6 +89,9 @@ function Pane({ section, focusOrgId, ...props }: PaneProps & { section: HarmonyS
 function savedText(changed: readonly SettingsField[]): string {
   if (touchesPrompt(changed)) return "Settings saved. Live threads keep the profile they started with and get a notice.";
   if (touchesSharing(changed)) return "Settings saved. Live threads are told what they may now share.";
+  if (changed.includes("sendWithoutConfirmation")) {
+    return "Settings saved. Chats that follow your organization's default use it for their next request.";
+  }
   return "Settings saved. They apply at the next decision on every thread.";
 }
 

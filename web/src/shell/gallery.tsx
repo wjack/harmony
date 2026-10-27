@@ -8,6 +8,7 @@ import type { GallerySection } from "../gallery/types";
 import { ShellFrame, type FrameStatus } from "./AppLayout";
 import { ChatsPage } from "./ChatsPage";
 import { Landing } from "./Landing";
+import { Locked } from "./Locked";
 import { firstName } from "./names";
 import { toast } from "./toasts";
 import { Avatar, Button, IconButton, Modal, ModalList, OrgAvatar, Segmented, Spark, Toggle } from "./ui";
@@ -238,9 +239,10 @@ export default [
   },
   {
     title: "Account menu",
-    description: "Switch account (featured personas, everyone else in a submenu), demo controls, reset, then Claude's own items.",
+    description:
+      "Switch account (featured personas, everyone else in a submenu), demo controls, reset, then Claude's own items, and Lock Harmony.",
     layout: "page",
-    height: 820,
+    height: 900,
     render: () => (
       <CurrentShell sidebar={{ defaultMenuOpen: true }}>
         <div />
@@ -304,6 +306,14 @@ export default [
         <Landing />
       </ShellFrame>
     ),
+  },
+  {
+    title: "Harmony is locked",
+    description:
+      "The passcode gate refused a request, or the visitor chose Lock Harmony: shown only while the tab leaves for the passcode page.",
+    layout: "page",
+    height: 520,
+    render: () => <Locked />,
   },
   { title: "Toasts and the not-available dialog", render: () => <ToastTriggers /> },
   { title: "Primitives", render: () => <Primitives /> },

@@ -11,7 +11,7 @@ const CAST_LINES: Readonly<Record<string, string>> = {
   "northlake/helen": "Runs Northlake's scheduling and pricing exceptions.",
   "northlake/raj": "Runs the instruments and holds a reserve XRD block.",
   "ridgeline/dana": "Quotes sealed holders, given the seal material.",
-  "calder/priya": "Computation only: the near miss.",
+  "calder/priya": "Runs DFT screening for battery materials; no lab instruments.",
 };
 
 export function castLine(member: MemberView): string | null {

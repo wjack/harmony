@@ -9,22 +9,30 @@ after a commit finds its rows. Each finished turn writes its `agent_turns` row
 (`domain.agent_turns`): the internal and representative turns here, the answerer and
 sharing check per draft rev, and each screener call in `AgentScreen`.
 
-- `internal_turn`: one internal Claude turn in a conversation. Drains the queued member
-  messages and network updates into the transcript, runs `agents.runtime.run_turn`
-  with `InternalToolExecutor` (its `search_network` screens inline through
-  `AgentScreen`), and stops at `end_turn`, `max_steps`, a refusal, or a card
-  (`awaiting_card`: the workflow resumes the same `turn_id` at `next_step` with the
-  card's outcome).
+- `internal_turn` (on `harmony-chat`): one internal Claude turn in a conversation.
+  Drains the queued member messages and network updates into the transcript, runs
+  `agents.runtime.run_turn` with `InternalToolExecutor` (its `search_network` screens
+  inline through `AgentScreen`), and stops at `end_turn`, `max_steps`, a refusal, or a
+  card (`awaiting_card`: the workflow resumes the same `turn_id` at `next_step` with
+  the card's outcome; `card_auto` when the chat sends it without review). A new turn
+  is told when the chat's send mode changed (`send_mode.send_mode_notice`). Its text
+  streams to the chat's owner in every org.
 - `rep_turn`: one representative turn on a thread side, with `RepToolExecutor`: a tool
   loop that opens with the owed tool results, the counterparty's new messages and any
   queued notices, and runs until the model stops calling tools, consults, closes, or
-  has a message held for a teammate.
+  has a message held for a teammate. A turn with nothing to answer keeps bare text
+  private (`bare_text_sends`).
 - `answer_consult`: internal Claude answers a consult for one draft rev with its tool
   loop (`agents.consult.answer`); for the first draft, the sharing check runs when the
   mode toward this counterparty asks for it (`release.needs_sharing_check`), and
   `agents.consult.settle` releases the answer or escalates it to a person.
 
-Run options: `policies.model_activity_options()`.
+A refused reservation (`BudgetExhausted`) publishes `demo.notice {kind: "budget"}` and
+leaves the activity as a non-retryable `ApplicationError` carrying the refusing cap
+(`failures.budget_refused`), so the workflow can say which budget stopped it (3.5).
+
+Run options: `policies.chat_activity_options()` for `internal_turn`,
+`policies.model_activity_options()` for the rest.
 
 Owner: R-temporal (the activity bodies call R-agents' runtime, tools, consult and
 discovery).
@@ -43,6 +51,7 @@ from typing import Annotated, Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
 
@@ -70,7 +79,7 @@ from harmony.agents.transcript import (
     SqlTranscriptStore,
 )
 from harmony.db import repo
-from harmony.db.models import Org, Thread, ThreadMessage, World
+from harmony.db.models import Card, ChatMessage, Org, Thread, ThreadMessage, World
 from harmony.db.models.choices import Side
 from harmony.db.uow import UnitOfWork, unit_of_work
 from harmony.domain import agent_turns, clock, consults
@@ -78,7 +87,8 @@ from harmony.domain import threads as thread_domain
 from harmony.domain.conversations import NO_MEMBER_MESSAGE
 from harmony.domain.settings import mode_toward
 from harmony.events.bus import StreamPublisher
-from harmony.events.stream import ChatStream, TurnStream, org_streams_tokens
+from harmony.events.schemas import DemoNotice, EventScope
+from harmony.events.stream import TYPING_HEARTBEAT_S, ChatStream, TurnStream, org_streams_tokens
 from harmony.llm import ModelClient
 from harmony.llm.budget import SpendGuard
 from harmony.llm.budget_pg import HostedCaps, hosted_budget_keys
@@ -86,6 +96,8 @@ from harmony.llm.errors import BudgetExhausted, LedgerUnavailable, ModelCallErro
 from harmony.llm.requests import Tier, resolve_model
 from harmony.llm.wire import JsonObject
 from harmony.temporal.activities.network import domain_errors
+from harmony.temporal.activities.send_mode import send_mode_notice
+from harmony.temporal.failures import budget_refused
 from harmony.temporal.policies import ensure_world_live
 from harmony.temporal.workflows.payloads import MemberMessage, NetworkUpdate
 
@@ -96,8 +108,10 @@ HEARTBEAT_INTERVAL_S: Final = 5.0
 OPEN_THREAD: Final = "The thread with {counterparty} is open. Send your opening message."
 NOTHING_NEW: Final = "No new message from {counterparty} since your last turn."
 THREAD_ENDED: Final = "The conversation with {counterparty} has ended."
-# What a model call raises when it fails (`harmony.llm.errors`).
-_CALL_FAILURES: Final = (ModelCallError, BudgetExhausted, LedgerUnavailable)
+# What a model call raises when it fails (`harmony.llm.errors`) and a person can stand
+# in for. A refused reservation isn't one: it stops the thread with its reason (3.5),
+# since every model call after it would be refused too.
+_CALL_FAILURES: Final = (ModelCallError, LedgerUnavailable)
 
 
 class _Payload(BaseModel):
@@ -148,6 +162,8 @@ class InternalTurnResult(_Payload):
     # Set when `stop` is `awaiting_card`.
     card_id: UUID | None = None
     card_tool_use_id: str | None = None
+    # The card is sent without confirmation: the workflow approves it itself.
+    card_auto: bool = False
 
 
 # --- rep_turn ------------------------------------------------------------------------
@@ -231,6 +247,7 @@ class AgentActivities:
         model_override: str | None,
         hosted_caps: HostedCaps | None = None,
         heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
+        typing_every_s: float = TYPING_HEARTBEAT_S,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._model = model
@@ -239,11 +256,34 @@ class AgentActivities:
         self._model_override = model_override
         self._hosted_caps = hosted_caps
         self._heartbeat_interval_s = heartbeat_interval_s
+        self._typing_every_s = typing_every_s
 
-    async def _checkpointed(self, world_id: UUID) -> CheckpointedClient:
-        budget_keys = await hosted_budget_keys(
-            self._sessionmaker, self._hosted_caps, world_id=world_id
-        )
+    @asynccontextmanager
+    async def _budget_refusals(self, world_id: UUID) -> AsyncGenerator[None]:
+        """A refused reservation, told to every viewer (the demo bar refetches the
+        budget) and re-raised with its kind for the workflow."""
+        try:
+            yield
+        except BudgetExhausted as refused:
+            await self._publish_budget_notice(world_id)
+            raise budget_refused(refused) from refused
+
+    async def _publish_budget_notice(self, world_id: UUID) -> None:
+        # Best effort: the notice only prompts a refetch, and the refusal must still
+        # reach the workflow with its kind.
+        try:
+            async with unit_of_work(self._sessionmaker, world_id) as uow:
+                uow.add_event(DemoNotice(kind="budget"), EventScope.demo())
+                await uow.commit()
+        except Exception:
+            activity.logger.warning("couldn't publish the budget notice", exc_info=True)
+
+    def _checkpointed(self, world_id: UUID) -> CheckpointedClient:
+        async def budget_keys() -> tuple[str, ...]:
+            return await hosted_budget_keys(
+                self._sessionmaker, self._hosted_caps, world_id=world_id
+            )
+
         return CheckpointedClient(
             self._sessionmaker,
             self._model,
@@ -257,16 +297,29 @@ class AgentActivities:
         started = time.monotonic()
         await ensure_world_live(self._sessionmaker, turn.world_id)
         attempt = activity.info().attempt
-        async with _heartbeating(self._heartbeat_interval_s), domain_errors():
+        async with (
+            _heartbeating(self._heartbeat_interval_s),
+            self._budget_refusals(turn.world_id),
+            domain_errors(),
+        ):
             async with self._sessionmaker() as session:
                 world = await repo_world(session, turn.world_id)
                 org = await repo.get_required(session, Org, turn.world_id, turn.org_id)
                 built = await context.build_internal_context(
                     session, world_id=turn.world_id, conversation_id=turn.conversation_id
                 )
-                streams = await org_streams_tokens(session, turn.world_id, turn.org_id)
                 today = await clock.today(session, turn.world_id)
-            model = await self._checkpointed(turn.world_id)
+                send_mode = (
+                    await send_mode_notice(
+                        session, world_id=turn.world_id, conversation_id=turn.conversation_id
+                    )
+                    if _new_turn(turn)
+                    else None
+                )
+                card_sent = await _card_sent(session, turn)
+                updates = await _unstored_updates(session, turn)
+            notices = internal_notices(turn, today, updates=updates, send_mode=send_mode)
+            model = self._checkpointed(turn.world_id)
             screen = AgentScreen(
                 self._sessionmaker,
                 model,
@@ -303,9 +356,13 @@ class AgentActivities:
                 system=built.system,
                 tools=built.tools,
                 opening=internal_opening(turn),
-                notices=internal_notices(turn, today),
+                notices=notices,
                 first_step=turn.first_step,
-                stream_to_ui=streams,
+                # Resumed, the opening is the card's own result: once the request went
+                # out (approved, or sent without review) it asks for no answer (3.13 E1b).
+                quiet_opening=card_sent and notices is None,
+                # The chat's owner watches every reply, in any org.
+                stream_to_ui=True,
                 model_override=self._model_override,
                 attempt=attempt,
             )
@@ -317,7 +374,6 @@ class AgentActivities:
                 conversation_id=turn.conversation_id,
                 turn_id=turn.turn_id,
                 attempt=attempt,
-                enabled=streams,
             ) as stream:
                 outcome = await run_turn(
                     ctx,
@@ -345,6 +401,7 @@ class AgentActivities:
             effects=outcome.effects,
             card_id=card.card_id if card is not None else None,
             card_tool_use_id=card.tool_use_id if card is not None else None,
+            card_auto=card.auto if card is not None else False,
         )
 
     @activity.defn
@@ -352,7 +409,11 @@ class AgentActivities:
         started = time.monotonic()
         await ensure_world_live(self._sessionmaker, turn.world_id)
         attempt = activity.info().attempt
-        async with _heartbeating(self._heartbeat_interval_s), domain_errors():
+        async with (
+            _heartbeating(self._heartbeat_interval_s),
+            self._budget_refusals(turn.world_id),
+            domain_errors(),
+        ):
             async with self._sessionmaker() as session:
                 world = await repo_world(session, turn.world_id)
                 thread = await repo.get_required(session, Thread, turn.world_id, turn.thread_id)
@@ -370,6 +431,16 @@ class AgentActivities:
                 await uow.commit()
             if turn.turn == 1:
                 notices = _joined(context.world_date_notice(today), notices)
+            fallback = _fallback(turn, thread)
+            nothing_new = not (turn.owed or incoming) and fallback == NOTHING_NEW
+            # Nor does a held message declined without a reason leave anything to
+            # answer: text after it acknowledges the representative's own side, and
+            # sent, it would be held as a new message for the same person to decline.
+            quiet = nothing_new or (not incoming and _only_declined(turn.owed))
+            # Text written after a code-written "nothing new" answers nobody, and on an
+            # ended thread nothing more reaches the counterparty: it stays private rather
+            # than streaming as a message that is never sent (3.13 E3).
+            bare_text_sends = thread.state not in thread_domain.TERMINAL_STATES and not quiet
             executor = RepToolExecutor(
                 self._sessionmaker,
                 RepToolScope(
@@ -379,6 +450,7 @@ class AgentActivities:
                     org_id=turn.org_id,
                     counterparty_org_id=counterparty_id,
                     turn_id=turn.turn_id,
+                    bare_text_sends=bare_text_sends,
                 ),
             )
             ctx = TurnContext(
@@ -400,14 +472,16 @@ class AgentActivities:
                     turn.owed,
                     [m.body for m in incoming],
                     counterparty_name=counterparty.name,
-                    fallback=_fallback(turn, thread),
+                    fallback=fallback,
                 ),
                 notices=notices,
                 stream_to_ui=streams,
                 model_override=self._model_override,
                 attempt=attempt,
+                bare_text_sends=bare_text_sends,
+                quiet_opening=quiet,
             )
-            model = await self._checkpointed(turn.world_id)
+            model = self._checkpointed(turn.world_id)
             async with TurnStream(
                 self._publisher,
                 world_id=turn.world_id,
@@ -416,6 +490,7 @@ class AgentActivities:
                 turn_id=turn.turn_id,
                 attempt=attempt,
                 enabled=streams,
+                typing_every_s=self._typing_every_s,
             ) as stream:
                 outcome = await run_turn(
                     ctx,
@@ -477,14 +552,19 @@ class AgentActivities:
 
         A model call that fails on the last attempt Temporal allows doesn't fail the
         activity (which would end the conversation): an answerer with no draft and a
-        check that couldn't run both hand the consult to a person."""
+        check that couldn't run both hand the consult to a person. A refused
+        reservation does fail it, with its kind: the thread stops on the budget."""
         await ensure_world_live(self._sessionmaker, consult.world_id)
-        async with _heartbeating(self._heartbeat_interval_s), domain_errors():
+        async with (
+            _heartbeating(self._heartbeat_interval_s),
+            self._budget_refusals(consult.world_id),
+            domain_errors(),
+        ):
             async with self._sessionmaker() as session:
                 row = await consults.get(
                     session, world_id=consult.world_id, consult_id=consult.consult_id
                 )
-            model = await self._checkpointed(consult.world_id)
+            model = self._checkpointed(consult.world_id)
             attempt = activity.info().attempt
             started = time.monotonic()
             try:
@@ -630,6 +710,9 @@ def _elapsed_ms(started: float) -> int:
 
 # --- Openings and notices ------------------------------------------------------------
 
+# How every note of a request's end starts, to find the notes a chat holds.
+_NETWORK_NOTE_PREFIX: Final = "Harmony: every conversation on request "
+
 
 def internal_opening(turn: InternalTurnInput) -> list[JsonObject]:
     """A resumed turn opens with the card's result alone; a new one with the member's
@@ -640,19 +723,66 @@ def internal_opening(turn: InternalTurnInput) -> list[JsonObject]:
     return [text_block(m.text) for m in turn.messages] or [text_block(NO_MEMBER_MESSAGE)]
 
 
-def internal_notices(turn: InternalTurnInput, today: date) -> str | None:
-    """Code-written system notes: the world date on the chat's first call, and what
-    changed on its requests."""
+def internal_notices(
+    turn: InternalTurnInput,
+    today: date,
+    *,
+    updates: Sequence[NetworkUpdate],
+    send_mode: str | None = None,
+) -> str | None:
+    """Code-written system notes: the world date on the chat's first call, the chat's
+    new send mode (`send_mode_notice`, new turns only), and what changed on its
+    requests (`updates`, those of the turn's the chat doesn't hold yet)."""
     notes: list[str] = []
-    if turn.turn == 1 and turn.first_step == 0 and turn.card is None:
+    if turn.turn == 1 and _new_turn(turn):
         notes.append(context.world_date_notice(today))
-    notes += [network_note(update) for update in turn.network_updates]
+    if send_mode is not None:
+        notes.append(send_mode)
+    notes += [network_note(update) for update in updates]
     return "\n\n".join(notes) or None
+
+
+async def _unstored_updates(session: AsyncSession, turn: InternalTurnInput) -> list[NetworkUpdate]:
+    """The turn's network updates whose note the chat doesn't hold yet. A failed or
+    refused turn's updates go with the next turn, but one whose first call was stored
+    (it failed later) had already delivered its notes: each goes out once."""
+    if not turn.network_updates:
+        return []
+    stored = list(
+        await session.scalars(
+            select(ChatMessage.content_text).where(
+                ChatMessage.world_id == turn.world_id,
+                ChatMessage.conversation_id == turn.conversation_id,
+                ChatMessage.role == "system",
+                ChatMessage.content_text.contains(_NETWORK_NOTE_PREFIX, autoescape=True),
+            )
+        )
+    )
+    return [
+        update
+        for update in turn.network_updates
+        if not any(network_note(update) in text for text in stored)
+    ]
+
+
+async def _card_sent(session: AsyncSession, turn: InternalTurnInput) -> bool:
+    """Whether the turn resumes on its card after the request went out: approved by the
+    member, or sent without review."""
+    if turn.card is None:
+        return False
+    card = await repo.get_required(session, Card, turn.world_id, turn.card.card_id)
+    return card.status == "approved"
+
+
+def _new_turn(turn: InternalTurnInput) -> bool:
+    """A turn that isn't resuming after a card: notices that nudge Claude to act go
+    only with a member's message or the network's news, never after each send."""
+    return turn.first_step == 0 and turn.card is None
 
 
 def network_note(update: NetworkUpdate) -> str:
     return (
-        f"Harmony: every conversation on request {update.request_id} has ended. "
+        f"{_NETWORK_NOTE_PREFIX}{update.request_id} has ended. "
         "Check get_request_status, then tell the member how it went."
     )
 
@@ -710,6 +840,11 @@ def _fallback(turn: RepTurnInput, thread: Thread) -> str:
     if turn.side == "requester" and turn.turn == 1:
         return OPEN_THREAD
     return NOTHING_NEW
+
+
+def _only_declined(owed: Sequence[OwedResult]) -> bool:
+    """Whether a turn is owed nothing but held messages declined with no reason given."""
+    return bool(owed) and all(result.content == answerer.HELD_DECLINED for result in owed)
 
 
 def _tier(org: Org) -> Tier:

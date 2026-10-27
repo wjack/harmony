@@ -19,8 +19,18 @@ from harmony.agents.consult import (
 )
 from harmony.agents.discovery import SCREENER_OUTPUT_SCHEMA, Verdict
 from harmony.agents.runtime import PerformativeName
-from harmony.agents.tools.internal import ANSWERER_TOOLS, INTERNAL_INPUTS, INTERNAL_TOOLS
-from harmony.agents.tools.rep import REP_INPUTS, REP_TOOLS
+from harmony.agents.tools.internal import (
+    ANSWERER_TOOLS,
+    AUTO_SEND_MAX_RECIPIENTS,
+    INTERNAL_INPUTS,
+    INTERNAL_TOOLS,
+    SEND_NETWORK_REQUEST_TOOL,
+    TITLE_MAX_CHARS,
+    RecipientInput,
+    SendNetworkRequestInput,
+)
+from harmony.agents.tools.rep import CLOSE_TOOL, REP_INPUTS, REP_TOOLS, SEND_MESSAGE_TOOL
+from harmony.temporal.workflows.payloads import NetworkRequestInput
 
 TOOLS: Final = [(tool, REP_INPUTS) for tool in REP_TOOLS] + [
     (tool, INTERNAL_INPUTS) for tool in INTERNAL_TOOLS
@@ -99,6 +109,47 @@ def test_every_representative_gets_the_same_three_tools() -> None:
     }
 
 
+def test_a_request_names_itself_and_asks_each_recipient_its_own_part() -> None:
+    """3.13 E2, E4, E7, E13: required in the schema and enforced by the input models,
+    since the tools aren't strict."""
+    schema: Any = SEND_NETWORK_REQUEST_TOOL["input_schema"]
+    items = schema["properties"]["recipients"]["items"]
+    assert set(items["required"]) == {"org", "reason", "title", "ask", "suggested"}
+    assert set(schema["required"]) == {"title", "brief", "recipients"}
+    for title in (schema["properties"]["title"], items["properties"]["title"]):
+        assert title["maxLength"] == TITLE_MAX_CHARS == 60
+    assert "never a budget" in items["properties"]["title"]["description"]
+    assert "nothing about the other organizations" in items["properties"]["ask"]["description"]
+    assert "starts it unticked" in items["properties"]["suggested"]["description"]
+    assert "Put each organization's part" in schema["properties"]["brief"]["description"]
+    for model in (RecipientInput, SendNetworkRequestInput):
+        assert all(field.is_required() for field in model.model_fields.values())
+
+
+def test_the_request_tool_is_a_harmony_network_request_in_either_send_mode() -> None:
+    description = str(SEND_NETWORK_REQUEST_TOOL["description"])
+    assert description.startswith("Propose a Harmony Network Request")
+    # Mode-neutral (3.10): the tool bytes never depend on the chat's setting.
+    assert "in a chat set to send without review it goes out at once" in description
+    assert "The result says which" in description
+    assert "Send one request per call." in description
+
+
+def test_a_request_sent_without_review_opens_every_conversation_at_once() -> None:
+    default = NetworkRequestInput.model_fields["max_active_threads"].default
+    assert default == AUTO_SEND_MAX_RECIPIENTS
+
+
+def test_the_representative_is_told_how_to_wait_and_what_a_message_is() -> None:
+    """3.13 E1, E3."""
+    close = str(CLOSE_TOOL["description"])
+    assert close.startswith("End the conversation for good, for both sides")
+    assert "Not for waiting: to wait for their reply, stop calling tools." in close
+    send = str(SEND_MESSAGE_TOOL["description"])
+    assert "They read the text exactly as written." in send
+    assert "Never send notes about the conversation" in send
+
+
 def _objects(schema: Any) -> Iterator[dict[str, Any]]:
     if isinstance(schema, dict):
         if schema.get("type") == "object":
@@ -144,4 +195,5 @@ def test_the_draft_has_only_the_fields_the_spec_names() -> None:
         "needs_human_reason",
         "route",
         "rationale",
+        "short_question",
     ]

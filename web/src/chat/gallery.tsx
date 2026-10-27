@@ -1,7 +1,8 @@
 /**
  * The chat's /__gallery sections: the new-chat screen, Alex's conversation at each stage
- * of the story (over stateful fixtures, so its cards really work), and each card on
- * its own in every state.
+ * of the story (over stateful fixtures, so its cards really work), the live demo's
+ * variants (sending without review, a spent budget, long text), and each card on its
+ * own in every state.
  */
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -15,9 +16,10 @@ import {
   OPENING_MESSAGE,
   requestAt,
   TURN,
+  type ChatOptions,
   type ChatStage,
 } from "../fixtures/chat";
-import { members } from "../fixtures/shell";
+import { budgets, members } from "../fixtures/shell";
 import { useFixtureEmit } from "../gallery/fixtureContext";
 import type { GallerySection } from "../gallery/types";
 import { useUnavailable } from "../shell/unavailable";
@@ -30,7 +32,8 @@ import { Composer } from "./Composer";
 import { toBlocks, type ActivityItem } from "./items";
 import { ActivityLine, AssistantMessage, StreamingSpark, UserMessage } from "./Messages";
 import { NewChat } from "./NewChat";
-import type { ChatItem, ChatItemOf, ChatItemType } from "./types";
+import { initialDraft, type OutreachDraft } from "./outreachDraft";
+import type { ChatItem, ChatItemOf, ChatItemType, SendMode } from "./types";
 
 const noop = () => undefined;
 const ALEX = members.alex.id;
@@ -39,8 +42,19 @@ function itemsOf<T extends ChatItemType>(items: readonly ChatItem[], type: T): C
   return items.filter((item): item is ChatItemOf<T> => item.type === type);
 }
 
-function itemsAt(stage: ChatStage, patch: Partial<ReturnType<typeof initialState>> = {}): ChatItem[] {
-  return conversationAt({ ...initialState(stage), ...patch }).items;
+function itemsAt(
+  stage: ChatStage,
+  patch: Partial<ReturnType<typeof initialState>> = {},
+  options: ChatOptions = {},
+): ChatItem[] {
+  return conversationAt({ ...initialState(stage, options), ...patch }).items;
+}
+
+/** A send mode the section keeps itself, over the organization's `orgDefault`. */
+function useLocalSendMode(orgDefault: boolean, initial: boolean | null = null) {
+  const [override, setOverride] = useState(initial);
+  const sendMode: SendMode = { override, org_default: orgDefault, effective: override ?? orgDefault };
+  return { sendMode, onSendModeChange: setOverride };
 }
 
 function itemOf<T extends ChatItemType>(items: readonly ChatItem[], type: T): ChatItemOf<T> {
@@ -59,8 +73,9 @@ function Column({ children }: { children: ReactNode }) {
   return <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">{children}</div>;
 }
 
-function NewChatSection() {
+function NewChatSection({ orgDefault = false }: { orgDefault?: boolean }) {
   const unavailable = useUnavailable();
+  const sendMode = useLocalSendMode(orgDefault);
   const [sending, setSending] = useState(false);
   return (
     <NewChat
@@ -73,6 +88,7 @@ function NewChatSection() {
         setSending(true);
       }}
       onUnavailable={unavailable}
+      {...sendMode}
     />
   );
 }
@@ -115,6 +131,10 @@ function ComposerSection() {
   const unavailable = useUnavailable();
   const [home, setHome] = useState("");
   const [reply, setReply] = useState("Can Northlake do it by Nov 4 instead?");
+  const [auto, setAuto] = useState("");
+  const reviewed = useLocalSendMode(false);
+  const replyMode = useLocalSendMode(false);
+  const unreviewed = useLocalSendMode(true);
   return (
     <div className="mx-auto flex w-full max-w-[768px] flex-col gap-8">
       <Composer
@@ -124,8 +144,43 @@ function ComposerSection() {
         onSubmit={noop}
         placeholder="How can I help you today?"
         onUnavailable={unavailable}
+        {...reviewed}
       />
-      <Composer value={reply} onChange={setReply} onSubmit={noop} placeholder="Reply…" onUnavailable={unavailable} />
+      <Composer
+        value={reply}
+        onChange={setReply}
+        onSubmit={noop}
+        placeholder="Reply…"
+        onUnavailable={unavailable}
+        {...replyMode}
+      />
+      <Composer
+        value={auto}
+        onChange={setAuto}
+        onSubmit={noop}
+        placeholder="Reply…"
+        onUnavailable={unavailable}
+        {...unreviewed}
+      />
+    </div>
+  );
+}
+
+/** The composer while today's budget is spent: the strip says so, and nothing sends. */
+function BlockedComposerSection() {
+  const unavailable = useUnavailable();
+  const [reply, setReply] = useState("Can Northlake do it by Nov 4 instead?");
+  const sendMode = useLocalSendMode(false);
+  return (
+    <div className="mx-auto w-full max-w-[768px] pt-6">
+      <Composer
+        value={reply}
+        onChange={setReply}
+        onSubmit={noop}
+        placeholder="Reply…"
+        onUnavailable={unavailable}
+        {...sendMode}
+      />
     </div>
   );
 }
@@ -151,16 +206,19 @@ function MessagesSection() {
   );
 }
 
-function OutreachApprovalSection() {
-  const card = itemOf(itemsAt("drafted"), "outreach_card");
+function OutreachApprovalSection({ options = {} }: { options?: ChatOptions }) {
+  const card = itemOf(itemsAt("drafted", {}, options), "outreach_card");
   const [log, setLog] = useState("Choose an option: nothing is sent from here.");
   const [feedback, setFeedback] = useState("");
+  const [draft, setDraft] = useState<OutreachDraft>(() => initialDraft(card));
   return (
     <div className="mx-auto w-full max-w-[768px]">
       <OutreachApproval
         item={card}
         busy={false}
         error={null}
+        draft={draft}
+        onDraftChange={setDraft}
         onApprove={(body) => {
           setLog(`approve ${JSON.stringify(body)}`);
         }}
@@ -189,13 +247,21 @@ function InlineQuestionSection() {
       <InlineQuestionCard
         item={open}
         busy={busy}
+        blocked={null}
         error={null}
         onAnswer={() => {
           setBusy(true);
         }}
       />
-      <InlineQuestionCard item={goAhead} busy={false} error="Already answered by Alex Chen." onAnswer={noop} />
-      <InlineQuestionCard item={resolved} busy={false} error={null} onAnswer={noop} />
+      <InlineQuestionCard
+        item={goAhead}
+        busy={false}
+        blocked={null}
+        error="Already answered by Alex Chen."
+        onAnswer={noop}
+      />
+      <InlineQuestionCard item={resolved} busy={false} blocked={null} error={null} onAnswer={noop} />
+      <InlineQuestionCard item={open} busy={false} blocked="Live models are paused" error={null} onAnswer={noop} />
     </Column>
   );
 }
@@ -209,6 +275,13 @@ export default [
     layout: "page",
     height: 640,
     render: () => <NewChatSection />,
+  },
+  {
+    title: "New chat: organization sends without review",
+    description: "Henderson's default is to send without review: the amber chip shows; its menu changes this chat only.",
+    layout: "page",
+    height: 640,
+    render: () => <NewChatSection orgDefault />,
   },
   {
     title: "Chat: Claude working, streaming",
@@ -226,8 +299,47 @@ export default [
     render: () => <Chat />,
   },
   {
+    title: "Chat: long brief and asks",
+    description: "The brief and each ask clamp behind View more in the choose and subset views; the edit view's boxes grow.",
+    fixtures: chatRoutes("drafted", { long: true }),
+    ...PAGE,
+    height: 900,
+    render: () => <Chat />,
+  },
+  {
+    title: "Chat: sending without review",
+    description: "This chat sends without review: Claude's request goes out with no card to approve.",
+    fixtures: chatRoutes("drafted", { auto: true, override: true }),
+    ...PAGE,
+    render: () => <Chat />,
+  },
+  {
+    title: "Chat: sent without review",
+    fixtures: chatRoutes("sent", { auto: true, override: true }),
+    ...PAGE,
+    render: () => <Chat />,
+  },
+  {
     title: "Chat: request sent",
     fixtures: chatRoutes("sent"),
+    ...PAGE,
+    render: () => <Chat />,
+  },
+  {
+    title: "Chat: today's budget is used up",
+    description: "Claude's turn stopped on the daily cap and Ridgeline's thread with it; the composer waits for the reset.",
+    fixtures: {
+      ...chatRoutes("sent", { turnFailure: "daily_budget", stopReason: "daily_budget" }),
+      "GET /api/budget": budgets.dailyExhausted,
+    },
+    ...PAGE,
+    height: 820,
+    render: () => <Chat />,
+  },
+  {
+    title: "Chat: model error",
+    description: "The model service failed after its retries; the next message tries again.",
+    fixtures: chatRoutes("sent", { turnFailure: "model_error" }),
     ...PAGE,
     render: () => <Chat />,
   },
@@ -260,7 +372,16 @@ export default [
     height: 320,
     render: () => <ChatScreen conversationId="0b1d7a3e-0000-4000-8000-00000000ffff" />,
   },
-  { title: "Composer", render: () => <ComposerSection /> },
+  {
+    title: "Composer",
+    description: "Home and reply, then a chat that sends without review: the chip opens the send-mode menu.",
+    render: () => <ComposerSection />,
+  },
+  {
+    title: "Composer: budget used up",
+    fixtures: { "GET /api/budget": budgets.dailyExhausted },
+    render: () => <BlockedComposerSection />,
+  },
   { title: "Messages and activity", render: () => <MessagesSection /> },
   {
     title: "Activity line",
@@ -285,7 +406,27 @@ export default [
       </Column>
     ),
   },
+  {
+    title: "Outreach card: sent without review",
+    description: "Sending, sent, and not sent with the reason; none waits on the member.",
+    render: () => (
+      <Column>
+        <OutreachCard item={itemOf(itemsAt("drafted", {}, { auto: true }), "outreach_card")} />
+        <OutreachCard item={itemOf(itemsAt("sent", {}, { auto: true }), "outreach_card")} />
+        <OutreachCard
+          item={itemOf(
+            itemsAt("drafted", {}, { auto: true, autoFailure: "Calder Computational wasn't screened as a fit." }),
+            "outreach_card",
+          )}
+        />
+      </Column>
+    ),
+  },
   { title: "Outreach approval (ask-user card)", render: () => <OutreachApprovalSection /> },
+  {
+    title: "Outreach approval: long brief and asks",
+    render: () => <OutreachApprovalSection options={{ long: true }} />,
+  },
   {
     title: "Request status",
     description: "Sent; waiting on people at both ends; both closed with Henderson's summaries.",
@@ -294,6 +435,17 @@ export default [
         <RequestStatusPanel view={requestAt(initialState("sent"))} memberId={ALEX} />
         <RequestStatusPanel view={requestAt(initialState("question"))} memberId={ALEX} />
         <RequestStatusPanel view={requestAt(initialState("closed"))} memberId={ALEX} />
+      </Column>
+    ),
+  },
+  {
+    title: "Request status: stopped",
+    description: "Ridgeline's thread stopped on today's cap; the line says why, by the budget's state now.",
+    fixtures: { "GET /api/budget": budgets.dailyExhausted },
+    render: () => (
+      <Column>
+        <RequestStatusPanel view={requestAt(initialState("sent", { stopReason: "daily_budget" }))} memberId={ALEX} />
+        <RequestStatusPanel view={requestAt(initialState("sent", { stopReason: "refused" }))} memberId={ALEX} />
       </Column>
     ),
   },

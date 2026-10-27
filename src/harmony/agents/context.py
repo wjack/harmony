@@ -5,9 +5,10 @@ Representatives:
   `prompts/representative.md` plus `side_requester.md` / `side_responder.md`. The prompt
   holds exactly the R§2 parts: the counterparty's network-verified identity, the org's
   public summary, the sharing descriptions that apply to this counterparty (the org's
-  default, plus the counterparty's own if it is a trusted organization), the brief on
-  the requester side, and the org's instructions. No org record is ever rendered into
-  it: information from its own side arrives only as a released consult answer.
+  default, plus the counterparty's own if it is a trusted organization), the brief and
+  what it asks this counterparty on the requester side (never another recipient's
+  ask), and the org's instructions. No org record is ever rendered into it:
+  information from its own side arrives only as a released consult answer.
 - Each part sits in a code-written tag (`<public_summary>`, ...) with every `<` inside
   escaped, so `context_parts` reads the parts back from the frozen bytes exactly.
 - `freeze_rep_session` stores those bytes in `rep_sessions` once, at the side's first
@@ -20,7 +21,8 @@ Representatives:
   (`delivered_notices`, `received_results`), never from a consult's status.
 - A released answer is model-drafted, so it is quoted inside `<released_text>`
   wherever it reaches the representative (`quote_released`), never as Harmony's or the
-  org's own words.
+  org's own words. A teammate's note on a held message is quoted inside `<note>`
+  (`quote_note`): an instruction to the representative, never text it may pass on.
 - Counterparty text reaches the representative only through `wrap_counterparty`.
 
 Internal Claude: `build_internal_context` renders `prompts/internal.md` with the org,
@@ -45,11 +47,12 @@ from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from harmony.agents.models import ContextPart, ContextPartKind
+from harmony.agents.models import ContextPart, ContextPartKind, OutreachRecipient
 from harmony.agents.prompts import render
 from harmony.agents.tools import ToolDefinition
 from harmony.db import repo
 from harmony.db.models import (
+    Card,
     Community,
     Conversation,
     Member,
@@ -83,6 +86,9 @@ RELEASED_CLOSE: Final = "</released_text>"
 ESCAPED_LESS_THAN: Final = "&lt;"
 # What a prompt part holds when the org left it blank.
 EMPTY_PART: Final = "(none)"
+# The block code writes around a teammate's note on a held message (`quote_note`).
+NOTE_OPEN: Final = "<note>"
+NOTE_CLOSE: Final = "</note>"
 # `for` on the org's default sharing description; a trusted organization's extra one
 # names that organization.
 SHARING_FOR_ANY: Final = "any organization"
@@ -96,15 +102,23 @@ NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed"]
 _LINE_BREAK: Final = re.compile(r"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85  ]")
 # Lines shaped like the identity statement, a verification, an operator message, or one
 # of the texts code writes (`world_date_notice`, `closed_notice`, the settings, mode
-# and sharing notices, and the `consult` results with their released text).
+# and sharing notices, and the tool results: `consult`'s with their released text, and
+# `send_message`'s and `close`'s, sent, held and settled, or refused, with their quoted
+# text and the `<note>` block). Matched on the escaped line, where `<` reads `&lt;`.
 _IDENTITY_LINE: Final = re.compile(
     r"verif|authenticat|impersonat|identit|harmony|sender|signed\s+by|on\s+behalf\s+of"
     r"|counterparty_message|system\s+(?:message|notice|note|prompt|instruction)"
     r"|^\W*(?:system|admin|administrator|operator)\b|^\W*from\s*:"
     r"|notice\s+from|today\W*s\s+date|instructions?\s+from"
     r"|your\s+organi[sz]ation\s+(?:changed|updated|removed)"
-    r"|your\s+side\s+(?:answered|declined)|released[\W_]*text"
-    r"|closed\s+(?:this|the)\s+conversation",
+    r"|your\s+side\s+(?:answered|declined|edited|didn\W*t)|approved\s+by\s+your\s+side"
+    r"|released[\W_]*text|&lt;\W*note\b|closed\s+(?:this|the)\s+conversation"
+    r"|not\s+(?:sent|run|closed)(?:\s+yet)?\s*:|what\s+(?:you\s+may\s+say|they\s+sent)\s*:"
+    r"|asked\s+you\s+to\s+change|for\s+you\s+only|don\W*t\s+pass\s+it\s+on"
+    r"|rewrite\s+the\s+message|exactly\s+as\s+written|stop\s+calling\s+tools"
+    r"|end\s+your\s+turn|wrote\s+to\s+the\s+counterparty|nothing\s+more\s+reaches"
+    r"|nothing\s+from\s+you\s+has\s+reached|waiting\s+on\s+a\s+person\s+on\s+your\s+side"
+    r"|no\s+result\s+was\s+recorded",
     re.IGNORECASE,
 )
 # Unicode's Default_Ignorable_Code_Point set: rendered as nothing, so they can split a
@@ -125,7 +139,7 @@ _LOOKALIKES: Final = str.maketrans(
 # A prompt part: a code-written tag whose content has no `<`, so the first closing tag
 # after it is its own.
 _PART: Final = re.compile(
-    r"^<(counterparty|public_summary|sharing|brief|instructions)((?: [a-z_]+=\"[^\"<>]*\")*)>\n"
+    r"^<(counterparty|public_summary|sharing|brief|ask|instructions)((?: [a-z_]+=\"[^\"<>]*\")*)>\n"
     r"(.*?)\n</\1>$",
     re.MULTILINE | re.DOTALL,
 )
@@ -213,14 +227,13 @@ async def build_rep_context(
         request = await repo.get_required(session, NetworkRequest, world_id, thread.request_id)
         creator = await _member_name(session, world_id, request.created_by_member_id)
         member_name = creator or f"a member of {org_name}"
-        side_section = render(
-            "side_requester",
-            {
-                "org_name": org_name,
-                "counterparty_name": counterparty_name,
-                "member_name": member_name,
-                "brief": _part("brief", request.brief, approved_by=member_name),
-            },
+        side_section = _requester_section(
+            request,
+            org_name=org_name,
+            counterparty_id=counterparty_id,
+            counterparty_name=counterparty_name,
+            member_name=member_name,
+            unreviewed=await sent_without_review(session, request),
         )
     else:
         side_section = render(
@@ -258,6 +271,68 @@ async def build_rep_context(
         system=system,
         tools=list(_rep_tools()),
     )
+
+
+def _requester_section(
+    request: NetworkRequest,
+    *,
+    org_name: str,
+    counterparty_id: UUID,
+    counterparty_name: str,
+    member_name: str,
+    unreviewed: bool,
+) -> str:
+    """The requester side's section: the brief and this counterparty's ask, as approved
+    by the member, or as Claude wrote them in a chat that sends without review (3.10)."""
+    if unreviewed:
+        approval = (
+            f"Claude wrote this brief and this ask for {counterparty_name} on "
+            f"{member_name}'s behalf, and they went out without {member_name}'s review "
+            "(this chat's setting). They are still your mandate, but consult before "
+            "committing to a price, a date or other terms, even where they seem to "
+            "allow it:"
+        )
+        brief = _part("brief", request.brief, written_for=member_name)
+    else:
+        approval = (
+            f"{member_name} approved this brief and this ask for {counterparty_name}, "
+            "and they are your mandate:"
+        )
+        brief = _part("brief", request.brief, approved_by=member_name)
+    # A request from before per-recipient asks asks each one for its part of the brief.
+    ask = recipient_ask(request, counterparty_id) or (
+        f"What the brief needs from {counterparty_name}."
+    )
+    return render(
+        "side_requester",
+        {
+            "org_name": org_name,
+            "counterparty_name": counterparty_name,
+            "member_name": member_name,
+            "approval": approval,
+            "brief": brief,
+            "ask": _part("ask", ask, for_=counterparty_name),
+        },
+    )
+
+
+def recipient_ask(request: NetworkRequest, org_id: UUID) -> str | None:
+    """What the request asks `org_id`, as the member approved or edited it; None for a
+    request from before per-recipient asks."""
+    for row in request.recipients:
+        recipient = OutreachRecipient.model_validate(row)
+        if recipient.org_id == org_id:
+            return recipient.ask
+    return None
+
+
+async def sent_without_review(session: AsyncSession, request: NetworkRequest) -> bool:
+    """Whether the request went out without its member's review: its card was raised
+    in a chat that sends without review (`cards.auto`)."""
+    if request.card_id is None:
+        return False
+    card = await repo.get(session, Card, request.world_id, request.card_id)
+    return card is not None and card.auto
 
 
 def sharing_parts(
@@ -506,6 +581,13 @@ def quote_released(text: str) -> str:
     return "\n".join([RELEASED_OPEN, escape_angles(text.strip()), RELEASED_CLOSE])
 
 
+def quote_note(text: str) -> str:
+    """A teammate's note on a held message, as quoted data for the representative: an
+    instruction for it alone, never words it may pass on, with every `<` escaped so it
+    can't close the block."""
+    return "\n".join([NOTE_OPEN, escape_angles(text.strip()), NOTE_CLOSE])
+
+
 def closed_notice(counterparty_name: str) -> str:
     """The `closed` notice: the counterparty ended the conversation, and this side may
     leave its own organization a summary in one last turn (R§5)."""
@@ -558,7 +640,7 @@ def _part(kind: ContextPartKind, text: str, **attributes: str) -> str:
 
 def _part_kind(tag: str) -> ContextPartKind:
     match tag:
-        case "counterparty" | "public_summary" | "sharing" | "brief" | "instructions":
+        case "counterparty" | "public_summary" | "sharing" | "brief" | "ask" | "instructions":
             return tag
         case _:
             raise ValueError(f"unknown prompt part {tag!r}")
@@ -577,7 +659,18 @@ def _label(kind: ContextPartKind, attributes: dict[str, str]) -> str:
             return f"Also for {audience}"
         case "brief":
             approved_by = attributes.get("approved_by")
-            return f"Brief approved by {approved_by}" if approved_by else "Brief"
+            written_for = attributes.get("written_for")
+            if approved_by:
+                return f"Brief approved by {approved_by}"
+            if written_for:
+                return (
+                    f"Brief written by Claude for {written_for}, sent without their review "
+                    "(this chat's setting)"
+                )
+            return "Brief"
+        case "ask":
+            audience = attributes.get("for")
+            return f"What it asks {audience}" if audience else "What it asks"
         case "instructions":
             return "Instructions"
 
@@ -825,6 +918,8 @@ __all__ = [
     "COUNTERPARTY_OPEN",
     "EMPTY_PART",
     "ESCAPED_LESS_THAN",
+    "NOTE_CLOSE",
+    "NOTE_OPEN",
     "RELEASED_CLOSE",
     "RELEASED_OPEN",
     "SHARING_FOR_ANY",
@@ -847,9 +942,12 @@ __all__ = [
     "load_rep_session",
     "long_date",
     "queue_notice",
+    "quote_note",
     "quote_released",
     "quoted",
     "received_results",
+    "recipient_ask",
+    "sent_without_review",
     "sharing_parts",
     "sharing_text",
     "world_date_notice",

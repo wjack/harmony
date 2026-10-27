@@ -168,22 +168,22 @@ flowchart LR
 
 | Table | Purpose | Key fields |
 |---|---|---|
-| `sessions` | A visitor | desk world, network world, acting member per world, **epoch** (bumped on act-as), budget lineage, access code |
+| `sessions` | A visitor | desk world, network world, acting member per world, **epoch** (bumped on act-as), budget lineage, client key hash (set when the session came from a known client network) |
 | `worlds` | One sandboxed copy of the network | scenario, **mode** (`live`/`replay`), status (`live`/`retired`), build_sha, created_at, ff_offset |
 | `world_workflows` | The Temporal workflows started for a world | workflow ID and type; retirement terminates them by ID (§7) |
 | `orgs` | Network participants | slug, name, kind, featured, current settings version |
 | `rep_settings` | Versioned prompt-facing settings (§9) | org_id, version, **public summary** (prose), instructions |
-| `rep_policy` | Live policy, read at each decision | org_id, **autonomy** (the default mode), **sharing description**, directory visibility, **routing prompt**, default assignee |
+| `rep_policy` | Live policy, read at each decision | org_id, **autonomy** (the default mode), **sharing description**, directory visibility, **routing prompt**, default assignee, send without review (the org's default for its members' chats) |
 | `trusted_organizations` | Counterparties an org treats differently (§9) | org_id and counterparty_org_id (the key; a CHECK keeps them different), autonomy (empty means the org's default), sharing description ("Also share with them"), updated_by, version |
 | `screenings` | Discovery verdicts, one per (search, org), first write wins | search_id, org_id, fit, reason |
 | `communities`, `org_communities` | Trusted circles, such as a university or a consortium (§17.6) | name, membership verified by the network |
 | `members` | People in orgs; these are the switchable accounts | org_id, name, title, **role** (`admin` / `member`), **profile** (what they handle, in prose, read by the router) |
 | `knowledge_items` | The org's own records: price lists, schedules, past jobs, notes | org_id, title, body, doc_id. Only internal Claude's tools read them. |
 | `documents` | Files in object storage, with text extracted at upload and frozen | org_id, key, mime, size, text. Only internal Claude's tools read them. |
-| `conversations`, `chat_messages` | Internal Claude chats | owner member, seq, content (raw wire JSON) |
-| `cards` | Approval cards in a chat | conversation, turn, tool_use_id, kind (`outreach`), payload, status, resolution |
-| `network_requests` | Outbound requests | requester org, origin conversation, card, **brief** (free text; the request's title is its first line), recipients, status |
-| `threads` | One per (request, responder) | requester and responder orgs, **state** (§7), side to move, settings versions pinned per side, turn count, deadline |
+| `conversations`, `chat_messages` | Internal Claude chats | owner member, send mode (null follows the org's default), seq, content (raw wire JSON) |
+| `cards` | Approval cards in a chat | conversation, turn, tool_use_id, kind (`outreach`), payload, status, resolution, **auto** (raised in a chat that sends without review; no member can act on it) |
+| `network_requests` | Outbound requests | requester org, origin conversation, card, **title** (internal Claude's name for it, shown to the requester only), **brief** (free text), recipients with a title and an ask each, status |
+| `threads` | One per (request, responder) | requester and responder orgs, **title** (the recipient's subject, which both sides see), **state** (§7), side to move, settings versions pinned per side, turn count, deadline, stop reason (a cap, a pause or a model error stopped it) |
 | `thread_messages` | What crosses the network | seq, from_org, **kind** (`message` / `close`), body, **provenance** (`agent` / `agent_approved` / `human`), authoring or approving member |
 | `thread_access` | Which members can see a thread | thread_id, member_id, reason (`routed` / `shared` / `admin`), shared_by, question |
 | `internal_notes` | Org-only discussion on a thread | thread_id, author (member or internal Claude), body, mentions |
@@ -198,7 +198,8 @@ flowchart LR
 | `reviews` | Reviews between orgs | about org, by org, rating, text |
 | `events` | Outbox, SSE feed and replay log | **(world_id, seq)**, scope (org, member, world or demo), type, entity type, id and **version**, full entity payload |
 | `world_event_seq` | Per-world event counter | world_id, seq |
-| `budgets`, `budget_reservations` | Spend caps that are **not** world-scoped | key (session lineage, access code, daily, live-network), cap, spent, reserved |
+| `budgets`, `budget_reservations` | Spend caps that are **not** world-scoped (§14) | key (`lineage:`, `client:` per network and day, `daily:`, `global`), cap, spent, reserved |
+| `live_controls` | The hosted live switch (§14), one row `live` | paused, provider blocked until |
 
 `model_calls` is the per-call ledger in every environment (§14). Events carry full entity snapshots with a version, not diffs, so a recorded run can be replayed into a fresh world (§11.6).
 
@@ -447,9 +448,9 @@ The unstructured revision removed the Files and knowledge, Standing permissions,
 ## 10. Inbox and routing
 
 - **Routing is a prompt; internal Claude routes and humans reassign.**
-  - The consult answerer reads the org's routing prompt and member profiles and returns assignees with a one-line reason. This happens in the same loop as the draft, so there is no extra model call.
+  - The consult answerer reads the org's routing prompt and member profiles and returns each assignee with a short why, addressed to that person, plus a one-line `short_question` for whoever reviews the item. This happens in the same loop as the draft, so there is no extra model call.
   - Code checks the assignees against the org's members.
-  - The reason is shown on the item: "Routed to Helen: instrument scheduling and priority requests."
+  - The why is shown on the item: "Routed to you: you run instrument scheduling and priority requests."
   - **Reassign** moves the item and its thread access to someone else. It records nothing for learning (§17.12).
 - **What stays in code:**
   - **Admins** can always see every thread.
@@ -459,13 +460,20 @@ The unstructured revision removed the Files and knowledge, Standing permissions,
 - **Thread access.** A thread is open to its routed members, members it has been shared with, and admins. It isn't open org-wide by default, because threads can carry client-confidential details.
 - **Sharing a thread with a teammate.** Anyone with access can share a thread with a teammate, optionally with a question (@mention). The teammate is notified, and the thread appears under **Shared with you** in their inbox.
 - **Internal notes.** Members and internal Claude discuss a thread in notes that only the org can see. They're never visible to the representative or the counterparty. The answerer reads them when it redrafts. A note's content reaches the representative only inside an answer someone releases.
-- **The escalation panel** shows:
-  - the question, or under *Ask* the held message;
-  - "Why this needs you": the answerer's reason, the sharing check's reason, or *Ask*;
-  - the draft answer, editable;
-  - what internal Claude looked at, as activity lines from its tool calls;
-  - the actions: **Approve & send**, **Edit**, **Redraft** (with an instruction), **Decline**, **Take over** (the reply is labeled as from a human) and **Reassign**, plus a link to edit what the org shares with that organization.
-- **"What our representative saw."** A drawer in the thread view shows the parts of that representative's frozen prompt: the public summary, the instructions, the sharing description, the brief on the requester side, and the counterparty's verified identity. It also shows the notices Harmony sent it since (a changed setting, mode or sharing description replaces what the prompt says), and every answer released to it, with who released it and when. Both are read from its stored transcript, so a result the thread ended before giving isn't listed. Nothing else from its own side ever entered its context.
+- **The decision card** sits inline after the last row of the request view's transcript (§12) and scrolls with it. It shows:
+  - an eyebrow saying whose answer Claude needs, or what it wants to send, and to whom;
+  - a short title: the answerer's `short_question` for a consult, or "Send this reply to {them}?" for a held message;
+  - "Why it came to you": the answerer's or the sharing check's reason, then "Routed to you: {why}" with **Reassign**, or the default-assignee line;
+  - the draft reply, editable;
+  - "Looked at", one line that expands to internal Claude's tool activity;
+  - Claude's reasoning (collapsed), and a link to edit what the org shares with that organization.
+- **One composer** at the bottom of the request view replaces the action list and the separate note box:
+  - With an open item and nothing typed, it offers **Decline**, **Edit** and **Approve and send** (⌘↵).
+  - Typed text becomes **Redraft** for a consult, or **Send back to Claude** for a held message, beside **Add note** and **Decline**. Send back is the `revise` action: our representative gets the text as an instruction it must not pass on, never as releasable text.
+  - **Decline** is its own step, with a reason the counterparty may read. It sets typed note text aside (Cancel restores it); note text is never reused as that reason.
+  - With no open item, the composer adds internal notes, and an @mention shares the thread.
+  - The API still accepts `take_over` (the reply labeled as from a person); the request view doesn't offer it.
+- **"What our representative saw."** In the request view's Details, it shows the parts of that representative's frozen prompt: the public summary, the instructions, the sharing description, the brief and this recipient's own ask on the requester side, and the counterparty's verified identity. It also shows the notices Harmony sent it since (a changed setting, mode or sharing description replaces what the prompt says), and every answer released to it, with who released it and when. Both are read from its stored transcript, so a result the thread ended before giving isn't listed. Nothing else from its own side ever entered its context.
 - **Concurrency.** A resolution is a Temporal Update validated against the escalation's state (§7). A second resolver sees "Resolved by Helen 10 seconds ago" instead of a double send.
 - **Priority.** Items are sorted by how long the counterparty has waited.
 
@@ -473,12 +481,16 @@ The unstructured revision removed the Files and knowledge, Standing permissions,
 
 ### 11.1 Worlds, sessions and reset
 
-**A visitor session holds two worlds.**
+**Each browser session has its own private desk world.** One passcode doesn't mean one shared world: isolation is structural (composite `(world_id, id)` keys, world-scoped events and world-scoped workflow IDs), and the Landing promises that nothing is shared with other visitors.
 - The **desk world** is live: the suggested request, free exploration of the desktop app, and the network view of whatever the visitor's requests set in motion.
-- The **network world** holds the big run: a replay by default, or a live run behind the access code.
-- Keeping them apart means replayed events never collide with a visitor's own actions.
-- A world is created lazily on the visitor's first interaction, not on page view. Creation is rate-limited per IP, and idle worlds retire on a TTL.
-- Mode transitions happen in the API. "Run live" forks a fresh live network world; a replay world never turns live.
+- The **network world** will hold the big run, a replay by default, apart from the desk world so replayed events never collide with a visitor's own actions. It is deferred to P3: until then `POST /api/session/start?world=network` returns 404.
+- A world is created lazily on the visitor's first interaction (`POST /api/session/start`), not on page view.
+- **Nothing model-driven runs when a world is created.** Session start, Reset, a build-SHA fork and a re-create after a wipe start no workflow that calls a model.
+- **Seeded requests start lazily.** A scenario's seeded open request (harmony-demo's Vantage probe of Northlake) starts the first time the session's acting member belongs to one of its recipient orgs or to its requester org: acting as Helen or Raj at Northlake, or Jordan at Vantage. The check runs after act-as and after a world switch, and the request's `world_workflows` row makes it start at most once per world. While the visitor's live calls can't run (paused, a spent cap, a provider block), it waits for the next act-as or switch, since its threads' first turns would be refused and end for good. Acting as Alex starts nothing, which is how the hosted checks start sessions without spending.
+- **Creation limits** apply only while the passcode gate is on (§11.4), in process on the single web instance:
+  - 5 new sessions per known client network per UTC day, and 200 a day overall; beyond either, 429 `too_many_attempts`. Each new session mints a fresh budget lineage, so this bounds how many one passcode holder can mint;
+  - Reset and a re-create after a wipe: 20 an hour per visitor session, keyed on the session, so a shared client key can't throttle anyone else's Resets.
+- Idle worlds don't retire on a timer: with nothing auto-started, an idle world costs only rows, and the admin wipe clears them.
 
 **Reset forks a new world and retires the old one.** It doesn't truncate tables. Truncating while workers are mid-turn would race them; forking avoids that. The user gets a fresh world instantly, acting as the story's member again (back at the start of the story), and retirement runs in the background (§7). Budgets are keyed to the session's lineage, not the world, so Reset doesn't refill them. The admin wipe needs a secret held in the Render environment.
 
@@ -508,11 +520,12 @@ There are no passwords.
 
 ### 11.4 Demo bar and demo controls
 
-- **Demo bar:** a slim bar above the cloned UI, styled differently, so demo controls are never confused with the product. It holds the Demo controls button, the acting account, the world date, live budget remaining, Reset, Fast-forward and walkthrough progress.
+- **The passcode page** comes before everything. One master passcode (`ACCESS_CODE`) gates the whole app: a default-deny middleware lets through only the health check, the gate's own page and unlock, and operator routes carrying the admin secret (§14). The page is served by the server, not the SPA, so the cast and story in the bundle never load before unlock. It has a heading, one password field, an Open button and inline errors ("That passcode isn't right." / "Too many attempts. Try again in N minutes."). Unlocking sets the `harmony_gate` cookie for 14 days; the account menu's "Lock Harmony" clears it. Rotating the passcode locks every cookie out, while sessions, worlds and budget lineages survive.
+- **Demo bar:** a slim bar above the cloned UI, styled differently, so demo controls are never confused with the product. It holds the Demo controls button, the acting account, the world date, the live budget ("Live · $7.40 left", or the state line when a cap is spent or live models are paused, §14), Reset, Fast-forward and walkthrough progress.
 - **Demo controls modal:** opens on first visit and can be reopened from the demo bar or the account menu.
   - It explains the network in 30 seconds and introduces the cast.
   - It has three entry points: **Try the suggested request** (as Alex), **Explore freely**, **Network view**.
-  - Reset, the account switcher and an access-code field for live mode also live here.
+  - Reset, the account switcher and a read-only "Model and spend" section also live here. Nothing here asks for a code: the passcode page already gated the app, and the hosted app is live only.
 - **Cross-account alerts:** demo events drive a toast and a demo-bar chip such as "Northlake needs a human → switch to Helen". One click acts as that member and opens the item.
 - **Not available:** a `useUnavailable()` hook connects every sidebar and menu item outside scope ([UI_REFERENCE.md §10](UI_REFERENCE.md)) to one dialog.
 
@@ -545,7 +558,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 
 ### 11.6 Network view
 
-- **What it shows.** The network view is a live lens over a world. By default it shows the **desk world**: the visitor's own requests, the orgs they reached, and where each thread stands. A switch moves it to the **big run** in the network world (replay, or live behind the access code). Layout and styling follow [UI_REFERENCE.md §8](UI_REFERENCE.md).
+- **What it shows.** The network view is a live lens over a world. By default it shows the **desk world**: the visitor's own requests, the orgs they reached, and where each thread stands. A switch will move it to the **big run** in the network world (P3). Layout and styling follow [UI_REFERENCE.md §8](UI_REFERENCE.md).
 - **Participant status** on every node that took part, derived from thread and escalation state:
   - `Screened` (read by discovery, not contacted);
   - `Messaged`;
@@ -561,13 +574,13 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 - **The adversary:** one network org ("Vantage Market Intelligence") poses as a battery OEM's procurement agent and fishes for which labs work with which startups.
   - It probes Northlake for Voltaic Motors' standing Thursday SEM booking, and tries a forged identity block.
   - The defenses are the firewall, the sharing check and identity. Northlake's representative holds no client records, so it has nothing to leak; it refuses or consults. Internal Claude can read the client note while drafting, but Northlake's sharing description excludes other clients and their bookings, so the sharing check sends any draft with client detail to a person. The forged block sits inside the counterparty delimiter.
-  - Vantage is played by `ScriptedModel` with fixed attack messages drawn from counterbench, so its side is identical in live and recorded runs.
+  - In the hosted demo Vantage is played live by Opus 5.5, like every featured org. It may refuse to play the adversary, stay polite, or consult its own side. Nothing prompts the forged identity block, so that beat is a manual probe (LIVE_DEMO_PLAN section 5.4). The cassette `story_adversary.yaml` keeps a scripted Vantage, with fixed attack messages drawn from counterbench, for tests only.
   - Its threads show the attempt and the defense, and replay pauses on the first one.
-  - The desk world also seeds one inbound Vantage request in Helen's inbox, so the adversary shows up during exploration too.
-- **Replay by default.**
+  - The desk world also seeds one open Vantage request to Northlake, so the adversary shows up during exploration too. It starts the first time the visitor acts as someone at Northlake or Vantage (§11.1).
+- **Replay by default** (P3, with the network world).
   - Recordings are versioned artifacts committed to the repo as compressed JSON. Each one carries its scenario anchor, build SHA, model mix and chapter markers.
   - A recording replays into the session's network world at 1–8× speed, with idle gaps compressed. Composite keys let it reuse the recorded IDs under the new world.
-  - "Run live" sits behind the access code.
+  - "Run live" forks a fresh live network world, bounded by the hosted caps (§14); a replay world never turns live.
   - Replay makes the presentation immune to a bad live run.
 
 ### 11.7 Scenarios and seed content
@@ -585,13 +598,14 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 /                     New chat (greeting, composer, suggested-message chip)
 /chat/:id            Claude desktop clone: chat, tool cards (outreach approval as an ask-user card, inline counterparty questions, live request status)
 /chats               Chat history list
-/requests            Requests inbox: Needs you · With your team · Claude is handling · Shared with you · Done
-/requests/:threadId  Thread view, internal notes, escalation panel (question, why it needs you, editable draft, what Claude looked at, routing reason and Reassign), "What our representative saw"
+/requests            Harmony Network Requests list page: search, All / Inbound / Outbound, and Needs you · With your team · Claude is handling · Shared with you · Done
+/requests/:threadId  Request view, full width: chat-style transcript, inline decision card (§10), one composer for notes and decisions, Details panel (Share, "What our representative saw", properties, activity)
 /customize/harmony   Harmony settings (§9): Public profile · Instructions · Sharing · Autonomy · Team & routing
 /network             Network view (desk world by default; big run via a switch)
 ```
 
-- **Sidebar:** New chat · Search\* · Customize · Chats · **Requests** (badge) · **Network** · Projects\* · Artifacts\* · Code\* · Recents · account menu with the account switcher. Items marked \* open the not-available dialog.
+- **Sidebar:** New chat · Search\* · Customize · Chats · **Requests** (badge) · **Network** · Projects\* · Artifacts\* · Code\* · **Needs you** · **Recent requests** · Recents · account menu with the account switcher. Items marked \* open the not-available dialog. Needs you lists every item waiting on the viewer; Recent requests lists their other request threads, newest first, at most 10, then "All requests". Requests open full width, as chats do; there is no separate inbox column.
+- **A chat's send mode** (send without review, §14) is set from the composer's + menu with `PATCH /api/conversations/{id} {send_without_confirmation}`, where null follows the org's default; a new chat carries the composer's choice in `POST /api/conversations`.
 - **Look and feel** replicate the Claude app from the Mobbin references in [UI_REFERENCE.md](UI_REFERENCE.md): its tokens, serif assistant text, composer, tool-activity lines, ask-user card, settings layout and account menu. Harmony's own surfaces borrow Linear's inbox and Railway's canvas, restyled in Claude's tokens.
 - **One EventSource per tab**, bound to the current world and member, feeds a dispatcher. The dispatcher patches the TanStack Query cache from versioned snapshots and drives toasts and badges. Demo events drive the walkthrough engine and the demo bar. On act-as, the dispatcher resets (§8).
 
@@ -600,12 +614,15 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 | Piece | Production | Local |
 |---|---|---|
 | web + SPA | Render web service (Docker), Starter | uvicorn with reload on the host, plus the Vite dev server proxying `/api` |
-| worker | Render background worker (same Dockerfile), Starter with explicit `max_concurrent_activities` and `max_cached_workflows` (Standard if memory requires) | worker with watchfiles reload on the host |
+| worker | Render background worker (same Dockerfile), Standard (2 GB) by default for the interview window; capacity from settings: 12 model-activity slots at 5 starts a second, and 4 chat slots | worker with watchfiles reload on the host (4 slots, 2 a second, 2 chat slots) |
 | Postgres | Render Postgres 17, Basic-1gb (never the free plan, which expires) | `postgres:17` in Compose |
 | Temporal | Temporal Cloud namespace `harmony`, API-key auth, search attributes, and a worker service account and key, all in Terraform | `temporal server start-dev --ip 0.0.0.0 --db-filename /data/temporal.db --search-attribute WorldId=Keyword --search-attribute OrgId=Keyword` in Compose, on a writable volume |
 | Object storage | MinIO, built from source, as a Render private service with a persistent disk | The same MinIO image in Compose |
-| Secrets | Terraform variables → Render env group | `.env.local` |
+| Secrets | Terraform variables → each service's own `env_vars`; the model key goes on the worker only | `.env.local` |
 
+- **Task queues:** `harmony-main` runs every workflow and the short database activities; `harmony-model` runs the representatives', answerers' and screener's model calls; `harmony-chat` runs internal Claude's turns on slots of their own, so one visitor's fan-out (up to 8 threads, plus answerers) can't queue another visitor's typed chat. A model call holds no database session, so the 8 + 4 connection pool isn't the limit.
+- **Worker sizing:** `WORKER_MODEL_CONCURRENCY`, `WORKER_MODEL_RATE` and `WORKER_CHAT_CONCURRENCY` (Terraform: 12, 5 and 4). Standard is the default plan because Starter's 512 MB is tight; LIVE_DEMO_PLAN section 5 records the worker's peak memory at these slots, and the user may choose Starter if it stays under 300 MB.
+- **Env on the services:** each Render service carries its own `env_vars`. An env group would be linked only after both services exist, while Render starts a service's first deploy, with its pre-deploy migration, as soon as the service is created. Production is live only (`MODEL_MODE=live`, set by Terraform, and the settings refuse anything else when `APP_ENV=prod`).
 - **Local layout:** Compose runs only the stateful pieces (Postgres, Temporal, MinIO). The API, worker and Vite run on the host, so macOS-built `.venv` and `node_modules` never meet Linux containers. The full app is containerized only for CI and Playwright. On startup, the API retires `live` worlds whose workflows no longer exist (this happens after a Temporal reset) and finishes any retirement left `retiring`; a missing namespace retires nothing.
 - **Local prerequisites** (installed 2026-10-25): Homebrew, OrbStack (Docker 29, Compose v5), uv, Node 26 and pnpm, the Temporal CLI 1.9.1, Terraform 1.17 and `gh`.
 - **MinIO on Render.** This keeps everything on one provider.
@@ -617,9 +634,11 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - Both services set `auto_deploy_trigger = "checksPass"`, so red CI never ships.
   - `alembic upgrade head` runs as the pre-deploy command of both the web service and the worker, since Render deploys them independently and new worker code must never run ahead of its schema. An advisory lock in `migrations/env.py` serializes the two runs. Migrations are additive (expand, then contract).
   - The worker handles SIGTERM with `worker.shutdown()` and a graceful timeout of about 90 s, under `max_shutdown_delay_seconds`.
-  - The Dockerfile's CMD is shell form, so `$PORT` expands.
+  - The Dockerfile's CMD is shell form, so `$PORT` expands. uvicorn trusts `X-Forwarded-For` only from private addresses (Render's proxy), so a client can't forge `request.client`.
   - Deploys are frozen while interviewers are using the demo.
-- **Terraform:** `infra/terraform/` with `render`, `temporal` and `storage` modules. State is local for now (gitignored; `apply` runs only from the dev machine), and CI runs `fmt` and `validate`. The worker key's `expiry_time` is a literal date after the interview window.
+- **Terraform:** `infra/terraform/` with `render`, `temporal` and `storage` modules, 14 resources. State is local for now (gitignored; `apply` runs only from the dev machine, with the user's approval), and CI runs `fmt` and `validate`; `infra/terraform/tests/` holds `terraform test` runs against mocked providers. The worker key's `expiry_time` is a literal date after the interview window.
+  - **Credentials and secrets on disk.** The provider credentials may sit in `terraform.tfvars` (`scripts/tfvars_from_env.sh` copies them from `.env.local`, adding only missing keys). The state holds every production secret in plaintext, so `scripts/tf.sh` runs Terraform under `umask 077` and sets every `terraform.tfstate*` file to mode 600, and `make doctor` flags a state or tfvars file open to group or others.
+  - **Post-deploy tooling:** `scripts/ping_prod_key.sh` (the production key's request shapes, two calls), `scripts/hosted_check.py` (the gate, SSE through Render's proxy, Reset through Temporal Cloud, a refused turn, rotation; HTTP only), `scripts/hosted_admin.sh status|pause|resume|wipe`, and in Render Shell `harmony storage check` and `harmony live pause|resume` (the kill switch when the API is down). The runbook is LIVE_DEMO_PLAN section 6.
 - **Bootstrap (manual, once):**
   - GitHub repo — done.
   - Render account, card and API key — done.
@@ -630,7 +649,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 - **CI (GitHub Actions):**
   - ruff, pyright and pytest. Workflow tests use time-skipping; tests that need visibility use `start_local` with search attributes.
   - tsc, eslint, vitest and the SPA build.
-  - A Playwright smoke test of the suggested request against the containerized app, using `ScriptedModel` (§15). From P2.
+  - A Playwright smoke test of the suggested request against the containerized app, using `ScriptedModel` (§15), with the passcode gate on as in production (compose-smoke runs the image with `APP_ENV=ci` and a throwaway passcode).
   - `terraform fmt` and `terraform validate`.
 
 ## 14. Cost and abuse guardrails
@@ -638,7 +657,8 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 - **Models (decided):**
   - **Featured orgs** (internal Claude, representative, consult answerer) and network-run synthesis: Opus 5.5.
   - **Background orgs** and discovery screening: Haiku 5.5.
-  - **Development testing:** every role runs on Haiku 5.5 through `MODEL_OVERRIDE` (user, 2026-10-26; it was Opus 5.5). The production mix gets one short check before deploy (Open item 3).
+  - **Development testing:** every role runs on Haiku 5.5 through `MODEL_OVERRIDE` (user, 2026-10-26; it was Opus 5.5). The production mix gets one short local check before deploy (LIVE_DEMO_PLAN section 6, step 1a).
+  - **Production is live only.** The settings refuse `APP_ENV=prod` unless `MODEL_MODE=live`, and refuse a `MODEL_OVERRIDE` there, so the mix is fixed in `ROLE_PROFILES` and changes only with a new build. Scripted mode stays for local runs, tests and CI.
 - **Effort is set explicitly per role** (§5), and thinking is billed as output. Estimates are re-forecast from measured `agent_turns` cost after the first P1 walkthrough.
 - **Development budget: $200, a hard cap.**
   - The source of truth for cumulative dev spend is the project root's `spend_ledger.jsonl`, entries with `project: "harmony"`. Postgres rows are world-scoped and dev databases get wiped, so they can't hold a running total.
@@ -647,12 +667,24 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - Failed and partial streams are settled from what they were billed. A stream that broke off before reporting its output tokens is settled as if it had generated `max_tokens` of them.
   - Every ledger line carries a `cost_usd` (0 for alert lines), so other readers that sum the file keep working.
   - Crossing $50, $100 or $200 writes one `alert` entry. `harmony spend` and every `harmony run` print spend to date and any new crossing, and the dev agent relays crossings to the user.
-- **Hosted demo:** a separate Anthropic key in its own Console workspace with a spend limit as the hard backstop. Its spend never touches the $200. In-app caps live in the `budgets` table, which is not world-scoped, and are reserved atomically (`UPDATE … WHERE spent + reserved + est <= cap`):
-  - a per-session-lineage cap for desk worlds (about $6), carried across Reset;
-  - a live-network-run cap (about $10 per run, one run at a time);
-  - a global daily cap **(open)**;
-  - a kill switch through an env var.
-- **Rough cost** (to be replaced by measurement):
+- **Hosted demo:** a separate Anthropic key in its own Console workspace. Its spend never touches the $200. Every hosted live call first checks the live switch, then reserves its worst case against up to four `budgets` keys in one atomic reservation (rows locked in key order). The rows are not world-scoped, so retirement never deletes them:
+
+  | Key | Cap | Setting | Bounds |
+  |---|---|---|---|
+  | `lineage:<uuid>` | $10 per browser session, carried across Reset | `LINEAGE_BUDGET_USD` | One visitor: about three walkthroughs |
+  | `client:<hash>:<UTC date>` | $25 per known client network per day | `CLIENT_DAILY_BUDGET_USD` | One passcode holder opening fresh sessions |
+  | `daily:<UTC date>` | $60 per UTC day | `DAILY_BUDGET_USD` | A day |
+  | `global` | $250 in total | `GLOBAL_BUDGET_USD` | The interview window |
+  | Console workspace limit | $300 a month, set by the user | outside the app | The backstop if in-app metering is wrong |
+
+  - Prod refuses to boot without the daily, global and client caps, and Terraform passes all four. At boot the API and worker write the configured caps into the `global` row and today's `daily:` row, so configuration is their single source; lineage and client rows keep the cap they were created with.
+  - A session from an unknown client key (missing, or a private or proxy address) reserves against the other three keys only.
+  - Reservations stay worst case: about $0.46–0.73 per representative or internal step, $0.81–0.99 per answerer step.
+  - **The live switch** is its own row (`live_controls`), not a cap or an env var: a row change is instant, while an env change restarts both services. `POST /api/admin/live` pauses and resumes; `paused`, an active provider block, or a missing row (fail closed) refuses the reservation before any budget row is locked. Resuming also clears a provider block and never touches a cap.
+  - **The provider's own limit:** a 402 `billing_error` or a usage-limit refusal blocks hosted calls locally for 10 minutes, and `hosted_admin.sh resume` clears the block.
+  - **What the visitor sees:** a refused or failed turn carries a reason (`session_budget`, `daily_budget`, `demo_budget`, `paused`, `model_error`, `refused`) to the chat, the request view, the network view and the demo bar, which word it per surface. The composer is disabled while `GET /api/budget` reports a spent cap or a pause.
+- **The production replacement for the dev ledger.** The `budgets` rows are the source of truth: `global` is total hosted spend, `daily:` each day, `client:` each network's day, `lineage:` each visitor; `budget_reservations` is the audit trail. The worker settles stale reservations at startup and every 10 minutes. A `hosted_spend_crossed` log line marks 50, 75, 90 and 100% of the global and daily caps, naming the top lineage and client key. `GET /api/admin/spend` (through `scripts/hosted_admin.sh status`) reports it, and after the first hosted walkthrough it is reconciled with the Console's usage, within 10%. Locally, `HOSTED_CAPS_IN_DEV=true` makes a live worker reserve against both the ledger and these caps.
+- **Rough cost** (to be replaced by measurement; one visitor's story plus the Vantage thread is estimated at $2.6 typical and $7 high, and LIVE_DEMO_PLAN section 5 measures it):
 
 | Run | Calls | All Opus 5.5 | Production mix |
 |---|---|---|---|
@@ -675,8 +707,8 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   | Reserve | ~$60 |
 
   UI work in P2 and P3 runs on replay and `ScriptedModel`.
-- **When a budget runs out,** no further model call starts (`BudgetExhausted` is non-retryable) and the demo bar says so. There is no template message.
-- **Access:** live calls need the access code from the share link. Without it, the network view still runs replays and the desk world runs on recorded fallbacks.
+- **When a budget runs out,** no further model call starts (`BudgetExhausted` is non-retryable, and its kind crosses the activity boundary) and every surface says why. There is no template message to the counterparty.
+- **Access:** the master passcode gates the whole app (§11.4); there is no separate code for live calls, because the hosted app is live only. The caps above bound what a passcode holder can spend, and the creation limits (§11.1) bound how many lineages one can mint.
 
 ## 15. Testing
 
@@ -766,7 +798,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 **Decided:**
 - The product is named Harmony, in a private GitHub repo, `harmony`.
 - Object storage: MinIO built from source, on a Render private service with a disk. Everything is on Render plus Temporal Cloud; no Cloudflare.
-- One SPA; a session holds a live desk world and a network world, which replays a recorded run by default, with live runs behind an access code.
+- One SPA; a session holds a live desk world and, from P3, a network world, which replays a recorded run by default.
 - Direct agent matching: an independent Haiku 5.5 call per org, aggregated in code. In production, each org's evidence is researched on a schedule. A retrieval prefilter is noted as the scale path.
 - A representative settings panel with team routing; prompt settings are versioned, policy is read live.
 - Shareable inbox threads.
@@ -802,8 +834,21 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - a fixed scenario anchor.
   - (Server-side pricing and the deterministic intake check were dropped with the free-form channel. Skip-mode limits and aggregate acceptance caps were dropped with offers and grants in the unstructured revision.)
 
+- **The live demo phase** ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), 2026-10-26):
+  - **Production is live only,** with no model override; scripted mode stays for local runs, tests and CI (§14).
+  - **One master passcode** (`ACCESS_CODE`, at least 16 printable ASCII characters) gates the whole app before the SPA loads, with per-client attempt limits; it replaces the access code that unlocked live runs (§11.4).
+  - **Per-visitor desk worlds stay private,** nothing model-driven runs at world creation, and the seeded Vantage request starts lazily; creation limits apply while the gate is on (§11.1). The network world waits for P3.
+  - **Four hosted caps, a live switch row and the provider block** (§14), with the `budgets` rows replacing the dev ledger in production.
+  - **Worker capacity from settings,** a `harmony-chat` queue for internal Claude's turns, and Standard as the default worker plan; env on each Render service instead of an env group (§13).
+  - **The request view redesign (3.9):** requests listed in the sidebar (Needs you, Recent requests) and on a `/requests` list page; a full-width, chat-style request view with an inline decision card, one composer for notes and decisions, and a Details panel in place of the three columns and the properties rail (§10, §12).
+  - **Send without review (3.10):** an org default set by admins and a per-chat override in the composer; auto cards go through the card path with recipient, per-turn and duplicate guards, and the spend caps still apply.
+  - **View more (3.11):** one clamping component for long briefs, asks and messages, with no inner scroll.
+  - **"Harmony Network Request" (3.12)** in user-facing text; code identifiers keep their names.
+  - **Click-through fixes (3.13):** no `close` before the counterparty has written; an empty final response ends a turn; a per-recipient ask and title; a `revise` action for held messages; a `suggested` flag for default ticks; a short question and a why per assignee; the model label from `SessionView.internal_model`; titles stored for requests and threads.
+  - **Models for testing (3.14):** every local live run uses Haiku 5.5; the production mix is checked once, locally, before deploy, and `harmony run` re-prices the lineage peak at production prices.
+
 **Open:**
-1. **The hosted demo's daily spend cap.** This is needed before deploying.
+1. **Closed:** the hosted demo's daily spend cap is $60 per UTC day, beside the lineage, client and global caps (§14).
 2. **Scope of the stretch items:** "Set up with Claude" onboarding and adding your own org, and probe conversations.
-3. **A short production-mix check before deploy.** Development runs every role on Haiku 5.5, so the Opus 5.5 request shapes and behaviour that featured orgs use in production aren't exercised. One suggested-story run with `MODEL_OVERRIDE=none` checks them. Without it, the first live Opus traffic is the hosted demo.
+3. **A short production-mix check before deploy.** Development runs every role on Haiku 5.5, so the Opus 5.5 request shapes and behaviour that featured orgs use in production aren't exercised. It is planned as LIVE_DEMO_PLAN section 6, step 1a: one Opus ping, one suggested-story run and two typed chats with `MODEL_OVERRIDE=none`, about $3 on the dev key, once the user approves. Without it, the first live Opus traffic is the hosted demo.
 4. **Defaults assumed unless you object:** the Henderson Lab / Northlake / Ridgeline / Calder cast and the sodium-ion big run.

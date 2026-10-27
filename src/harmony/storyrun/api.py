@@ -3,7 +3,8 @@
 Responses parse into the routes' own response models, so a contract change fails here
 loudly instead of drifting. `in_process` serves the app over `httpx.ASGITransport`
 without its lifespan: no LISTEN bus (nothing here reads `/api/events`) and no orphan
-sweep, with the caller's Temporal client and retirer.
+sweep, with the caller's Temporal client and retirer. With `ACCESS_CODE` set it unlocks
+the passcode gate first, as a visitor would.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from starlette.types import Receive, Scope, Send
 from temporalio.client import Client
 
 from harmony.api.app import API_PREFIX, create_app
+from harmony.api.gate import GateUnlock, GateUnlocked
 from harmony.api.routes.cards import ApproveCard, RejectCard
 from harmony.api.routes.conversations import (
     ConversationCreated,
@@ -72,8 +74,15 @@ class HarmonyApi:
 
     # --- Chat -------------------------------------------------------------------------
 
-    async def start_conversation(self, text: str) -> ConversationCreated:
-        body = StartConversation(text=text)
+    async def unlock(self, passcode: str) -> GateUnlocked:
+        return await self._call(GateUnlocked, "POST", "/gate", GateUnlock(passcode=passcode))
+
+    async def start_conversation(
+        self, text: str, *, send_without_confirmation: bool | None = None
+    ) -> ConversationCreated:
+        """A new chat; `send_without_confirmation` sets its override (None follows the
+        org's default)."""
+        body = StartConversation(text=text, send_without_confirmation=send_without_confirmation)
         return await self._call(ConversationCreated, "POST", "/conversations", body)
 
     async def conversation(self, conversation_id: UUID) -> ConversationDetail:
@@ -155,4 +164,7 @@ async def in_process(
 
     transport = httpx.ASGITransport(app=serve, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, timeout=TIMEOUT_S) as http:
-        yield HarmonyApi(http)
+        api = HarmonyApi(http)
+        if settings.access_code is not None:
+            await api.unlock(settings.access_code.get_secret_value())
+        yield api

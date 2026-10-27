@@ -81,10 +81,11 @@ web-ci: ## Frontend: frozen install, typecheck, lint, test, build
 	$(PNPM) -C web run test
 	$(PNPM) -C web run build
 
-tf-check: ## terraform fmt -check and validate (no backend, never apply)
+tf-check: ## terraform fmt -check, validate and test (mock providers; no backend, never apply)
 	$(TERRAFORM) -chdir=infra/terraform fmt -check -recursive
 	$(TERRAFORM) -chdir=infra/terraform init -backend=false -input=false
 	$(TERRAFORM) -chdir=infra/terraform validate
+	$(TERRAFORM) -chdir=infra/terraform test
 
 compose-smoke: ## Build the image and run the smoke checks on compose.ci.yaml
 	bash scripts/compose_smoke.sh

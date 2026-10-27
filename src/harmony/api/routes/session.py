@@ -4,8 +4,12 @@
 - POST /api/session/start: create the session and its world lazily (never on page view)
 - POST /api/session/act-as {member_id}: switch accounts within the session's world
 
-Every route takes `?world=desk|network` (default desk). Responses carry
-`X-Harmony-Cursor`.
+Every route takes `?world=desk|network` (default desk), though starting the network
+world answers 404 until P3. Responses carry `X-Harmony-Cursor`.
+
+While the passcode gate is on, starting a session counts against the gate's world
+limits (LIVE_DEMO_PLAN 3.3), and a new session records its client key's hash.
+Act-as starts the world's seeded requests the new member's org is party to.
 """
 
 from __future__ import annotations
@@ -13,18 +17,22 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from harmony.api.deps import (
     ServicesDep,
     SessionmakerDep,
+    SettingsDep,
     WorldServiceDep,
     documented,
     read_cursor,
     set_cursor,
     snapshot_session,
 )
+from harmony.api.gate import GateDep, client_key_hash, too_many_attempts
+from harmony.api.routes.problems import not_found, problem_entries
 from harmony.auth.session import (
     Actor,
     ActorDep,
@@ -36,9 +44,10 @@ from harmony.auth.session import (
     set_session_cookie,
 )
 from harmony.auth.views import SessionView, session_view
+from harmony.config import Settings
 from harmony.errors import WorldRetired
 from harmony.seeds.loader import ScenarioNotFound, available_scenarios
-from harmony.worlds.service import WorldLens
+from harmony.worlds.service import TooManyWorlds, WorldLens
 
 router = APIRouter(tags=["session"])
 
@@ -59,7 +68,10 @@ class ActAsRequest(BaseModel):
 
 
 async def session_response(
-    sessionmaker: async_sessionmaker[AsyncSession], response: Response, actor: Actor
+    sessionmaker: async_sessionmaker[AsyncSession],
+    response: Response,
+    actor: Actor,
+    settings: Settings,
 ) -> SessionView:
     """The actor's `SessionView`, with its cursor header."""
     async with snapshot_session(sessionmaker) as db:
@@ -72,6 +84,7 @@ async def session_response(
                 lens=actor.lens,
                 world_id=actor.world_id,
                 member_id=actor.member_id,
+                settings=settings,
             )
         except LookupError:
             raise HTTPException(
@@ -83,30 +96,46 @@ async def session_response(
 
 @router.get("/session", responses=documented(401, cursor=True))
 async def get_session(
-    actor: ActorDep, sessionmaker: SessionmakerDep, response: Response
+    actor: ActorDep, sessionmaker: SessionmakerDep, settings: SettingsDep, response: Response
 ) -> SessionView:
-    return await session_response(sessionmaker, response, actor)
+    return await session_response(sessionmaker, response, actor, settings)
 
 
-@router.post("/session/start", responses=documented(400, 409, cursor=True))
+# 404 `not_found`: `world=network` until P3; 429 `too_many_attempts`: too many new
+# sessions from one client or overall while the gate is on (3.3).
+@router.post(
+    "/session/start",
+    response_model=SessionView,
+    responses=documented(400, 409, cursor=True) | problem_entries(404, 429),
+)
 async def start_session(
     request: Request,
     response: Response,
     services: ServicesDep,
     worlds: WorldServiceDep,
+    gate: GateDep,
     body: StartRequest | None = None,
     world: WorldLens = "desk",
-) -> SessionView:
+) -> SessionView | JSONResponse:
     """Create the visitor's session and its `world` world if they don't exist yet.
 
     Idempotent for a session that already has a live world. Sets the session cookie.
     """
+    if world == "network":
+        # P3 is deferred: nobody can see a network world, so none is seeded.
+        raise not_found("the network world")
     settings = services.settings
     scenario = body.scenario if body is not None else None
     try:
         session_id = await worlds.start(
-            session_id_from_request(request, settings), lens=world, scenario=scenario
+            session_id_from_request(request, settings),
+            lens=world,
+            scenario=scenario,
+            limits=gate.worlds if gate is not None else None,
+            client_key_hash=client_key_hash(request.scope, settings),
         )
+    except TooManyWorlds as err:
+        return too_many_attempts(err.retry_after_s, "too many new sessions; try again later")
     except ScenarioNotFound as err:
         # Only a scenario named in this request can be unknown: one stored on the
         # session's old world falls back to the default (`WorldService.start`).
@@ -119,12 +148,17 @@ async def start_session(
         # Only if the new world was wiped between the two statements.
         raise HTTPException(status.HTTP_409_CONFLICT, "the world was retired; try again")
     set_session_cookie(response, session_id, settings)
-    return await session_response(services.sessionmaker, response, actor)
+    return await session_response(services.sessionmaker, response, actor, settings)
 
 
 @router.post("/session/act-as", responses=documented(401, 403, 409, cursor=True))
 async def act_as_member(
-    body: ActAsRequest, actor: ActorDep, sessionmaker: SessionmakerDep, response: Response
+    body: ActAsRequest,
+    actor: ActorDep,
+    sessionmaker: SessionmakerDep,
+    settings: SettingsDep,
+    worlds: WorldServiceDep,
+    response: Response,
 ) -> SessionView:
     """Act as another member of the session's world. Bumps the epoch, so the session's
     open event streams close; the client reopens them from this response's cursor."""
@@ -141,4 +175,5 @@ async def act_as_member(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "this world is gone; POST /api/session/start"
         )
-    return await session_response(sessionmaker, response, switched)
+    await worlds.start_requests_for(switched.session_id, switched.world_id, switched.org_id)
+    return await session_response(sessionmaker, response, switched, settings)

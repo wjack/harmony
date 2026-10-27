@@ -26,7 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents import release
@@ -40,13 +40,20 @@ from harmony.db.models import (
     Consult,
     Conversation,
     Escalation,
+    EscalationDraft,
     Member,
     NetworkRequest,
     Org,
     Thread,
     ThreadAccess,
 )
-from harmony.db.models.choices import AccessReason, EscalationKind, Side, ThreadState
+from harmony.db.models.choices import (
+    AccessReason,
+    EscalationKind,
+    FailureReason,
+    Side,
+    ThreadState,
+)
 from harmony.domain import escalations, threads
 
 router = APIRouter(tags=["inbox"])
@@ -64,6 +71,9 @@ class InboxEscalation(_View):
     status: EscalationStatus
     # The consult question, or a one-line summary of a held message.
     question: str
+    # The answerer's one-line decision for the reviewer; None without a draft that
+    # has one.
+    short_question: str | None = None
     # "Why this needs you": the answerer's or the sharing check's reason, or the mode.
     reason: str
     assignees: list[MemberRef]
@@ -73,7 +83,7 @@ class InboxEscalation(_View):
 
 class InboxItem(_View):
     thread_id: UUID
-    # The request's title as the member's side names it (`threads.request_title`).
+    # As the member's side names the thread (`threads.thread_title`).
     title: str
     # The request's chat when the acting member owns it: a question their side's
     # representative asks them shows there, inline, and is answered there (§7).
@@ -81,6 +91,8 @@ class InboxItem(_View):
     side: Side
     counterparty: OrgRef
     thread_state: ThreadState
+    # Why the thread stopped early (a cap, the pause, a model error); None otherwise.
+    stop_reason: FailureReason | None = None
     # Whose turn it is; while `awaiting_principal`, the side checking with its team.
     side_to_move: Side | None
     # The open escalation the row is about, else the latest one the member resolved.
@@ -217,9 +229,10 @@ class _Views:
         request = self._requests.get(thread.request_id)
         return InboxItem(
             thread_id=thread.id,
-            title=threads.request_title(
-                org_id,
+            title=threads.thread_title(
+                thread,
                 request.row,
+                org_id,
                 requester=self._orgs[thread.requester_org_id].name,
                 opening=self._openings.get(thread.id),
             )
@@ -229,6 +242,7 @@ class _Views:
             side=side,
             counterparty=self._orgs[counterparty],
             thread_state=thread.state,
+            stop_reason=thread.stop_reason,
             side_to_move=thread.side_to_move,
             escalation=self._escalation(escalation) if escalation is not None else None,
             shared_by=(
@@ -248,6 +262,7 @@ class _Views:
             kind=row.kind,
             status=escalations.escalation_status(row.status),
             question=text.question,
+            short_question=text.short_question,
             reason=text.reason,
             assignees=[
                 self._members[member_id]
@@ -260,9 +275,11 @@ class _Views:
 
 
 class EscalationText(_View):
-    """How an inbox item reads: its question and why it needs a person."""
+    """How an inbox item reads: its question, the answerer's one-line version of it,
+    and why it needs a person."""
 
     question: str
+    short_question: str | None = None
     reason: str
 
 
@@ -274,7 +291,8 @@ HELD_MESSAGE_REASON: Final = "A teammate approves every message in Ask mode."
 async def escalation_texts(
     db: AsyncSession, world_id: UUID, rows: Sequence[Escalation]
 ) -> dict[UUID, EscalationText]:
-    """Each escalation's question and "why this needs you" (`release.why_needed`)."""
+    """Each escalation's question, its current draft's short question, and "why this
+    needs you" (`release.why_needed`)."""
     consult_ids = [row.consult_id for row in rows if row.consult_id is not None]
     asked = {
         consult.id: consult
@@ -282,11 +300,27 @@ async def escalation_texts(
             select(Consult).where(Consult.world_id == world_id, Consult.id.in_(consult_ids))
         )
     }
+    current = [(row.id, row.current_draft_rev) for row in rows if row.current_draft_rev is not None]
+    drafts = (
+        await db.execute(
+            select(EscalationDraft.escalation_id, EscalationDraft.short_question).where(
+                EscalationDraft.world_id == world_id,
+                tuple_(EscalationDraft.escalation_id, EscalationDraft.draft_rev).in_(current),
+            )
+        )
+        if current
+        else ()
+    )
+    short_questions = {draft.escalation_id: draft.short_question for draft in drafts}
     texts: dict[UUID, EscalationText] = {}
     for row in rows:
         consult = asked.get(row.consult_id) if row.consult_id is not None else None
         texts[row.id] = (
-            EscalationText(question=consult.question, reason=release.why_needed(consult))
+            EscalationText(
+                question=consult.question,
+                short_question=short_questions.get(row.id),
+                reason=release.why_needed(consult),
+            )
             if consult is not None
             else EscalationText(question=HELD_MESSAGE_QUESTION, reason=HELD_MESSAGE_REASON)
         )

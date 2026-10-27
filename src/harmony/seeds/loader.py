@@ -100,9 +100,6 @@ class SeededWorld:
     # Member slug -> ID; slugs are unique per world and stable across worlds.
     member_ids: Mapping[str, UUID]
     default_member_id: UUID
-    # The open requests the world is seeded with, for the caller to start once the
-    # world is committed.
-    request_ids: tuple[UUID, ...] = ()
 
 
 # --- Reading --------------------------------------------------------------------------
@@ -273,9 +270,6 @@ async def seed_world(
         scenario=scenario.name,
         member_ids=members,
         default_member_id=members[scenario.spec.default_member],
-        request_ids=tuple(
-            seed_id(scenario.name, "network_request", request.slug) for request in scenario.requests
-        ),
     )
 
 
@@ -448,6 +442,7 @@ def _thread_rows(
             id=request_id,
             requester_org_id=org_id(thread.requester),
             created_by_member_id=member_id(request.created_by),
+            title=request.title,
             brief=request.brief,
             status="closed" if thread.state in _TERMINAL_STATES else "active",
             **stamped(created_at=opened),
@@ -463,6 +458,7 @@ def _thread_rows(
             requester_settings_version=_SETTINGS_VERSION,
             responder_settings_version=_SETTINGS_VERSION,
             turn_count=len(thread.messages),
+            title=request.title,
             **stamped(created_at=opened, last_activity_at=last_activity),
         ),
     ]
@@ -509,12 +505,16 @@ def _open_request(scenario: Scenario, spec: OpenRequestSpec, world_id: UUID) -> 
         id=seed_id(name, "network_request", spec.slug),
         requester_org_id=seed_id(name, "org", spec.requester),
         created_by_member_id=seed_id(name, "member", spec.created_by),
+        title=spec.title,
         brief=spec.brief,
         recipients=[
             {
                 "org_id": str(seed_id(name, "org", recipient.org)),
                 "fit": recipient.fit,
                 "reason": recipient.reason,
+                "ask": recipient.ask,
+                "title": recipient.title,
+                "suggested": recipient.suggested,
             }
             for recipient in spec.recipients
         ],

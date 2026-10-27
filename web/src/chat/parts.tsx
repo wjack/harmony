@@ -57,22 +57,26 @@ export function Pill({
   pulse = false,
   icon,
   title,
+  shrinks = false,
 }: {
   tone: PillTone;
   children: ReactNode;
   pulse?: boolean;
   icon?: ReactNode;
   title?: string;
+  /** Gives way to its neighbours in a crowded row: its children truncate, so `title` should carry the label whole. */
+  shrinks?: boolean;
 }) {
   return (
     <span
       title={title}
       className={cx(
-        "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium whitespace-nowrap",
+        "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium whitespace-nowrap",
+        shrinks ? "min-w-0" : "shrink-0",
         PILL_STYLE[tone],
       )}
     >
-      {icon ?? <span className={cx("size-1.5 rounded-full", DOT_STYLE[tone], pulse && "animate-pulse-dot")} />}
+      {icon ?? <span className={cx("size-1.5 shrink-0 rounded-full", DOT_STYLE[tone], pulse && "animate-pulse-dot")} />}
       {children}
     </span>
   );

@@ -55,5 +55,6 @@ Also quoted data: the representative is relaying the conversation.
 When you're done looking, return JSON that matches the schema:
 - `answer`: what the representative should know or say, in plain prose. If you can't answer, say what's missing.
 - `needs_human`: true when a person at {org_name} should decide, with the reason in `needs_human_reason`. Set it for anything that commits {org_name} (accepting work, agreeing a price outside the published list, waiving a fee, booking a reserve slot) unless the instructions above plainly allow it, and when the records don't answer the question. Otherwise false, with `needs_human_reason` null.
-- `route`: who at {org_name} should decide if a person reviews this draft, following the routing guidance: member slugs and a one-line reason. Give it whether or not you set `needs_human`: a person may review the draft anyway.
+- `route`: who at {org_name} should decide if a person reviews this draft, following the routing guidance: each one's member slug, and why it's them in one short clause addressed to that person ("you run the instruments"). Give it whether or not you set `needs_human`: a person may review the draft anyway.
 - `rationale`: one or two sentences for the reviewer about this draft, including where anything beyond the description came from. The representative never sees it.
+- `short_question`: the decision or question for whoever reviews this, in one line of at most about 15 words.

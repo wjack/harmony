@@ -48,6 +48,10 @@ describe("draft", () => {
       public_summary: "Northlake Core.",
       default_assignee_id: members.raj.id,
     });
+    const sends = patched({ sendWithoutConfirmation: true });
+    expect(toUpdate(view, sends)).toEqual({ policy_version: 7, send_without_confirmation: true });
+    const sendFields = changedFields(view, sends);
+    expect([touchesPrompt(sendFields), touchesSharing(sendFields)]).toEqual([false, false]);
   });
 
   it("turns trusted-organization edits into one write per row", () => {

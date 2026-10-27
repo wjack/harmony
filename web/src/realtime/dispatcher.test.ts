@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
+import { PasscodeRequired } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
 import { applyEntitySnapshot, type EntityData, type Versioned } from "./cache";
 import { RealtimeDispatcher, TAB_CHANNEL, eventStreamUrl, type StreamSnapshot } from "./dispatcher";
@@ -29,6 +30,7 @@ interface Tab {
   sources: EventSources;
   snapshot: Mock<() => Promise<StreamSnapshot | null>>;
   reload: Mock<() => void>;
+  leave: Mock<(url: string) => void>;
 }
 
 /** A dispatcher whose snapshots are served in order from `snapshots`. */
@@ -42,6 +44,7 @@ function openTab(hub: ChannelHub, snapshots: (StreamSnapshot | null | Error)[]):
     return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
   });
   const reload = vi.fn<() => void>();
+  const leave = vi.fn<(url: string) => void>();
   const dispatcher = new RealtimeDispatcher({
     queryClient,
     snapshot,
@@ -49,8 +52,10 @@ function openTab(hub: ChannelHub, snapshots: (StreamSnapshot | null | Error)[]):
     openChannel: hub.open,
     reload,
     retryDelayMs: () => RETRY_MS,
+    here: () => "/network?focus=thr_1#edge",
+    leave,
   });
-  return { dispatcher, queryClient, sources, snapshot, reload };
+  return { dispatcher, queryClient, sources, snapshot, reload, leave };
 }
 
 function threadEntity(queryClient: QueryClient): Versioned<EntityData> | undefined {
@@ -559,5 +564,100 @@ describe("other events", () => {
     expect(snapshot).toHaveBeenCalledTimes(2);
     expect(sources.latest.url).toBe("/api/events?after=3&epoch=1");
     expect(otherTab).not.toHaveBeenCalled(); // each tab sees world.retired on its own stream
+  });
+});
+
+describe("the passcode gate", () => {
+  const GATE = "/api/gate?next=%2Fnetwork%3Ffocus%3Dthr_1%23edge";
+
+  it("locks on a PasscodeRequired snapshot: no retry, no stream, off to the passcode page", async () => {
+    vi.useFakeTimers();
+    const { dispatcher, sources, snapshot, leave } = tab([new PasscodeRequired()]);
+
+    await dispatcher.start();
+
+    expect(dispatcher.state).toMatchObject({ status: "locked", failures: 0, generation: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(sources.opened).toHaveLength(0);
+    expect(leave).toHaveBeenCalledExactlyOnceWith(GATE);
+
+    await vi.advanceTimersByTimeAsync(RETRY_MS * 10);
+    await dispatcher.start(); // locked is terminal
+    expect(snapshot).toHaveBeenCalledOnce();
+  });
+
+  it("still waits on the landing when there is simply no session", async () => {
+    const { dispatcher, leave } = tab([null]);
+
+    await dispatcher.start();
+
+    expect(dispatcher.state.status).toBe("no-session");
+    expect(leave).not.toHaveBeenCalled();
+  });
+
+  it("locks when a refused stream's recovery snapshot meets the gate, rather than resetting", async () => {
+    vi.useFakeTimers();
+    const { dispatcher, queryClient, sources, snapshot, leave } = tab([snapshotAt(10), new PasscodeRequired()]);
+    await dispatcher.start();
+    sources.latest.accept();
+    sources.latest.send(threadSnapshot(11, 1, "open"));
+
+    sources.latest.fail();
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    await vi.advanceTimersByTimeAsync(RETRY_MS * 10);
+
+    expect(dispatcher.state).toMatchObject({ status: "locked", failures: 0 });
+    expect(snapshot).toHaveBeenCalledTimes(2);
+    expect(sources.opened).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(threadEntity(queryClient)).toBeUndefined();
+    expect(leave).toHaveBeenCalledExactlyOnceWith(GATE);
+  });
+
+  it("clears the cache and notifies before telling other tabs, then leaves", async () => {
+    const { dispatcher, queryClient, sources, leave } = tab([snapshotAt(10)]);
+    await dispatcher.start();
+    sources.latest.send(threadSnapshot(11, 1, "open"));
+    const order: string[] = [];
+    dispatcher.onLocked(() => {
+      order.push(threadEntity(queryClient) === undefined ? "listener after clear" : "listener before clear");
+    });
+    hub.open(TAB_CHANNEL).onmessage = (event: MessageEvent) => {
+      order.push(`posted ${JSON.stringify(event.data)}`);
+    };
+    leave.mockImplementation(() => order.push("left"));
+
+    dispatcher.lock();
+    dispatcher.lock(); // idempotent
+
+    expect(order).toEqual(["listener after clear", 'posted {"type":"locked"}', "left"]);
+    expect(sources.latest.closed).toBe(true);
+  });
+
+  it("reloads the visitor's other tabs, which ignore anything after", async () => {
+    const a = tab([snapshotAt(10, 1)]);
+    const b = tab([snapshotAt(10, 1)]);
+    await a.dispatcher.start();
+    await b.dispatcher.start();
+
+    a.dispatcher.lock();
+
+    expect(b.reload).toHaveBeenCalledOnce();
+    expect(a.reload).not.toHaveBeenCalled();
+    b.dispatcher.lock();
+    expect(a.reload).not.toHaveBeenCalled(); // already locked
+  });
+
+  it("ignores member changes and resyncs once locked", async () => {
+    const { dispatcher, sources, snapshot } = tab([snapshotAt(10, 1)]);
+    await dispatcher.start();
+    dispatcher.lock();
+
+    await dispatcher.memberChanged(2);
+    await dispatcher.resync();
+
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(sources.opened).toHaveLength(1);
+    expect(dispatcher.state.status).toBe("locked");
   });
 });

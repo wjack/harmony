@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EntitySnapshot, EventEnvelope } from "../api/types";
 import {
   brief,
+  cardRecipients,
   chatDeltaEnvelope,
   conversationAt,
   CONVERSATION_ID,
@@ -17,13 +18,15 @@ import {
 } from "../fixtures/chat";
 import { WORLD_ID } from "../fixtures/shell";
 import { summarize } from "./activity";
-import { briefGist, editedBrief, screenedLine } from "./brief";
+import { briefGist, editedText, screenedLine } from "./brief";
 import { realCalendar } from "../demo/worldClock";
 import { formatSince } from "./format";
 import { committedSteps, pendingCard, settledMessages, toBlocks, type OptimisticMessage } from "./items";
 import { chatDeltaOf, concernsConversation, concernsRequest, watchedIds } from "./live";
+import { approveBody, hasEdits, initialDraft, outreachTitle } from "./outreachDraft";
+import { outreachRecipients } from "./recipients";
 import { applyDelta, longestOverlap, visibleText, type CommittedStep } from "./stream";
-import type { ToolActivityItem, UserTextItem } from "./types";
+import type { CardRecipient, OutreachCardItem, ToolActivityItem, UserTextItem } from "./types";
 import { staysPinned } from "./useStickToBottom";
 
 describe("toBlocks", () => {
@@ -74,6 +77,75 @@ describe("pendingCard", () => {
   it("is null once the card is answered", () => {
     expect(pendingCard(conversationAt(initialState("sent")))).toBeNull();
     expect(pendingCard(conversationAt({ ...initialState("drafted"), feedback: "Not Ridgeline" }))).toBeNull();
+  });
+
+  it("never asks for review of a card the chat is sending without review", () => {
+    const detail = conversationAt(initialState("drafted", { auto: true, override: true }));
+    expect(detail.pending_card_id).toBeNull();
+    expect(detail.items.some((item) => item.type === "outreach_card" && item.status === "pending" && item.auto)).toBe(true);
+    expect(pendingCard(detail)).toBeNull();
+  });
+
+  it("skips an auto card even if the conversation still names it", () => {
+    const detail = conversationAt(initialState("drafted", { auto: true }));
+    expect(pendingCard({ ...detail, pending_card_id: OUTREACH_CARD_ID })).toBeNull();
+  });
+});
+
+describe("the outreach card's ticks", () => {
+  const cardWith = (rows: CardRecipient[]): OutreachCardItem => {
+    const card = conversationAt(initialState("drafted")).items.find((item) => item.type === "outreach_card");
+    if (card?.type !== "outreach_card") throw new Error("no outreach card in the fixture");
+    return { ...card, recipients: rows };
+  };
+  const ids = (set: ReadonlySet<string>) => [...set].sort();
+  const [northlake, ridgeline, calder] = cardRecipients as [CardRecipient, CardRecipient, CardRecipient];
+
+  it("lists every row and ticks the suggested ones", () => {
+    const { listed, proposed } = outreachRecipients(cardWith(cardRecipients));
+    expect(ids(listed)).toEqual(ids(new Set(cardRecipients.map((row) => row.org.id))));
+    expect(ids(proposed)).toEqual(ids(new Set([northlake.org.id, ridgeline.org.id])));
+  });
+
+  it("falls back to the fit, then to every row, on a card without suggestions", () => {
+    const unmarked = cardRecipients.map((row) => ({ ...row, suggested: null }));
+    expect(ids(outreachRecipients(cardWith(unmarked)).proposed)).toEqual(ids(new Set([northlake.org.id, ridgeline.org.id])));
+    const misses = unmarked.map((row) => ({ ...row, fit: "no" as const }));
+    expect(outreachRecipients(cardWith(misses)).proposed.size).toBe(3);
+  });
+
+  it("starts a suggested row unticked when it says suggested: false, whatever its fit", () => {
+    const card = cardWith([northlake, { ...ridgeline, suggested: false }]);
+    expect([...initialDraft(card).chosen]).toEqual([northlake.org.id]);
+  });
+
+  it("always names the recipients, in the card's order", () => {
+    const card = cardWith(cardRecipients);
+    expect(approveBody(card, initialDraft(card))).toEqual({ recipients: [northlake.org.id, ridgeline.org.id] });
+    const all = { ...initialDraft(card), chosen: new Set([calder.org.id, ridgeline.org.id, northlake.org.id]) };
+    expect(approveBody(card, all)).toEqual({ recipients: [northlake.org.id, ridgeline.org.id, calder.org.id] });
+  });
+
+  it("sends only the asks that changed, and only for the ticked organizations", () => {
+    const card = cardWith(cardRecipients);
+    const draft = {
+      ...initialDraft(card),
+      asks: { [northlake.org.id]: "Quote XRD only.", [ridgeline.org.id]: `${ridgeline.ask ?? ""} `, [calder.org.id]: "Hi" },
+    };
+    expect(approveBody(card, draft)).toEqual({
+      recipients: [northlake.org.id, ridgeline.org.id],
+      asks: { [northlake.org.id]: "Quote XRD only." },
+    });
+    expect(hasEdits(card, draft)).toBe(true);
+    expect(hasEdits(card, initialDraft(card))).toBe(false);
+  });
+
+  it("titles the card by the ticked set", () => {
+    const card = cardWith(cardRecipients);
+    expect(outreachTitle(initialDraft(card))).toBe("Send this request to 2 organizations?");
+    expect(outreachTitle({ ...initialDraft(card), chosen: new Set([calder.org.id]) })).toBe(
+      "Send this request to 1 organization?",
+    );
   });
 });
 
@@ -293,9 +365,9 @@ describe("summarize", () => {
 
 describe("the brief", () => {
   it("sends nothing when the member's version reads the same", () => {
-    expect(editedBrief(brief, brief)).toBeNull();
-    expect(editedBrief(brief, `\n${brief}  \n`)).toBeNull();
-    expect(editedBrief(brief, "   ")).toBeNull();
+    expect(editedText(brief, brief)).toBeNull();
+    expect(editedText(brief, `\n${brief}  \n`)).toBeNull();
+    expect(editedText(brief, "   ")).toBeNull();
   });
 
   it("previews as one run of plain text", () => {
@@ -305,7 +377,7 @@ describe("the brief", () => {
   });
 
   it("sends the member's version, trimmed", () => {
-    expect(editedBrief(brief, `${brief}\n\nResults by Nov 4 if you can. `)).toBe(
+    expect(editedText(brief, `${brief}\n\nResults by Nov 4 if you can. `)).toBe(
       `${brief}\n\nResults by Nov 4 if you can.`,
     );
   });

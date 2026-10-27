@@ -1,8 +1,13 @@
 /**
  * Unread dots: a thread is unread while its last activity is newer than when this
- * member last opened it in this browser. Per-browser on purpose; it's a nudge, not state.
+ * member last opened it in this browser, where its row opens: the thread's view, or for
+ * a question their own side's representative asked, the chat that answers it.
+ * Per-browser on purpose; it's a nudge, not state.
  */
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
+
+import { useInbox } from "../app/queries";
+import { answeringChat } from "../shell/escalationPlace";
 
 type SeenMap = Record<string, string>;
 
@@ -77,3 +82,18 @@ export function useSeen(memberId: string | undefined): {
 }
 
 const EMPTY: SeenMap = {};
+
+/**
+ * Marks seen, while chat `conversationId` is open, each Needs-you item answered there:
+ * its row opens this chat, where the question shows inline, and never the thread view
+ * that marks every other row seen.
+ */
+export function useSeenInChat(conversationId: string, memberId: string | undefined): void {
+  const needs = useInbox().data?.needs_you;
+  const { markSeen } = useSeen(memberId);
+  useEffect(() => {
+    for (const item of needs ?? []) {
+      if (answeringChat(item) === conversationId) markSeen(item.thread_id, item.last_activity_at);
+    }
+  }, [needs, conversationId, markSeen]);
+}

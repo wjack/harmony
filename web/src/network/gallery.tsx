@@ -2,9 +2,10 @@
 import { useEffect, useState } from "react";
 
 import type { EventEnvelope, MemberView } from "../api/types";
+import type { BudgetView } from "../app/budget";
 import { useSession } from "../app/queries";
 import { networkRoutes, typingThreads, type NetworkStage } from "../fixtures/network";
-import { WORLD_ID, members, orgs } from "../fixtures/shell";
+import { WORLD_ID, budgets, members, orgs } from "../fixtures/shell";
 import { useFixtureEmit } from "../gallery/fixtureContext";
 import type { GallerySection } from "../gallery/types";
 import type { EventSourceLike } from "../realtime/dispatcher";
@@ -123,14 +124,16 @@ function page(
     typing?: readonly string[];
     bigRun?: boolean;
     actingAs?: MemberView;
+    budget?: BudgetView;
   } = {},
 ): GallerySection {
+  const routes = networkRoutes(stage, { bigRun: options.bigRun ?? true, actingAs: options.actingAs });
   return {
     title,
     description,
     layout: "page",
     height: 720,
-    fixtures: networkRoutes(stage, { bigRun: options.bigRun ?? true, actingAs: options.actingAs }),
+    fixtures: options.budget === undefined ? routes : { ...routes, "GET /api/budget": options.budget },
     render: () => (
       <Screen initialWorld={options.world} initialSelected={options.selected} typing={options.typing} />
     ),
@@ -185,6 +188,12 @@ export default [
     "Network view: before a request",
     "The story's suggested recipients are ringed; the rest of the network waits below.",
     "before",
+  ),
+  page(
+    "Network view: a thread stopped on the budget",
+    "Today's live budget ran out before Ridgeline replied: its edge and panel say Closed, and why, with no summary.",
+    "stopped",
+    { selected: orgs.ridgeline.id, budget: budgets.dailyExhausted },
   ),
   page(
     "Network view: closed",

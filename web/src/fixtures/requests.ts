@@ -9,6 +9,8 @@
  * and sharing change the world, so the gallery's buttons really move items between
  * sections. Timestamps are relative to `now`, so ages read as they would in the app.
  */
+import type { BudgetState, BudgetView } from "../app/budget";
+import { mentionedSlugs } from "../requests/mentions";
 import { northlakeSettings } from "./customize";
 import { problem, type FixtureRoutes } from "./index";
 import { members, orgs, sessionAs, shellRoutes } from "./shell";
@@ -86,12 +88,19 @@ function searched(query: string): ActivityLine {
   return { tool: "search_org_knowledge", label: "Searched your organization's knowledge", detail: query };
 }
 
-const READ_DOCUMENT: ActivityLine = { tool: "read_document", label: "Read a document", detail: null };
+/** `read_document`'s line names the record it read by its title. */
+function read(title: string): ActivityLine {
+  return { tool: "read_document", label: "Read a document", detail: title };
+}
 
 // --- Drafts ------------------------------------------------------------------------------
 
 export const HENDERSON_QUESTION =
   "Can we run XRD on 12 air-sensitive powders before Nov 6? The public calendar is full until Nov 10.";
+
+/** The answerer's short form of the question, the decision card's title. */
+export const HENDERSON_SHORT_QUESTION =
+  "Can we run all 12 by Nov 6, at what price, and how do we keep SEM samples inert?";
 
 const HENDERSON_ANSWER =
   "Yes, we can fit them in. There's XRD time on the morning of Wednesday, Nov 4, and SEM/EDS is open that week, so results would be ready by Thursday, Nov 5.\n\n" +
@@ -101,26 +110,28 @@ const HENDERSON_ANSWER =
 const HENDERSON_SHARING_REASON =
   "The answer mentions an internal reserve XRD slot (Wed, Nov 4). Northlake shares what's open on the public calendar, not internal reserve slots.";
 
-const HENDERSON_ROUTE = {
-  assignees: ["helen"],
-  reason: "Instrument priority and reserve-slot requests go to Helen.",
-};
+/** Why routing gave Henderson's item to each member, in the answerer's words to them. */
+export const HENDERSON_WHY = {
+  helen: "you approve reserve-slot exceptions",
+  raj: "you run XRD and SEM",
+} as const;
 
 /** Claude's first draft for Henderson (the escalation's rev 1). */
 export function hendersonDraft(createdAt: string): EscalationDraft {
   return {
     draft_rev: 1,
     answer: HENDERSON_ANSWER,
-    route: HENDERSON_ROUTE,
+    short_question: HENDERSON_SHORT_QUESTION,
+    route: { assignees: [{ slug: "helen", why: HENDERSON_WHY.helen }] },
     rationale:
       "The public calendar has XRD booked until Nov 10, so without Raj's reserve block the honest answer is no. " +
       "His note puts the block on Wed, Nov 4, 09:00 to 13:00, enough for about 14 powders. " +
       "The price is the external academic list: 12 × ($45 + $60) + $150 = $1,410.",
     activity: [
       searched("XRD availability before Nov 6"),
-      searched("reserve XRD block"),
-      READ_DOCUMENT,
-      searched("external academic price list XRD SEM air-free handling"),
+      read("Public calendar"),
+      read("Raj's note, reserve XRD block"),
+      read("External academic price list"),
     ],
     created_at: createdAt,
   };
@@ -142,7 +153,15 @@ function hendersonRedraft(rev: number, createdAt: string): EscalationDraft {
 
 /** A message the representative wrote in Ask mode, held as an `outbound_review` draft. */
 function heldDraft(answer: string, createdAt: string): EscalationDraft {
-  return { draft_rev: 1, answer, route: null, rationale: HELD_REASON, activity: [], created_at: createdAt };
+  return {
+    draft_rev: 1,
+    answer,
+    short_question: null,
+    route: null,
+    rationale: HELD_REASON,
+    activity: [],
+    created_at: createdAt,
+  };
 }
 
 const VANTAGE_REPLY =
@@ -316,6 +335,9 @@ interface ThreadParts {
   deadline?: string;
 }
 
+/** Why the system stopped a thread (a spent budget, a model error), never a person. */
+export type StopReason = NonNullable<ThreadDetail["stop_reason"]>;
+
 function thread(parts: ThreadParts): ThreadRecord {
   const notes = parts.notes ?? [];
   const consults = parts.consults ?? [];
@@ -339,6 +361,7 @@ function thread(parts: ThreadParts): ThreadRecord {
       id: parts.threadId,
       title: parts.title,
       state: parts.state,
+      stop_reason: null,
       side: "responder",
       requester: parts.requester,
       responder: northlake,
@@ -367,7 +390,7 @@ function hendersonThread({ at }: Clock): ThreadRecord {
   const henderson = orgs.henderson;
   return thread({
     threadId: THREAD.henderson,
-    title: "XRD and SEM/EDS for 12 air-sensitive powders",
+    title: "XRD and SEM/EDS quote",
     requester: henderson,
     state: "awaiting_principal",
     createdAt: at(12),
@@ -524,7 +547,8 @@ function ridgelineThread({ at }: Clock): ThreadRecord {
   const draft: EscalationDraft = {
     draft_rev: 1,
     answer,
-    route: { assignees: ["helen"], reason: "Instrument scheduling goes to Helen." },
+    short_question: "Can we image four PEEK holders this week, and at what price?",
+    route: { assignees: [{ slug: "helen", why: "you schedule the SEM" }] },
     rationale: "SEM is open from Nov 3 on the public calendar, and the list price for secondary-electron imaging is $160 per sample.",
     activity: [searched("SEM calendar this week"), searched("SEM price list")],
     created_at: at(60 * 73),
@@ -633,6 +657,95 @@ export function requestsWorld(now: number = Date.now()): RequestsWorld {
   return { threads: new Map(threads.map((record) => [record.detail.id, record])) };
 }
 
+/**
+ * Henderson's item routed to both Helen and Raj, each with their own why: routing names
+ * everyone who can answer, and each reads why it came to them.
+ */
+export function routedToBoth(world: RequestsWorld): RequestsWorld {
+  const record = world.threads.get(THREAD.henderson);
+  const item = record?.workspace.escalations.find((candidate) => candidate.id === ESCALATION.henderson);
+  if (record === undefined || item === undefined) return world;
+  item.assignees = [helen, raj];
+  item.drafts = item.drafts.map((draft) =>
+    draft.draft_rev === 1
+      ? {
+          ...draft,
+          route: {
+            assignees: [
+              { slug: helen.slug, why: HENDERSON_WHY.helen },
+              { slug: raj.slug, why: HENDERSON_WHY.raj },
+            ],
+          },
+        }
+      : draft,
+  );
+  record.detail.access.push(routed(raj));
+  return world;
+}
+
+/** Henderson's item routed to Raj alone, and that routing his only way into the thread. */
+export function routedToRaj(world: RequestsWorld): RequestsWorld {
+  const record = world.threads.get(THREAD.henderson);
+  const item = record?.workspace.escalations.find((candidate) => candidate.id === ESCALATION.henderson);
+  if (record === undefined || item === undefined) return world;
+  item.assignees = [raj];
+  item.drafts = item.drafts.map((draft) =>
+    draft.draft_rev === 1 ? { ...draft, route: { assignees: [{ slug: raj.slug, why: HENDERSON_WHY.raj }] } } : draft,
+  );
+  record.detail.access = [
+    ...record.detail.access.filter((row) => row.reason !== "routed" && row.member_id !== raj.id),
+    routed(raj),
+  ];
+  return world;
+}
+
+/**
+ * `threadId` stopped by the system for `reason`, the way the thread workflow records it:
+ * closed, with `stop_reason` set, and this side's `summary` only when its last turn
+ * wrote one (the other side refused; a failed or capped thread gets no last turn).
+ */
+export function stopped(
+  world: RequestsWorld,
+  threadId: string,
+  reason: StopReason,
+  summary: string | null = null,
+): RequestsWorld {
+  const record = world.threads.get(threadId);
+  if (record === undefined) return world;
+  record.detail.state = "closed";
+  record.detail.stop_reason = reason;
+  record.workspace.close_summary = summary;
+  for (const item of record.workspace.escalations) {
+    if (item.status === "open") item.status = "cancelled";
+  }
+  return world;
+}
+
+/** `threadId` waits on the requester's side, deciding what its representative may say. */
+export function waitingOnThem(world: RequestsWorld, threadId: string): RequestsWorld {
+  const record = world.threads.get(threadId);
+  if (record === undefined) return world;
+  record.detail.state = "awaiting_principal";
+  record.detail.side_to_move = "requester";
+  return world;
+}
+
+/**
+ * `threadId` ended without a close (two silent turns, its turn limit or its deadline),
+ * the way the thread workflow records it: expired, no `stop_reason`, no summary.
+ */
+export function expired(world: RequestsWorld, threadId: string): RequestsWorld {
+  const record = world.threads.get(threadId);
+  if (record === undefined) return world;
+  record.detail.state = "expired";
+  record.detail.stop_reason = null;
+  record.workspace.close_summary = null;
+  for (const item of record.workspace.escalations) {
+    if (item.status === "open") item.status = "cancelled";
+  }
+  return world;
+}
+
 const ENDED: ReadonlySet<ThreadState> = new Set(["closed", "expired"]);
 
 function accessFor(record: ThreadRecord, member: MemberView): ThreadAccess["reason"][] {
@@ -652,6 +765,10 @@ function questionOf(record: ThreadRecord, item: EscalationView): string {
   return record.workspace.consults.find((asked) => asked.id === item.consult_id)?.question ?? HELD_QUESTION;
 }
 
+function currentDraftOf(item: EscalationView): EscalationDraft | undefined {
+  return item.drafts.find((draft) => draft.draft_rev === item.current_draft_rev) ?? item.drafts.at(-1);
+}
+
 function itemFor(record: ThreadRecord, member: MemberView, item: EscalationView | null): InboxItem {
   const mine = record.detail.access.find((row) => row.member_id === member.id && row.reason === "shared");
   const sharer =
@@ -665,6 +782,7 @@ function itemFor(record: ThreadRecord, member: MemberView, item: EscalationView 
     side: record.detail.side,
     counterparty: record.detail.requester,
     thread_state: record.detail.state,
+    stop_reason: record.detail.stop_reason ?? null,
     side_to_move: record.detail.side_to_move,
     escalation:
       item === null
@@ -674,6 +792,7 @@ function itemFor(record: ThreadRecord, member: MemberView, item: EscalationView 
             kind: item.kind,
             status: item.status,
             question: questionOf(record, item),
+            short_question: currentDraftOf(item)?.short_question ?? null,
             reason: item.reason,
             assignees: item.assignees,
             created_at: item.created_at,
@@ -740,6 +859,8 @@ export interface RequestsRouteOptions {
    * dropped stream; asking again meanwhile gets the server's 409 with no `resolved_by`.
    */
   redraftNeverLands?: boolean;
+  /** What `GET /api/budget` says (default `ok`: live models off, nothing stopped). */
+  budget?: BudgetState;
 }
 
 function memberById(memberId: string): MemberView | null {
@@ -885,6 +1006,10 @@ function applyResolve(
       if (asked !== null) release(record, asked, settled(TAKEN_OVER, "What they sent", text), by, at);
       else if (text !== "") told(record, item, settled(`Not sent: ${TAKEN_OVER}`, "What they sent", text), by, at);
       break;
+    // A held message sent back: nothing crosses, and the member's words are an
+    // instruction to the representative, never text it may pass on, so nothing is listed.
+    case "revise":
+      break;
   }
   record.detail.state = "active";
   touch(record, at);
@@ -911,6 +1036,7 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
   return {
     ...shellRoutes(actor),
     "GET /api/session": () => session,
+    "GET /api/budget": (): BudgetView => ({ live: false, state: options.budget ?? "ok" }),
     "GET /api/inbox": () => inboxFor(world, actor),
     "GET /api/threads/{thread_id}": ({ params }) => {
       const record = visible(params.thread_id ?? "");
@@ -935,10 +1061,20 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
       const { record, item } = found;
       const target = memberById(bodyOf<{ member_id: string }>(body).member_id ?? "");
       if (target?.org.id !== northlake.id) return problem(403, "not_in_org", "That member isn't in your organization.");
+      const previous = item.assignees;
       item.assignees = [ref(target)];
       item.version += 1;
       if (!record.detail.access.some((row) => row.member_id === target.id && row.reason === "routed")) {
         record.detail.access.push(routed(ref(target)));
+      }
+      // As the server's `_drop_routed`: the item took its access with it, unless another
+      // item on the thread still routes the previous assignee there.
+      for (const left of previous) {
+        const routedElsewhere = record.workspace.escalations.some(
+          (other) => other !== item && other.assignees.some((assignee) => assignee.id === left.id),
+        );
+        if (left.id === target.id || routedElsewhere) continue;
+        record.detail.access = record.detail.access.filter((row) => !(row.member_id === left.id && row.reason === "routed"));
       }
       touch(record, new Date().toISOString());
       return { escalation_id: item.id, assignees: [target.id] };
@@ -977,8 +1113,8 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
       const record = visible(params.thread_id ?? "");
       if (record === null) return notFound();
       const text = bodyOf<{ body: string }>(body).body ?? "";
-      const mentioned = [...text.matchAll(/@([a-z0-9_-]+)/gi)]
-        .map((match) => Object.values(members).find((candidate) => candidate.slug === match[1]?.toLowerCase()))
+      const mentioned = mentionedSlugs(text)
+        .map((slug) => Object.values(members).find((candidate) => candidate.slug === slug))
         .filter((member): member is MemberView => member?.org.id === northlake.id);
       const at = new Date().toISOString();
       const note: NoteView = {

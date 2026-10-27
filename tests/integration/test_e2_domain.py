@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from harmony.agents.consult import ConsultDraft, SharingCheck
-from harmony.agents.models import EscalationResolution, Route
+from harmony.agents.models import EscalationResolution, Route, RouteAssignee
 from harmony.db.models import Consult, Escalation, Event, RepPolicy, Thread, ThreadAccess
 from harmony.db.models.choices import EscalationKind
 from harmony.db.uow import UnitOfWork, unit_of_work
@@ -137,7 +137,7 @@ async def test_the_decision_draft_and_sharing_check_are_written_once(
     sm = db_sessionmaker
     world = await seeded_world(sm)
     opened = await open_thread(sm, world)
-    route = Route(assignees=["helen"], reason="Reserve slots")
+    route = Route(assignees=[RouteAssignee(member="helen", why="Reserve slots")])
     async with unit_of_work(sm, world) as uow:
         consult = await open_consult(uow, opened)
         turn_id = uuid4()
@@ -232,7 +232,7 @@ async def test_resolution_is_first_writer_wins(db_sessionmaker: Sessionmaker) ->
     world = await seeded_world(sm)
     opened = await open_thread(sm, world)
     escalation_id, _ = await open_escalation(
-        sm, opened, route=Route(assignees=["helen"], reason="x")
+        sm, opened, route=Route(assignees=[RouteAssignee(member="helen", why="x")])
     )
 
     def resolution(member_id: UUID) -> EscalationResolution:
@@ -287,7 +287,7 @@ async def test_add_draft_appends_revs(db_sessionmaker: Sessionmaker) -> None:
     world = await seeded_world(sm)
     opened = await open_thread(sm, world)
     escalation_id, _ = await open_escalation(sm, opened)
-    route = Route(assignees=["helen"], reason="Reserve slots")
+    route = Route(assignees=[RouteAssignee(member="helen", why="Reserve slots")])
 
     async with unit_of_work(sm, world) as uow:
         first = await escalations.add_draft(uow, escalation_id, draft("v1"), turn_id=None)
@@ -341,7 +341,17 @@ async def test_a_redraft_that_wrote_nothing_is_told_to_whoever_sees_the_item(
 
 
 @pytest.mark.parametrize(
-    "route", [None, Route(assignees=["nobody", "maya"], reason="Guessing")], ids=["none", "invalid"]
+    "route",
+    [
+        None,
+        Route(
+            assignees=[
+                RouteAssignee(member="nobody", why="Guessing"),
+                RouteAssignee(member="maya", why="Guessing"),
+            ]
+        ),
+    ],
+    ids=["none", "invalid"],
 )
 async def test_a_missing_or_invalid_route_goes_to_the_default_assignee(
     db_sessionmaker: Sessionmaker, route: Route | None
@@ -375,7 +385,14 @@ async def test_slugs_are_matched_loosely_and_an_assigned_escalation_keeps_its_as
     world = await seeded_world(sm)
     opened = await open_thread(sm, world)
     escalation_id, assignees = await open_escalation(
-        sm, opened, route=Route(assignees=["@RAJ", " raj "], reason="Instrument question")
+        sm,
+        opened,
+        route=Route(
+            assignees=[
+                RouteAssignee(member="@RAJ", why="Instrument question"),
+                RouteAssignee(member=" raj ", why="Instrument question"),
+            ]
+        ),
     )
     assert assignees == [RAJ]
     async with sm() as session:
@@ -391,7 +408,9 @@ async def test_slugs_are_matched_loosely_and_an_assigned_escalation_keeps_its_as
     async with unit_of_work(sm, world) as uow:
         escalation = await uow.session.get(Escalation, (world, escalation_id))
         assert escalation is not None
-        retry = await routing.apply_route(uow, escalation, Route(assignees=["helen"], reason="r"))
+        retry = await routing.apply_route(
+            uow, escalation, Route(assignees=[RouteAssignee(member="helen", why="r")])
+        )
         await uow.commit()
     assert retry == [RAJ]
     assert await routed(sm, world, opened.thread_id) - {ALEX} == {RAJ}
@@ -403,7 +422,7 @@ async def test_reassigning_an_item_away_keeps_access_an_earlier_item_gave(
     sm = db_sessionmaker
     world = await seeded_world(sm)
     opened = await open_thread(sm, world)
-    raj = Route(assignees=["raj"], reason="Sample prep")
+    raj = Route(assignees=[RouteAssignee(member="raj", why="Sample prep")])
     earlier, _ = await open_escalation(sm, opened, route=raj)
     async with unit_of_work(sm, world) as uow:
         await escalations.resolve(
@@ -432,7 +451,7 @@ async def test_reassign_moves_the_item_and_its_access(db_sessionmaker: Sessionma
     world = await seeded_world(sm)
     opened = await open_thread(sm, world)
     escalation_id, _ = await open_escalation(
-        sm, opened, route=Route(assignees=["raj"], reason="Instrument question")
+        sm, opened, route=Route(assignees=[RouteAssignee(member="raj", why="Instrument question")])
     )
     assert RAJ in await routed(sm, world, opened.thread_id)
 

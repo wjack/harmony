@@ -1,7 +1,7 @@
 """Routing: who an escalation goes to (§10; REVISION_UNSTRUCTURED.md §6).
 
 Routing is prompt-based: the answerer reads the org's routing prompt and member profiles
-and proposes a `Route` (member slugs and a reason). Code only validates it: unknown
+and proposes a `Route` (member slugs, each with why). Code only validates it: unknown
 slugs are dropped, and with nothing valid left the escalation goes to the org's default
 assignee (`rep_policy.default_assignee_id`, else its first admin). Nothing is recorded
 for routing to learn from; the escalation's snapshot carries the assignees.
@@ -17,7 +17,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from harmony.agents.models import Route
+from harmony.agents.models import Route, RouteAssignee
 from harmony.db import repo
 from harmony.db.models import Escalation, Member, RepPolicy
 from harmony.db.uow import UnitOfWork
@@ -31,12 +31,17 @@ def _slug(ref: str) -> str:
     return ref.strip().removeprefix("@").casefold()
 
 
-def named_slugs(refs: Iterable[str], slugs: Iterable[str]) -> list[str]:
-    """The member slugs (of `slugs`) that a route's `refs` name, as `apply_route` reads
-    them: compared loosely (case, a leading `@`, spaces), unknown ones dropped, each
-    member once."""
+def named_slugs(assignees: Iterable[RouteAssignee], slugs: Iterable[str]) -> dict[str, str]:
+    """The member slugs (of `slugs`) that a route's assignees name, each with its why,
+    as `apply_route` reads them: compared loosely (case, a leading `@`, spaces), unknown
+    ones dropped, each member once (with the first why given for them)."""
     canonical = {_slug(slug): slug for slug in slugs}
-    return list(dict.fromkeys(canonical[_slug(ref)] for ref in refs if _slug(ref) in canonical))
+    named: dict[str, str] = {}
+    for assignee in assignees:
+        slug = canonical.get(_slug(assignee.member))
+        if slug is not None:
+            named.setdefault(slug, assignee.why)
+    return named
 
 
 async def apply_route(uow: UnitOfWork, escalation: Escalation, route: Route | None) -> list[UUID]:

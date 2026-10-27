@@ -15,12 +15,14 @@ from harmony.events.schemas import AccessReason, ScopeKind, WorldMode
 __all__ = [
     "AccessReason",
     "Autonomy",
+    "BudgetKind",
     "CardKind",
     "CardStatus",
     "ChatRole",
     "ConsultStatus",
     "DirectoryVisibility",
     "EscalationKind",
+    "FailureReason",
     "Fit",
     "MemberRole",
     "ModelRole",
@@ -55,6 +57,13 @@ NoteAuthor = Literal["member", "claude"]
 
 # ThreadWorkflow states; `closed` and `expired` are terminal.
 ThreadState = Literal["active", "awaiting_principal", "closed", "expired"]
+# Why a turn failed or a thread stopped (3.5); one enum for every surface. The budget
+# reasons come from `BudgetKind` through `payloads.BUDGET_FAILURES`.
+FailureReason = Literal[
+    "session_budget", "daily_budget", "demo_budget", "paused", "model_error", "refused"
+]
+# Which hosted cap refused a call (`BudgetExhausted.kind`, 3.4).
+BudgetKind = Literal["session", "client", "daily", "global", "paused", "provider"]
 ThreadMessageKind = Literal["message", "close"]
 # Every message says whether an agent, an agent with a named human's approval, or a
 # human who took over wrote it.

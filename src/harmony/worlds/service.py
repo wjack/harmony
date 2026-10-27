@@ -4,9 +4,19 @@ A visitor session holds a desk world and a network world (`lens`), each with its
 acting member. Every change of a session's world goes through one transaction that
 seeds the new world, repoints the session, marks the old world `retiring` and, for an
 existing session, bumps the epoch and pokes the `session` channel so streams opened on
-the old world close. The old world is then handed to the `Retirer`, and the new world's
-seeded open requests to the `RequestStarter`, so their workflows play from the start
-(the adversary's, in the demo scenario).
+the old world close. The old world is then handed to the `Retirer`.
+
+Nothing model-driven runs when a world is created (LIVE_DEMO_PLAN 3.3). A seeded open
+request (the Vantage probe, in the demo scenario) starts the first time the session's
+acting member belongs to its requester or a recipient: after act-as
+(`start_requests_for`), and after a switch that keeps the acting member. A
+`world_workflows` row for the request's workflow means it started, so it starts at
+most once per world. With hosted caps on, it waits while the session's live calls
+can't run (paused, a spent cap, a provider block): its threads' first turns would be
+refused and end for good. The next act-as or switch once they can run starts it.
+
+While the passcode gate is on, the caller passes its `CreationLimits`: new sessions
+and wiped-world re-creates or Resets are counted before anything is seeded.
 
 Worlds are never truncated in place: forking avoids racing workers that are mid-turn in
 the old world (§11.1). Budgets hang off the session's `budget_lineage`, which every
@@ -16,7 +26,7 @@ fork keeps, so a reset never refills them.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,10 +37,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import InstrumentedAttribute
 
-from harmony.db.models import Member, VisitorSession, World
+from harmony.db.models import Member, VisitorSession, World, WorldWorkflow
 from harmony.db.models.choices import WorldStatus
 from harmony.db.uow import unit_of_work
 from harmony.events.bus import SESSION_CHANNEL
+from harmony.llm.budget_pg import HostedCaps, visitor_budget
+from harmony.seeds.ids import seed_id
 from harmony.seeds.loader import (
     DEFAULT_SCENARIO,
     SCENARIOS_DIR,
@@ -39,7 +51,7 @@ from harmony.seeds.loader import (
     load_scenario,
     seed_world,
 )
-from harmony.seeds.schema import ScenarioError
+from harmony.seeds.schema import OpenRequestSpec, ScenarioError
 from harmony.worlds.retirer import Retirer
 
 log = logging.getLogger(__name__)
@@ -49,7 +61,26 @@ WorldLens = Literal["desk", "network"]
 
 class RequestStarter(Protocol):
     async def start(self, world_id: UUID, request_ids: Sequence[UUID]) -> None:
-        """Start the workflows of `world_id`'s seeded open requests (idempotent)."""
+        """Start the workflows of these seeded open requests of `world_id` (idempotent)."""
+        ...
+
+
+class TooManyWorlds(Exception):
+    """A world-creation limit refused (429 `too_many_attempts`)."""
+
+    def __init__(self, retry_after_s: int) -> None:
+        super().__init__(f"too many new worlds; retry in {retry_after_s}s")
+        self.retry_after_s = retry_after_s
+
+
+class CreationLimits(Protocol):
+    """World-creation limits while the passcode gate is on (`api.gate.WorldLimits`).
+    Each method counts one creation or raises `TooManyWorlds`."""
+
+    def new_session(self, client_key_hash: str | None) -> None: ...
+
+    def recreate(self, session_id: UUID) -> None:
+        """A Reset or a wiped-world re-create of `session_id`'s world."""
         ...
 
 
@@ -106,14 +137,17 @@ class WorldService:
         build_sha: str,
         retirer: Retirer,
         requests: RequestStarter | None = None,
+        caps: HostedCaps | None = None,
         scenarios_dir: Path = SCENARIOS_DIR,
         default_scenario: str = DEFAULT_SCENARIO,
     ) -> None:
-        """Without `requests` (no Temporal), seeded open requests stay unstarted."""
+        """Without `requests` (no Temporal), seeded open requests stay unstarted. With
+        `caps` (hosted live calls), they wait while the session's calls can't run."""
         self._sessionmaker = sessionmaker
         self._build_sha = build_sha
         self._retirer = retirer
         self._requests = requests
+        self._caps = caps
         self._scenarios_dir = scenarios_dir
         self._default_scenario = default_scenario
 
@@ -123,6 +157,8 @@ class WorldService:
         *,
         lens: WorldLens = "desk",
         scenario: str | None = None,
+        limits: CreationLimits | None = None,
+        client_key_hash: str | None = None,
     ) -> UUID:
         """Make sure the session (new if `session_id` is None or unknown) has a live,
         current-build world for `lens`; returns the session ID.
@@ -132,6 +168,10 @@ class WorldService:
         that already has a live world keeps it. Raises `ScenarioNotFound` or
         `ScenarioError` only for a bad `scenario` argument: a scenario stored on the
         session's old world that this build no longer has falls back to the default.
+
+        With `limits`, a new session and a wiped world's re-create are counted (a fork
+        for a new build is not), and `TooManyWorlds` is raised over a limit. A new
+        session records `client_key_hash`.
         """
         if session_id is not None:
             state = await self._lens_state(session_id, lens)
@@ -143,25 +183,46 @@ class WorldService:
                         )
                     return session_id
                 # The world was wiped or never created: a fresh one, same lineage.
+                admit = (lambda: limits.recreate(session_id)) if limits is not None else None
                 if scenario is not None:
-                    await self._switch(session_id, lens, scenario, expect=state.world_id)
+                    await self._switch(
+                        session_id, lens, scenario, expect=state.world_id, admit=admit
+                    )
                 else:
                     await self._switch(
-                        session_id, lens, state.scenario, expect=state.world_id, stored=True
+                        session_id,
+                        lens,
+                        state.scenario,
+                        expect=state.world_id,
+                        stored=True,
+                        admit=admit,
                     )
                 return session_id
-        switch = await self._switch(None, lens, scenario or self._default_scenario, expect=_ANY)
+        switch = await self._switch(
+            None,
+            lens,
+            scenario or self._default_scenario,
+            expect=_ANY,
+            admit=(lambda: limits.new_session(client_key_hash)) if limits is not None else None,
+            client_key_hash=client_key_hash,
+        )
         assert switch is not None
         return switch.session_id
 
     async def fork_and_reset(
-        self, session_id: UUID, lens: WorldLens, *, observed_world_id: UUID
+        self,
+        session_id: UUID,
+        lens: WorldLens,
+        *,
+        observed_world_id: UUID,
+        limits: CreationLimits | None = None,
     ) -> WorldSwitch:
         """Fork the session's `lens` world into a fresh one from the same scenario.
 
         `observed_world_id` is the world the caller acted in. If the session moved on
         concurrently (a double-clicked Reset), nothing is forked twice: the result
-        reports the world the session is in now.
+        reports the world the session is in now. With `limits`, a fork is counted as a
+        re-create and `TooManyWorlds` is raised over the limit.
         """
         state = await self._lens_state(session_id, lens)
         if state is None:
@@ -176,6 +237,7 @@ class WorldService:
                 expect=observed_world_id,
                 stored=True,
                 keep_member=False,
+                admit=(lambda: limits.recreate(session_id)) if limits is not None else None,
             )
             if switch is not None:
                 return switch
@@ -202,6 +264,27 @@ class WorldService:
         return await self._switch(
             session_id, lens, state.scenario, expect=state.world_id, stored=True
         )
+
+    async def start_requests_for(self, session_id: UUID, world_id: UUID, org_id: UUID) -> None:
+        """Start the seeded open requests of `world_id` that `org_id` is party to, as
+        requester or recipient, and that haven't started: after `session_id` acts as
+        one of its members (3.3).
+
+        Never raises: the visitor's world works without them; only their
+        conversations are missing from it.
+        """
+        if self._requests is None:
+            return
+        try:
+            async with self._sessionmaker() as session:
+                name = await session.scalar(select(World.scenario).where(World.id == world_id))
+            if name is None:
+                return
+            scenario = load_scenario(name, self._scenarios_dir)
+        except Exception:
+            log.exception("finding the seeded requests of world %s failed", world_id)
+            return
+        await self._start_party_requests(session_id, world_id, scenario, org_id)
 
     async def retire_all(self) -> list[UUID]:
         """Retire every world that isn't retired yet, one world at a time (the admin
@@ -245,15 +328,21 @@ class WorldService:
         expect: UUID | _Any | None,
         stored: bool = False,
         keep_member: bool = True,
+        admit: Callable[[], None] | None = None,
+        client_key_hash: str | None = None,
     ) -> WorldSwitch | None:
         """Seed a new world and point the session's `lens` at it, in one transaction.
 
-        `session_id=None` creates the session too. With `expect`, nothing happens
-        (None is returned) unless the session still points at that world: two
-        requests racing to fork the same world fork it once. `stored` says the name
-        came from the session's old world rather than from the caller (see `_scenario`).
-        A fork for a new build keeps the acting member; a Reset (`keep_member=False`)
-        starts over as the story's member, where the story begins.
+        `session_id=None` creates the session too, recording `client_key_hash`. With
+        `expect`, nothing happens (None is returned) unless the session still points
+        at that world: two requests racing to fork the same world fork it once.
+        `stored` says the name came from the session's old world rather than from the
+        caller (see `_scenario`). `admit` counts the creation against a limit once the
+        switch is sure to go ahead, and may raise `TooManyWorlds`.
+
+        A fork for a new build keeps the acting member, and then starts the seeded
+        requests that member's org is party to; a Reset (`keep_member=False`) starts
+        over as the story's member, where the story begins.
         """
         scenario = self._scenario(scenario_name, stored=stored)
         world_id = uuid4()
@@ -270,6 +359,8 @@ class WorldService:
             previous = _world_of(visitor, lens) if visitor is not None else None
             if not isinstance(expect, _Any) and previous != expect:
                 return None
+            if admit is not None:
+                admit()
             keep_slug = (
                 await _member_slug(session, visitor, lens) if visitor and keep_member else None
             )
@@ -281,7 +372,9 @@ class WorldService:
             )
             member_id = seeded.member_ids.get(start_slug or "", seeded.default_member_id)
             if visitor is None:
-                visitor = VisitorSession(id=uuid4(), budget_lineage=lineage, epoch=0)
+                visitor = VisitorSession(
+                    id=uuid4(), budget_lineage=lineage, epoch=0, client_key_hash=client_key_hash
+                )
                 session.add(visitor)
             else:
                 # Streams opened on the old world close on the epoch change.
@@ -297,9 +390,10 @@ class WorldService:
                 )
             await uow.commit()
             new_session_id = visitor.id
-            request_ids = seeded.request_ids
 
-        await self._start_requests(world_id, request_ids)
+        kept_org = _org_of(scenario, keep_slug) if keep_slug is not None else None
+        if kept_org is not None:
+            await self._start_party_requests(new_session_id, world_id, scenario, kept_org)
         if previous is not None:
             await self._retire(previous)
         return WorldSwitch(new_session_id, lens, world_id, previous)
@@ -327,11 +421,49 @@ class WorldService:
             )
             return load_scenario(self._default_scenario, self._scenarios_dir)
 
-    async def _start_requests(self, world_id: UUID, request_ids: Sequence[UUID]) -> None:
-        if self._requests is None or not request_ids:
+    async def _start_party_requests(
+        self, session_id: UUID, world_id: UUID, scenario: Scenario, org_id: UUID
+    ) -> None:
+        """Start the seeded requests `org_id` is party to that have no `world_workflows`
+        row yet, one caller per world at a time, so a double click starts each once.
+        While `session_id`'s live calls can't run, nothing starts and nothing is
+        recorded, so a later act-as or switch starts them."""
+        if self._requests is None:
             return
+        request_ids = _party_requests(scenario, org_id)
+        if not request_ids:
+            return
+        # Imported here: payloads imports `agents.models`, then `auth.views`, then this.
+        from harmony.temporal.workflows.payloads import request_workflow_id
+
+        by_workflow = {request_workflow_id(world_id, rid): rid for rid in request_ids}
         try:
-            await self._requests.start(world_id, request_ids)
+            if self._caps is not None:
+                budget = await visitor_budget(self._sessionmaker, self._caps, session_id=session_id)
+                if budget.stopped_by is not None:
+                    log.info(
+                        "seeded requests of world %s wait: live calls stopped by %s",
+                        world_id,
+                        budget.stopped_by,
+                    )
+                    return
+            async with self._sessionmaker() as session, session.begin():
+                # Held until the starts are recorded: only other starts in this world wait.
+                key = f"seeded_requests:{world_id}"
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0)))
+                )
+                started = set(
+                    await session.scalars(
+                        select(WorldWorkflow.workflow_id).where(
+                            WorldWorkflow.world_id == world_id,
+                            WorldWorkflow.workflow_id.in_(by_workflow),
+                        )
+                    )
+                )
+                missing = [rid for wid, rid in by_workflow.items() if wid not in started]
+                if missing:
+                    await self._requests.start(world_id, missing)
         except Exception:
             # The visitor's world works without them; only their conversations are
             # missing from it.
@@ -348,6 +480,28 @@ class WorldService:
 
 def _world_of(visitor: VisitorSession, lens: WorldLens) -> UUID | None:
     return visitor.desk_world_id if lens == "desk" else visitor.network_world_id
+
+
+def _org_of(scenario: Scenario, member_slug: str) -> UUID | None:
+    for org in scenario.orgs:
+        if any(member.slug == member_slug for member in org.members):
+            return seed_id(scenario.name, "org", org.slug)
+    return None
+
+
+def _party_requests(scenario: Scenario, org_id: UUID) -> list[UUID]:
+    """The scenario's open requests whose requester or a recipient is `org_id`."""
+    name = scenario.name
+
+    def parties(spec: OpenRequestSpec) -> set[UUID]:
+        slugs = (spec.requester, *(recipient.org for recipient in spec.recipients))
+        return {seed_id(name, "org", slug) for slug in slugs}
+
+    return [
+        seed_id(name, "network_request", spec.slug)
+        for spec in scenario.requests
+        if org_id in parties(spec)
+    ]
 
 
 def _point(visitor: VisitorSession, lens: WorldLens, world_id: UUID, member_id: UUID) -> None:

@@ -1,12 +1,14 @@
 """The beats a story run records: a step's `expect` as atoms, and the run's result.
 
 Beats are matched as atoms, so `closed: [northlake, ridgeline]` is two facts that can
-arrive in either order. `recast` plays a story as another member of its org.
+arrive in either order. `recast` plays a story as another member of its org, and
+`free_form` makes a story of one message with no beats (`harmony run --message`).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -62,6 +64,8 @@ def describe(atom: Atom) -> str:
 class SeenBeat:
     atom: Atom
     elapsed_s: float
+    # Wall time, to line the beat up with what the database recorded meanwhile.
+    at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -69,12 +73,22 @@ class StoryRun:
     world_id: UUID
     expected: list[tuple[StoryStepSpec, frozenset[Atom]]]
     conversation_id: UUID | None = None
-    request_id: UUID | None = None
-    # Responder org slug → its thread.
-    threads: dict[str, UUID] = field(default_factory=dict[str, UUID])
+    # Every request the chat sent, in the order the run saw them.
+    request_ids: list[UUID] = field(default_factory=list[UUID])
+    # Each request's thread → its responder org's slug.
+    threads: dict[UUID, str] = field(default_factory=dict[UUID, str])
     seen: list[SeenBeat] = field(default_factory=list[SeenBeat])
     outcome: Outcome = "failed"
     detail: str | None = None
+
+    @property
+    def request_id(self) -> UUID | None:
+        """The chat's first request: the one a story is about."""
+        return self.request_ids[0] if self.request_ids else None
+
+    def add_request(self, request_id: UUID | None) -> None:
+        if request_id is not None and request_id not in self.request_ids:
+            self.request_ids.append(request_id)
 
     @property
     def seen_atoms(self) -> set[Atom]:
@@ -93,6 +107,12 @@ class StoryRun:
 
 def expected_beats(story: StorySpec) -> list[tuple[StoryStepSpec, frozenset[Atom]]]:
     return [(step, atoms(step.expect)) for step in story.steps if step.expect is not None]
+
+
+def free_form(member: str, message: str) -> StorySpec:
+    """A story of `member` sending `message`, with no beats and no rules: the run
+    follows whatever requests come of it to their end."""
+    return StorySpec.model_validate({"name": "message", "as": member, "suggested_message": message})
 
 
 def recast(story: StorySpec, member: str) -> StorySpec:

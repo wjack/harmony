@@ -167,6 +167,8 @@ class RequestSpec(_Strict):
     """The network request a seeded thread belongs to (requester side)."""
 
     brief: Text
+    # The request's name, and its one thread's title, which both sides see.
+    title: Text | None = None
     created_by: Slug | None = None
     # When the request (and its thread) was made, at or before the anchor: seeded
     # history sits in the world's past (`at: -30d`). Default: when the world is created.
@@ -208,6 +210,10 @@ class RecipientSpec(_Strict):
     org: Slug
     reason: Text
     fit: Fit | None = None
+    # Its thread's title, which both sides see, and what it alone is asked.
+    title: Text | None = None
+    ask: Text | None = None
+    suggested: bool | None = None
 
 
 class OpenRequestSpec(_Strict):
@@ -221,6 +227,8 @@ class OpenRequestSpec(_Strict):
     created_by: Slug
     # The approved brief: the requester representative's mandate, in prose.
     brief: Text
+    # The request's name for the requester's member; never shown to a recipient.
+    title: Text | None = None
     recipients: list[RecipientSpec] = Field(min_length=1)
 
 
@@ -233,7 +241,7 @@ class ThreadsSpec(_Strict):
 
 # `agents.models.EscalationAction`, restated: importing it would be circular (agents ->
 # auth -> worlds -> seeds). tests/unit/test_story.py keeps the two equal.
-StoryAction = Literal["approve", "decline", "take_over"]
+StoryAction = Literal["approve", "decline", "take_over", "revise"]
 # A `demo.notice` / `demo.needs_human` kind, such as `needs_human`.
 NoticeKind = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.]*$", max_length=64)]
 

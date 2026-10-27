@@ -2,7 +2,9 @@ import { ArrowRight, Check, Compass, Waypoints, Sparkles, type LucideIcon } from
 import type { ReactNode } from "react";
 
 import type { MemberView, SessionView } from "../api/types";
+import { useBudget, type BudgetView } from "../app/budget";
 import { useMembers } from "../app/queries";
+import { budgetLine } from "../chat/failureCopy";
 import { Avatar, Button, Modal, ModalList, Segmented, Spark, Toggle, cx } from "../shell/ui";
 import { useUnavailable } from "../shell/unavailable";
 import { useEnterDemo, useSwitchAccount, type DemoEntry } from "./accounts";
@@ -25,7 +27,8 @@ const TABS = [
 /**
  * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens on
  * the first visit: the network in thirty seconds, the cast, and three ways in. Its
- * Controls tab holds the walkthrough switches, the world (reset, replay) and the model.
+ * Controls tab holds the walkthrough switches, the world (reset, replay), and which
+ * models run and what this session has spent.
  */
 export function DemoControls({ session }: { session: SessionView | null }) {
   const open = useDemoState((state) => state.controlsOpen);
@@ -230,14 +233,6 @@ function PersonaCard({
 
 // --- Controls -----------------------------------------------------------------------
 
-type ModelChoice = "scripted" | "opus" | "haiku";
-
-const MODELS = [
-  { value: "scripted", label: "Scripted" },
-  { value: "opus", label: "Opus 5.5" },
-  { value: "haiku", label: "Haiku 5.5" },
-] as const;
-
 function Controls({ session }: { session: SessionView | null }) {
   const showSuggestedMessage = useDemoState((state) => state.showSuggestedMessage);
   const highlightRecipients = useDemoState((state) => state.highlightSuggestedRecipients);
@@ -306,22 +301,71 @@ function Controls({ session }: { session: SessionView | null }) {
         </p>
       </Section>
 
-      {/* No spend figure until the API reports one: scripted runs make no model calls. */}
-      <Section title="Model and spend" aside="Scripted: no spend">
-        <Segmented<ModelChoice>
-          label="Model"
-          value="scripted"
-          options={MODELS}
-          onChange={(value) => {
-            if (value !== "scripted") unavailable("Live models");
-          }}
-        />
-        <p className="mt-2 text-xs leading-4 text-muted">
-          Scripted runs replay recorded model output, so they cost nothing. Live models aren&apos;t part of this
-          prototype yet.
-        </p>
-      </Section>
+      <ModelAndSpend session={session} />
     </>
+  );
+}
+
+/** Which models run where (fixed by the deployment), and this session's spend. Read-only. */
+function ModelAndSpend({ session }: { session: SessionView | null }) {
+  const budget = useBudget().data;
+  const live = budget?.live === true;
+  const spend = live ? (budget.session ?? null) : null;
+  const line = live ? budgetLine(budget.state) : null;
+  return (
+    <Section title="Model and spend">
+      <p className="text-[13px] leading-5 text-secondary">
+        Opus 5.5 for featured organizations&apos; internal Claude, representative and consult answerer; Haiku 5.5
+        for background organizations, screening and the sharing check.
+      </p>
+      {spend !== null && <Spend spend={spend} />}
+      {line !== null && <p className="mt-2 text-xs leading-4 font-medium text-warning">{line}</p>}
+      <p className="mt-2 text-xs leading-4 text-muted">
+        {session === null
+          ? "Each session gets its own live-model budget once the demo starts."
+          : budget === undefined
+            ? "Loading this session's spend…"
+            : budget.live
+              ? "Every session has its own live-model budget. Reset doesn't refill it."
+              : "Spend caps are off in this deployment, so nothing is metered here."}
+      </p>
+    </Section>
+  );
+}
+
+const usd = (amount: number) => `$${amount.toFixed(2)}`;
+
+/** This session's spend, laid out like a row of Claude's Settings → Usage. */
+function Spend({ spend }: { spend: NonNullable<BudgetView["session"]> }) {
+  const used = spend.cap_usd > 0 ? Math.min(1, (spend.spent_usd + spend.reserved_usd) / spend.cap_usd) : 1;
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-4">
+        <div className="w-[136px] shrink-0">
+          <p className="text-sm leading-5 text-ink">This session</p>
+          <p className="text-xs leading-4 text-muted tabular-nums">
+            {usd(spend.remaining_usd)} left of {usd(spend.cap_usd)}
+          </p>
+        </div>
+        <div
+          role="progressbar"
+          aria-label="This session's live-model budget used"
+          aria-valuemin={0}
+          aria-valuemax={spend.cap_usd}
+          aria-valuenow={Math.min(spend.cap_usd, spend.spent_usd + spend.reserved_usd)}
+          aria-valuetext={`${usd(spend.spent_usd)} spent, ${usd(spend.remaining_usd)} left`}
+          className="h-2 min-w-0 flex-1 overflow-hidden rounded-full border border-border-strong bg-surface"
+        >
+          <div className="h-full rounded-full bg-toggle" style={{ width: `${String(used * 100)}%` }} />
+        </div>
+        <span className="shrink-0 text-[13px] leading-5 text-secondary tabular-nums">{usd(spend.spent_usd)} spent</span>
+      </div>
+      {spend.reserved_usd > 0 && (
+        <p className="mt-1.5 text-xs leading-4 text-muted">
+          {usd(spend.reserved_usd)} is held for calls in progress until they finish.
+        </p>
+      )}
+    </div>
   );
 }
 

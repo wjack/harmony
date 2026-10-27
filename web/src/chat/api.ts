@@ -2,8 +2,9 @@
  * The chat's queries and mutations over the typed API client.
  *
  * Reads: the conversation (`ChatItem`s) and a request's per-recipient status. Writes
- * start chats, send messages, resolve cards and answer inline questions; each refetches
- * what it changed, and the event stream (live.ts) keeps everything current in between.
+ * start chats, send messages, set a chat's send mode, resolve cards and answer inline
+ * questions; each refetches what it changed, and the event stream (live.ts) keeps
+ * everything current in between.
  */
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -11,7 +12,7 @@ import { unwrap } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
 import { useApi } from "../app/context";
 import { addOptimistic, removeOptimistic } from "./optimistic";
-import type { ApproveCard, ConversationDetail, ResolveEscalation } from "./types";
+import type { ApproveCard, ConversationDetail, ResolveEscalation, SendMode, StartConversation } from "./types";
 
 /** How often to recheck a conversation while Claude works, should a stream event be missed. */
 const IN_FLIGHT_RECHECK_MS = 5_000;
@@ -63,11 +64,47 @@ export function useStartConversation() {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (text: string) => unwrap(api.POST("/api/conversations", { body: { text } })),
-    onSuccess: (created, text) => {
+    mutationFn: (body: StartConversation) => unwrap(api.POST("/api/conversations", { body })),
+    onSuccess: (created, { text }) => {
       addOptimistic(created.id, { messageId: created.message_id, text, at: new Date().toISOString(), after: null });
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
     },
+  });
+}
+
+/**
+ * This chat's send mode (LIVE_DEMO_PLAN 3.10): `true` or `false` overrides the
+ * organization's default, `null` follows it. The menu shows the choice at once and
+ * puts it back if the server refuses it.
+ */
+export function useSetSendMode(conversationId: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const key = queryKeys.conversation(conversationId);
+  const setSendMode = (sendMode: SendMode) => {
+    queryClient.setQueryData<ConversationDetail>(key, (detail) => detail && { ...detail, send_mode: sendMode });
+  };
+  return useMutation({
+    mutationFn: (override: boolean | null) =>
+      unwrap(
+        api.PATCH("/api/conversations/{conversation_id}", {
+          params: { path: { conversation_id: conversationId } },
+          body: { send_without_confirmation: override },
+        }),
+      ),
+    onMutate: async (override) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<ConversationDetail>(key)?.send_mode;
+      if (previous !== undefined) {
+        setSendMode({ ...previous, override, effective: override ?? previous.org_default });
+      }
+      return { previous };
+    },
+    onSuccess: setSendMode,
+    onError: (_error, _override, context) => {
+      if (context?.previous !== undefined) setSendMode(context.previous);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
   });
 }
 

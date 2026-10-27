@@ -19,6 +19,7 @@ export const FIELD_NAMES: Readonly<Record<SettingsField, string>> = {
   directoryVisibility: "the directory listing",
   routingPrompt: "the routing prompt",
   defaultAssigneeId: "the default assignee",
+  sendWithoutConfirmation: "sending without review",
   trusted: "a trusted organization",
   profiles: "a member's profile",
 };

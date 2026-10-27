@@ -1,22 +1,49 @@
-"""The worker process: queue wiring, graceful shutdown, signals, and the CLI."""
+"""The worker process: queue wiring, capacity from settings, the stale-reservation
+sweep, graceful shutdown, signals, and the CLI."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import signal
+from collections.abc import Sequence
 from datetime import timedelta
+from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+from pydantic import SecretStr
+from sqlalchemy import func, select
 from temporalio import activity, workflow
+from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from typer.testing import CliRunner
 
+from harmony import cli_dev
 from harmony.cli import app
 from harmony.config import Settings
-from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
-from harmony.temporal.worker import WorkerConfig, WorkerDeps, build_workers, serve, stop_on_signals
+from harmony.db.models import Budget
+from harmony.llm.budget_pg import GLOBAL_KEY, daily_key, utc_today
+from harmony.storyrun.worker import running_worker
+from harmony.temporal import worker as worker_module
+from harmony.temporal.policies import (
+    CHAT_TASK_QUEUE,
+    MAIN_TASK_QUEUE,
+    MODEL_START_TO_CLOSE,
+    MODEL_TASK_QUEUE,
+)
+from harmony.temporal.worker import (
+    SETTLE_STALE_AFTER,
+    WorkerConfig,
+    WorkerDeps,
+    build_workers,
+    model_runtime,
+    serve,
+    settle_stale_reservations,
+    stale_reservation_sweep,
+    stop_on_signals,
+)
 from harmony.temporal.workflows.hello import HelloWorkflow
 from harmony.temporal.workflows.retire_world import RetireWorldWorkflow
 from tests.workflow._support import Sessionmaker
@@ -32,6 +59,192 @@ async def test_the_main_queue_runs_the_p0_workflows(
     assert {HelloWorkflow, RetireWorldWorkflow} <= set(main.get("workflows", []))
     assert main.get("graceful_shutdown_timeout") == timedelta(seconds=90)
     assert main.get("max_concurrent_activities") == WorkerConfig().main_max_concurrent_activities
+
+
+def _activity_names(worker: Worker) -> set[str]:
+    return {
+        getattr(fn, "__temporal_activity_definition").name
+        for fn in worker.config().get("activities", [])
+    }
+
+
+async def test_each_model_queue_runs_its_own_activities(
+    temporal_env: WorkflowEnvironment, db_sessionmaker: Sessionmaker, app_settings: Settings
+) -> None:
+    settings = app_settings.model_copy(update={"model_mode": "scripted"})
+    runtime = model_runtime(settings, db_sessionmaker)
+    try:
+        workers = build_workers(WorkerDeps(settings, temporal_env.client, db_sessionmaker, runtime))
+    finally:
+        await runtime.publisher.aclose()
+    by_queue = {worker.task_queue: worker for worker in workers}
+    assert list(by_queue) == [MAIN_TASK_QUEUE, MODEL_TASK_QUEUE, CHAT_TASK_QUEUE]
+    assert _activity_names(by_queue[MODEL_TASK_QUEUE]) == {"rep_turn", "answer_consult"}
+    assert _activity_names(by_queue[CHAT_TASK_QUEUE]) == {"internal_turn"}
+    assert not {"rep_turn", "answer_consult", "internal_turn"} & _activity_names(
+        by_queue[MAIN_TASK_QUEUE]
+    )
+
+
+async def test_a_live_worker_blocks_the_provider_through_its_guard(
+    db_sessionmaker: Sessionmaker, app_settings: Settings
+) -> None:
+    """A provider spend-limit refusal sets the guard's block (3.4), so later hosted
+    calls are refused locally instead of reaching the API again."""
+    from harmony.llm.anthropic_model import AnthropicModel
+
+    settings = app_settings.model_copy(
+        update={
+            "model_mode": "live",
+            "app_env": "ci",
+            "anthropic_api_key": SecretStr("test-key-not-real"),
+            "spend_ledger_path": None,
+        }
+    )
+    runtime = model_runtime(settings, db_sessionmaker)
+    try:
+        assert isinstance(runtime.client, AnthropicModel)
+        assert runtime.client._on_provider_limit == runtime.guard.block_provider
+    finally:
+        await runtime.publisher.aclose()
+
+
+async def test_harmony_worker_takes_its_capacity_from_settings(
+    temporal_env: WorkflowEnvironment,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = app_settings.model_copy(
+        update={
+            "model_mode": "scripted",
+            "worker_model_concurrency": 12,
+            "worker_model_rate": 5.0,
+            "worker_chat_concurrency": 4,
+        }
+    )
+    # The CLI hands `run_worker` the settings and the shutdown grace, nothing else.
+    handed: list[tuple[Settings, timedelta]] = []
+
+    async def fake_run_worker(given: Settings, *, graceful_shutdown: timedelta) -> None:
+        handed.append((given, graceful_shutdown))
+
+    monkeypatch.setattr(cli_dev, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli_dev, "run_worker", fake_run_worker)
+    monkeypatch.setattr(cli_dev, "configure_logging", lambda: None)
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app, ["worker", "--graceful-shutdown", "5"]
+    )
+    assert result.exit_code == 0, result.output
+    assert handed == [(settings, timedelta(seconds=5))]
+
+    # `run_worker` builds its workers from those settings, after the hosted rows exist.
+    calls: list[str] = []
+    served: list[Worker] = []
+
+    async def ensure_rows(*_: object) -> None:
+        calls.append("ensure_hosted_rows")
+
+    async def connect(*_: object, **__: object) -> Client:
+        calls.append("connect")
+        return temporal_env.client
+
+    async def fake_serve(workers: Sequence[Worker], stop: asyncio.Event) -> None:
+        served.extend(workers)
+
+    monkeypatch.setattr(worker_module, "ensure_hosted_rows", ensure_rows)
+    monkeypatch.setattr(worker_module, "connect_client", connect)
+    monkeypatch.setattr(worker_module, "serve", fake_serve)
+    monkeypatch.setattr(worker_module, "stop_on_signals", lambda stop: None)
+    await worker_module.run_worker(settings, graceful_shutdown=timedelta(seconds=5))
+
+    assert calls == ["ensure_hosted_rows", "connect"]
+    limits = {
+        w.task_queue: (
+            w.config().get("max_concurrent_activities"),
+            w.config().get("max_task_queue_activities_per_second"),
+            w.config().get("graceful_shutdown_timeout"),
+        )
+        for w in served
+    }
+    assert limits == {
+        MAIN_TASK_QUEUE: (10, None, timedelta(seconds=5)),
+        MODEL_TASK_QUEUE: (12, 5.0, timedelta(seconds=5)),
+        CHAT_TASK_QUEUE: (4, None, timedelta(seconds=5)),
+    }
+
+
+class _Settler:
+    def __init__(self, *, fail_first: bool = False) -> None:
+        self.calls: list[timedelta] = []
+        self.swept = asyncio.Event()
+        self._fail_first = fail_first
+
+    async def settle_stale(self, older_than: timedelta) -> int:
+        self.calls.append(older_than)
+        if len(self.calls) >= 3:
+            self.swept.set()
+        if self._fail_first and len(self.calls) == 1:
+            raise RuntimeError("database away")
+        return 1
+
+
+async def test_stale_reservations_are_settled_at_start_and_on_the_interval() -> None:
+    settler = _Settler(fail_first=True)
+    sweep = asyncio.create_task(settle_stale_reservations(settler, every=timedelta(milliseconds=5)))
+    try:
+        await asyncio.wait_for(settler.swept.wait(), timeout=5)
+    finally:
+        sweep.cancel()
+    # A failed sweep is logged and tried again on the next.
+    assert settler.calls[:3] == [SETTLE_STALE_AFTER] * 3
+    # Never under a call that may still be running.
+    assert SETTLE_STALE_AFTER > MODEL_START_TO_CLOSE
+
+
+@pytest.mark.parametrize("hosted", [True, False])
+async def test_the_sweep_runs_only_with_the_hosted_caps_on(
+    hosted: bool,
+    app_settings: Settings,
+    db_sessionmaker: Sessionmaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settler = _Settler()
+    monkeypatch.setattr(
+        worker_module.HostedCaps,
+        "from_settings",
+        classmethod(lambda cls, s: object() if hosted else None),
+    )
+    monkeypatch.setattr(worker_module, "HostedBudgets", lambda sessionmaker: settler)
+    async with stale_reservation_sweep(app_settings, db_sessionmaker):
+        await asyncio.sleep(0.05)
+    assert settler.calls == ([SETTLE_STALE_AFTER] if hosted else [])
+
+
+async def test_harmony_runs_own_worker_sets_up_hosted_spend_before_serving(
+    temporal_env: WorkflowEnvironment, db_sessionmaker: Sessionmaker, app_settings: Settings
+) -> None:
+    """`harmony run --live` with the hosted caps on a database no API or worker has
+    booted against: without the `global` row every hosted call would refuse."""
+    settings = app_settings.model_copy(
+        update={
+            "app_env": "local",
+            "model_mode": "live",
+            "hosted_caps_in_dev": True,
+            "daily_budget_usd": Decimal(20),
+            "global_budget_usd": Decimal(250),
+        }
+    )
+    async with db_sessionmaker() as session:
+        assert await session.scalar(select(func.count()).select_from(Budget)) == 0
+
+    async with (
+        running_worker(WorkerDeps(settings, temporal_env.client, db_sessionmaker)),
+        db_sessionmaker() as session,
+    ):
+        rows = await session.execute(select(Budget.key, Budget.cap_usd))
+        caps = {row.key: row.cap_usd for row in rows}
+
+    assert caps == {GLOBAL_KEY: Decimal(250), daily_key(utc_today()): Decimal(20)}
 
 
 class _Slow:

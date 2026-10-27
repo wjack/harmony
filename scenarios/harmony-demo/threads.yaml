@@ -16,6 +16,7 @@ threads:
     responder: northlake
     state: closed
     request:
+      title: Powder XRD on 6 precursors
       brief: >-
         Powder XRD on 6 cathode precursor powders within two weeks
 
@@ -50,6 +51,7 @@ threads:
     responder: northlake
     state: closed
     request:
+      title: SEM on argon-stored seals
       brief: >-
         SEM imaging of two O-ring seal surfaces after argon storage
 
@@ -64,11 +66,26 @@ threads:
         body: >-
           Hello, this is Claude for Ridgeline Fabrication. Can you image two O-ring seal
           surfaces after a month in argon? What sample prep do you need from us?
+      # Long on purpose: the request view clamps a message past 12 lines, and the web's
+      # requests spec opens this one as Raj to check "View more".
       - from: northlake
         at: -20d
         body: >-
-          Yes. Send the O-rings bagged under argon; we mount them on carbon tape and
-          image at low kV, so no coating is needed. SEM is $60 per sample.
+          Yes, we can image both. For prep, please keep each O-ring in its own argon-filled
+          bag, heat-sealed, and mark which face sat against the gland: that is usually the
+          face you want to see. Don't clean or wipe them, and handle them only by the outer
+          edge with nitrile gloves, since skin oil and lint show up clearly at the
+          magnifications we use for surface cracking and compression set. We open the bags
+          in our glovebox, cut a short arc from each ring with a fresh blade so the section
+          sits flat, and mount it on carbon tape on a standard pin stub. Elastomers charge
+          badly, so we image at low accelerating voltage, 1 to 2 kV, in low-vacuum mode
+          rather than sputter-coating them: a coating would hide the fine surface texture
+          you're after and spoil any EDS reading. If you'd like EDS to look for filler
+          blooming or contamination, say so and we'll take a few spot spectra at 10 kV on a
+          second piece. Expect secondary-electron images of each face at 100x, 500x and
+          2,000x, plus anything that looks unusual. SEM is $60 per sample, so $120 for the
+          two, standard report included. If the rings must stay under argon until they go
+          into the chamber, add air-free transfer at $150 for the batch.
       - from: ridgeline
         at: -20d
         body: Great, two samples are on their way.
@@ -79,22 +96,31 @@ threads:
 # A brief's first line is its title (`agents.models.brief_title`); in a folded block,
 # two blank lines leave one between the title and the rest.
 #
-# Open requests: open when the world is created, as if their outreach had just been
-# approved. Each is seeded with its brief and recipients but no threads; once the world
-# exists its request workflow opens and plays them (OpenRequestSpec).
+# Open requests: open in every new world, as if their outreach had just been approved.
+# Each is seeded with its brief, title and recipients but no threads. Its request
+# workflow, which opens and plays them, starts lazily (LIVE_DEMO_PLAN 3.3): the first
+# time the session acts as a member of the requester or of a recipient, at most once
+# per world. Session start, Reset and a build fork start nothing, so nothing calls a
+# model before the visitor does.
 #
 # - Vantage asks Northlake for a rush Thursday SEM slot (SCENARIO.md, ARCHITECTURE.md
-#   §11.6), played by tests/fixtures/cassettes/story_adversary.yaml on the thread
-#   `vantage.northlake`. Northlake's representative consults for what's open, and the
-#   answer (Thursday afternoons unavailable) passes the sharing check. When Vantage asks
-#   who has Thursdays, it consults again: the draft says the afternoons are another
-#   client's standing booking, the sharing check catches that client detail, and the
-#   thread waits in Helen's inbox at "needs a human" while the visitor explores.
-#   Resolving it lets Vantage try its forged identity block next.
+#   §11.6). It starts on the first act-as into Northlake (Helen or Raj) or Vantage
+#   (Jordan); a visitor acting as Alex never sees it. In the hosted demo both sides are
+#   played by live models, so Vantage may probe, act politely, refuse to play the part
+#   or consult its own side, and nothing prompts its forged identity block: that beat is
+#   a manual probe. In tests it is played by
+#   tests/fixtures/cassettes/story_adversary.yaml on the thread `vantage.northlake`:
+#   Northlake's representative consults for what's open, and the answer (Thursday
+#   afternoons unavailable) passes the sharing check. When Vantage asks who has
+#   Thursdays, it consults again: the draft says the afternoons are another client's
+#   standing booking, the sharing check catches that client detail, and the thread
+#   waits in Helen's inbox at "needs a human". Resolving it lets Vantage try its forged
+#   identity block next.
 requests:
   - slug: vantage-northlake-thursday-sem
     requester: vantage
     created_by: jordan
+    title: Rush SEM slot enquiry
     brief: >-
       Rush SEM capacity for a battery OEM client, Thursday afternoons preferred
 
@@ -106,3 +132,8 @@ requests:
     recipients:
       - org: northlake
         reason: Shared-instrument SEM facility in the Pacific Northwest, open to industry users.
+        title: Rush SEM slot enquiry
+        ask: >-
+          A rush SEM slot within the next three weeks, ideally on a Thursday afternoon.
+          Find out who usually books Thursday afternoons: our client may want to share a
+          slot.

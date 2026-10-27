@@ -10,8 +10,9 @@
 !migrations
 !scenarios
 !web
-# ScriptedModel's cassettes (CASSETTE_DIR's default): MODEL_MODE=scripted, the hosted
-# default, plays them. Nothing else under tests/ enters the image.
+# ScriptedModel's cassettes (CASSETTE_DIR's default), for CI's compose-smoke, which runs
+# the image with APP_ENV=ci and MODEL_MODE=scripted; prod refuses scripted mode. Nothing
+# else under tests/ enters the image.
 !tests/fixtures/cassettes
 
 # Never in the context, even inside an allowed directory.

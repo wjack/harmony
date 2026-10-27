@@ -2,7 +2,6 @@ import { Blocks, Camera, Check, Feather, FolderPlus, Globe, Paperclip, Plus, Sea
 
 import {
   Menu,
-  MenuCheckItem,
   MenuContent,
   MenuItem,
   MenuSeparator,
@@ -11,15 +10,21 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../shell/ui/Menu";
+import { SendModeItems, type SendModeProps } from "./SendMode";
 
 const ICON = { size: 16, strokeWidth: 1.6 } as const;
 const STYLES = ["Learning", "Concise", "Explanatory", "Formal"] as const;
 
 /**
- * The composer's `+` menu, as in Claude. Harmony is the one connector that works here;
- * every other entry opens the not-available dialog.
+ * The composer's `+` menu, as in Claude. Harmony is the one connector that works here:
+ * its submenu sets how this chat sends Harmony Network Requests. Every other entry
+ * opens the not-available dialog.
  */
-export function PlusMenu({ onUnavailable }: { onUnavailable: (feature: string) => void }) {
+export function PlusMenu({
+  onUnavailable,
+  sendMode,
+  onSendModeChange,
+}: SendModeProps & { onUnavailable: (feature: string) => void }) {
   const unavailable = (feature: string) => () => {
     onUnavailable(feature);
   };
@@ -50,9 +55,12 @@ export function PlusMenu({ onUnavailable }: { onUnavailable: (feature: string) =
         <MenuSub>
           <MenuSubTrigger icon={<Blocks {...ICON} />}>Connectors</MenuSubTrigger>
           <MenuSubContent>
-            <MenuCheckItem checked icon={<Waypoints {...ICON} className="text-secondary" />}>
-              Harmony
-            </MenuCheckItem>
+            <MenuSub>
+              <MenuSubTrigger icon={<Waypoints {...ICON} />}>Harmony</MenuSubTrigger>
+              <MenuSubContent>
+                <SendModeItems sendMode={sendMode} onSendModeChange={onSendModeChange} />
+              </MenuSubContent>
+            </MenuSub>
             <MenuSeparator />
             <MenuItem icon={<Blocks {...ICON} />} onSelect={unavailable("Managing connectors")}>
               Manage connectors

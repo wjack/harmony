@@ -15,8 +15,10 @@ from harmony.agents.consult import ConsultDraft, escalation_id_for
 from harmony.agents.models import (
     CardResolution,
     OutreachCardPayload,
+    OutreachEdits,
     OutreachRecipient,
     Route,
+    RouteAssignee,
 )
 from harmony.db import repo
 from harmony.db.models import NetworkRequest
@@ -87,11 +89,18 @@ def outreach_payload(*recipients: UUID) -> OutreachCardPayload:
 
 
 async def propose(
-    sessionmaker: Sessionmaker, world_id: UUID, conversation_id: UUID, *recipients: UUID
+    sessionmaker: Sessionmaker,
+    world_id: UUID,
+    conversation_id: UUID,
+    *recipients: UUID,
+    payload: OutreachCardPayload | None = None,
+    auto: bool = False,
 ) -> UUID:
+    """A pending outreach card to `recipients` (or with `payload`), as an internal turn
+    raises it; `auto` when the chat sends it without the member's review."""
     card_id, turn_id = uuid4(), uuid4()
     tool_use_id = f"toolu_{card_id.hex[:12]}"
-    payload = outreach_payload(*recipients)
+    payload = payload or outreach_payload(*recipients)
     async with unit_of_work(sessionmaker, world_id) as uow:
         # The internal turn's tool call the card answers.
         await conversations.append_assistant_content(
@@ -116,20 +125,26 @@ async def propose(
             turn_id=turn_id,
             tool_use_id=tool_use_id,
             payload=payload,
+            auto=auto,
         )
         await uow.commit()
     return card_id
 
 
 async def approved_outreach(
-    sessionmaker: Sessionmaker, world_id: UUID, *recipients: UUID, owner: UUID = ALEX
+    sessionmaker: Sessionmaker,
+    world_id: UUID,
+    *recipients: UUID,
+    owner: UUID = ALEX,
+    payload: OutreachCardPayload | None = None,
+    edits: OutreachEdits | None = None,
 ) -> Outreach:
-    """`owner`'s chat (Alex's by default) with an outreach card they approved, and the
-    request it made."""
+    """`owner`'s chat (Alex's by default) with an outreach card they approved (with
+    `edits`), and the request it made."""
     conversation_id = await start_chat(sessionmaker, world_id, owner=owner)
-    card_id = await propose(sessionmaker, world_id, conversation_id, *recipients)
+    card_id = await propose(sessionmaker, world_id, conversation_id, *recipients, payload=payload)
     request_id = uuid4()
-    resolution = CardResolution(card_id=card_id, decision="approve", member_id=owner)
+    resolution = CardResolution(card_id=card_id, decision="approve", member_id=owner, edits=edits)
     async with unit_of_work(sessionmaker, world_id) as uow:
         card = await cards.resolve(uow, resolution)
         await requests.create_from_card(uow, card, resolution, request_id=request_id)
@@ -155,7 +170,7 @@ def consult_draft(answer: str = "Yes: Nov 4 09:00-13:00, air-free, $1,180.") -> 
         answer=answer,
         needs_human=True,
         needs_human_reason="It draws on the internal reserve block.",
-        route=Route(assignees=["helen"], reason="Helen owns the XRD schedule."),
+        route=Route(assignees=[RouteAssignee(member="helen", why="Helen owns the XRD schedule.")]),
         rationale="The public calendar starts Nov 10; the reserve block is internal.",
     )
 

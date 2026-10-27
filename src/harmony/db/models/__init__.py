@@ -37,7 +37,7 @@ from harmony.db.models.thread import (
     ThreadAccess,
     ThreadMessage,
 )
-from harmony.db.models.visitor import Budget, BudgetReservation, VisitorSession
+from harmony.db.models.visitor import Budget, BudgetReservation, LiveControls, VisitorSession
 from harmony.db.models.world import World, WorldEventSeq, WorldWorkflow
 
 
@@ -73,6 +73,7 @@ __all__ = [
     "Event",
     "InternalNote",
     "KnowledgeItem",
+    "LiveControls",
     "Member",
     "ModelCall",
     "NetworkRequest",

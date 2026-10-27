@@ -1,7 +1,7 @@
 """The demo scenario's content and story format (`story.yaml`, `seeds.schema.StorySpec`):
 what each org says about itself and shares, the records the story depends on, the
-story's reference checks, date templating, and the open requests a world starts with
-(threads.yaml `requests`)."""
+story's reference checks, date templating, the seeded requests' titles, and the open
+requests a world is seeded with (threads.yaml `requests`)."""
 
 from __future__ import annotations
 
@@ -114,6 +114,50 @@ def test_the_demo_story_loads_with_its_scenario() -> None:
         ("henderson", "northlake", "alex", "approve", "Yes, go ahead with Northlake."),
         ("henderson", "ridgeline", "alex", "approve", "Yes, go ahead with Ridgeline."),
     ]
+
+
+def test_the_story_hedges_what_live_models_may_do() -> None:
+    """Live models play every side in the hosted demo, so the steps say what is likely
+    and point at what the visitor can open (3.13)."""
+    story = load_scenario("harmony-demo").story
+    assert story is not None
+    bodies = {step.id: _flat(step.body) for step in story.steps}
+    assert bodies["approve-outreach"].startswith(
+        "Read the brief and each organization's ask: the shared brief gives the sample "
+        "class and count, and each ask holds that organization's part and its limit. Edit "
+        "either if you like."
+    )
+    assert bodies["northlake-routed"].endswith(
+        "Vantage, another lab, may also be asking Northlake; its thread can appear here too."
+    )
+    assert bodies["what-it-saw"].startswith(
+        "Open the request from the sidebar, then Details → What our representative saw"
+    )
+    for step_id in ("ask", "seal-question", "northlake-routed", "northlake-approved"):
+        assert "likely" in bodies[step_id], step_id
+
+
+def test_every_seeded_request_has_a_title() -> None:
+    scenario = load_scenario("harmony-demo")
+    titles = {thread.slug: thread.request.title for thread in scenario.threads}
+    assert titles == {
+        "henderson-northlake-precursor-xrd": "Powder XRD on 6 precursors",
+        "ridgeline-northlake-seal-sem": "SEM on argon-stored seals",
+    }
+    (probe,) = scenario.requests
+    assert probe.title == "Rush SEM slot enquiry"
+    (recipient,) = probe.recipients
+    assert (recipient.org, recipient.title) == ("northlake", "Rush SEM slot enquiry")
+    assert recipient.ask is not None
+    assert "Thursday" in recipient.ask
+
+
+def test_a_seeded_message_runs_long_enough_to_clamp() -> None:
+    """The web's requests spec opens the seal thread as Raj to check "View more": a
+    message of at least 900 characters runs past 12 lines at 390px. Its text is free."""
+    scenario = load_scenario("harmony-demo")
+    seal = next(t for t in scenario.threads if t.slug == "ridgeline-northlake-seal-sem")
+    assert max(len(m.body) for m in seal.messages if m.sender == "northlake") >= 900
 
 
 def test_the_demo_network_has_the_featured_and_background_orgs() -> None:
@@ -316,6 +360,7 @@ async def test_the_vantage_request_is_seeded_open_as_an_approved_outreach_leaves
         assert list(threads) == [], "its workflow opens the threads"
     assert (request.status, request.conversation_id) == ("active", None)
     assert request.requester_org_id == seed_id(scenario.name, "org", "vantage")
+    assert request.title == "Rush SEM slot enquiry"
     # The requester representative's whole mandate, as approved.
     assert request.brief == spec.brief
     assert brief_title(request.brief) == (
@@ -323,5 +368,27 @@ async def test_the_vantage_request_is_seeded_open_as_an_approved_outreach_leaves
     )
     (recipient,) = recipients_of(request)
     assert recipient.org_id == seed_id(scenario.name, "org", "northlake")
+    (spec_recipient,) = spec.recipients
+    assert (recipient.title, recipient.ask) == (spec_recipient.title, spec_recipient.ask)
+    assert recipient.title == "Rush SEM slot enquiry"
     # Its thread's cassette key, which story_adversary.yaml plays.
     assert keys.thread_key("vantage", "northlake") == "vantage.northlake"
+
+
+async def test_a_seeded_thread_is_titled_by_its_request(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    world_id = await load_world(db_sessionmaker, "harmony-demo", build_sha="test")
+    async with db_sessionmaker() as session:
+        rows = await session.execute(
+            select(Thread.id, Thread.title).where(Thread.world_id == world_id)
+        )
+        titles = dict(rows.all())
+    assert titles == {
+        seed_id("harmony-demo", "thread", "henderson-northlake-precursor-xrd"): (
+            "Powder XRD on 6 precursors"
+        ),
+        seed_id("harmony-demo", "thread", "ridgeline-northlake-seal-sem"): (
+            "SEM on argon-stored seals"
+        ),
+    }

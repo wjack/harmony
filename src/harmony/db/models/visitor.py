@@ -1,4 +1,5 @@
-"""Visitor sessions and spend budgets: the tables that are not world-scoped."""
+"""Visitor sessions, spend budgets and the live switch: the tables that are not
+world-scoped."""
 
 from __future__ import annotations
 
@@ -61,7 +62,9 @@ class VisitorSession(CreatedAt, Base):
     # Bumped on act-as; SSE streams opened under an older epoch close (§8).
     epoch: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     budget_lineage: Mapped[UUID]
-    access_code_hash: Mapped[str | None]
+    # HMAC of the client key the session was created from (`gate.client_key`), cut to
+    # 32 hex characters; None when that key was unknown. Names its `client:` budget.
+    client_key_hash: Mapped[str | None]
     last_seen_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
@@ -69,7 +72,7 @@ class Budget(Base):
     """A hosted-demo spend cap (§14), reserved atomically:
     `UPDATE budgets … WHERE spent_usd + reserved_usd + :est <= cap_usd`.
 
-    Keys: `dev`, `lineage:<id>`, `access:<hash>`, `daily:<date>`, `live-network`.
+    Keys: `lineage:<id>`, `client:<hash>:<date>`, `daily:<date>`, `global`.
     """
 
     __tablename__ = "budgets"
@@ -94,3 +97,19 @@ class BudgetReservation(CreatedAt, Base):
     status: Mapped[ReservationStatus] = mapped_column(server_default=text("'reserved'"))
     settled_usd: Mapped[Decimal | None]
     settled_at: Mapped[datetime | None]
+
+
+class LiveControls(Base):
+    """The hosted live switch (3.4): one row, key `live`, inserted by the migration.
+
+    Every hosted reservation reads it first, and a missing row refuses (fail closed).
+    It is a row rather than a budget cap or an env var so pausing is instant and a
+    resume never overwrites a cap.
+    """
+
+    __tablename__ = "live_controls"
+
+    key: Mapped[str] = mapped_column(primary_key=True)
+    paused: Mapped[bool] = mapped_column(server_default=text("false"))
+    provider_blocked_until: Mapped[datetime | None]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())

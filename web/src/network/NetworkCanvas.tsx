@@ -12,6 +12,7 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { BudgetState } from "../app/budget";
 import { CanvasControls } from "./CanvasControls";
 import { boundsOf, readableFrame, type Rect } from "./geometry";
 import { cardSize, layoutNetwork } from "./layout";
@@ -48,6 +49,8 @@ export interface NetworkCanvasProps {
   onSelectOrg: (orgId: string | null) => void;
   /** The clock waiting times are measured against. */
   now: number;
+  /** The live-model budget's state now, which a stopped thread's line reads by. */
+  budget: BudgetState;
 }
 
 function Canvas({
@@ -59,6 +62,7 @@ function Canvas({
   selectedOrgId,
   onSelectOrg,
   now,
+  budget,
 }: NetworkCanvasProps) {
   const flow = useReactFlow<FlowNode, ThreadFlowEdge>();
   const [overrides, setOverrides] = useState<ReadonlyMap<string, NodeOverride>>(new Map());
@@ -170,12 +174,12 @@ function Canvas({
           inFlight: activity.inFlight.has(edge.thread_id) && !edgeStyle(edge.state).ended,
           pulse: activity.pulses.get(edge.thread_id) ?? 0,
           label: labelFits(edge.from_org_id, edge.to_org_id)
-            ? edgeLabel(edge, [edge.from_org_id, edge.to_org_id].flatMap((orgId) => nameOf.get(orgId) ?? []))
+            ? edgeLabel(edge, [edge.from_org_id, edge.to_org_id].flatMap((orgId) => nameOf.get(orgId) ?? []), budget)
             : null,
         },
       }),
     );
-  }, [view.edges, layout, activity, selectedOrgId]);
+  }, [view.edges, layout, activity, selectedOrgId, budget]);
 
   // Positions and measured sizes are ours to keep; selection is driven by the page.
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {

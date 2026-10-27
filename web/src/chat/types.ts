@@ -10,6 +10,8 @@ type Schemas = components["schemas"];
 export type ConversationDetail = Schemas["ConversationDetail"];
 export type ConversationSummary = Schemas["ConversationSummary"];
 export type ConversationCreated = Schemas["ConversationCreated"];
+export type StartConversation = Schemas["StartConversation"];
+export type SendMode = Schemas["SendMode"];
 export type MessagePosted = Schemas["MessagePosted"];
 
 export type ChatItem = ConversationDetail["items"][number];

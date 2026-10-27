@@ -3,7 +3,9 @@
 # (auto_deploy_trigger = "checksPass").
 #
 # No job has a model API key or makes a model call: MODEL_MODE is scripted everywhere,
-# and the tests point the Anthropic client at a local discard port.
+# and the tests point the Anthropic client at a local discard port. compose-smoke runs
+# the production image with APP_ENV=ci (production refuses scripted mode) and the
+# passcode gate on, using compose.ci.yaml's throwaway passcode.
 name: CI
 
 on:
@@ -87,7 +89,7 @@ jobs:
       - run: make gen-api-check
 
   compose-smoke:
-    name: compose smoke (image, act-as, SSE resume, scripted turn, UI story)
+    name: compose smoke (image, passcode gate, act-as, SSE resume, scripted turn, UI story)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -114,7 +116,7 @@ jobs:
       - run: make compose-smoke
 
   terraform:
-    name: terraform (fmt, validate)
+    name: terraform (fmt, validate, test)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -123,5 +125,6 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
-      # Validation only: no backend, no credentials, never plan or apply.
+      # Validation and mock-provider tests only: no backend, no credentials, never plan
+      # or apply.
       - run: make tf-check

@@ -4,13 +4,21 @@ import { matchPath, useLocation, useNavigate } from "react-router";
 
 import { describeError, unwrap } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
-import type { DemoEvent, Inbox, MemberDirectory, MemberView, SessionView } from "../api/types";
+import type { DemoEvent, EventEnvelope, Inbox, MemberDirectory, MemberView, SessionView } from "../api/types";
 import { useApi, useDispatcher } from "../app/context";
 import { useActAs, useMembers, useSession, useStartSession } from "../app/queries";
 import { firstName, shortOrgName } from "../shell/names";
 import { answeringChat, escalationPath, itemForEscalation } from "../shell/escalationPlace";
 import { dismissToastWithKey, dismissToastsWithKeyPrefix, toast } from "../shell/toasts";
-import { addNeedsHumanAlert, clearAlertsFor, clearAllAlerts, type NeedsHumanAlert } from "./alerts";
+import {
+  addNeedsHumanAlert,
+  claimCue,
+  clearAlertsFor,
+  clearAllAlerts,
+  isAlertUp,
+  withdrawNeedsHumanAlert,
+  type NeedsHumanAlert,
+} from "./alerts";
 import { STORY_MEMBER_SLUG, findMember, orgName } from "./cast";
 import { closeDemoControls, closeResetConfirm } from "./store";
 
@@ -203,14 +211,20 @@ export function useDemoCues(): void {
         .query({ queryKey: queryKeys.inbox, queryFn: () => unwrap(api.GET("/api/inbox")), staleTime: 0 })
         .catch(() => undefined);
 
-    return dispatcher.onDemo((event: DemoEvent) => {
+    return dispatcher.onDemo((event: DemoEvent, envelope: EventEnvelope) => {
       if (event.type !== "demo.needs_human") return;
       const acting = queryClient.getQueryData<SessionView>(queryKeys.session)?.member;
-
       // Member slugs are per org: "admin" at one org isn't "admin" at another.
-      if (acting?.slug === event.member_slug && acting.org.slug === event.org_slug) {
-        // Already acting as the assignee: point at the item where they answer it.
+      const toActing = acting?.slug === event.member_slug && acting.org.slug === event.org_slug;
+      // An item routed to two people cues both; it gets one toast and one chip (E5).
+      if (event.entity_id !== null && !claimCue(event.entity_id, envelope.created_at ?? "", toActing)) return;
+
+      if (acting !== undefined && toActing) {
+        // Already acting as an assignee: point at the item where they answer it, never
+        // at a co-assignee whose cue came first.
         const escalationId = event.entity_id ?? "";
+        const pointedAway = withdrawNeedsHumanAlert(escalationId);
+        if (pointedAway !== null) dismissToastWithKey(cueToastKey(pointedAway.orgSlug, pointedAway.memberSlug));
         void Promise.all([directory(), freshInbox()]).then(([members, inbox]) => {
           const item = inbox === undefined ? null : itemForEscalation(inbox, escalationId);
           const key = cueToastKey(acting.org.slug, acting.slug);
@@ -244,6 +258,8 @@ export function useDemoCues(): void {
       const alert = addNeedsHumanAlert(event);
       if (alert === null) return;
       void directory().then((members) => {
+        // The acting member's own cue, or a switch, may have taken the chip down meanwhile.
+        if (!isAlertUp(alert)) return;
         const assignee = findMember(members, alert.memberSlug, alert.orgSlug);
         toast({
           text: `${shortOrgName(orgName(members, alert.orgSlug))} needs a human.`,

@@ -89,7 +89,11 @@ export function useRequestConversation(requestId: string | null, enabled: boolea
   });
 }
 
-/** Whether a failed read means the session has no such world yet (401: start it). */
+/**
+ * Whether a failed read means the session has no such world yet (the API's own 401:
+ * start it). The passcode gate's 401 means the visitor is locked out, not that the
+ * world is missing.
+ */
 export function isMissingWorld(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 401;
+  return error instanceof ApiError && error.status === 401 && error.code !== "passcode_required";
 }

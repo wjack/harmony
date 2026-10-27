@@ -4,6 +4,8 @@
 # Exits non-zero if any check fails.
 #
 #   HARMONY_BASE_URL   the API's origin (default http://localhost:8000)
+#   HARMONY_PASSCODE   the master passcode, when the API runs with ACCESS_CODE set: each
+#                      visitor's jar passes the gate first, as the passcode page does
 #
 # The database may be empty: POST /api/session/start seeds a world lazily. Needs curl and
 # python3 (for reading JSON). Nothing here needs ADMIN_SECRET, and nothing is wiped.
@@ -27,10 +29,28 @@ record() { # status name [detail]
   return 0
 }
 
+# unlock JAR: give the visitor the gate's cookie, once. The passcode goes into the body
+# from the environment, never onto a command line. A failure leaves the jar locked, so
+# the check that needed it fails on its 401.
+unlock() {
+  local jar=$1 status
+  [[ -n ${HARMONY_PASSCODE:-} && ! -e $work/$jar.unlocked ]] || return 0
+  status=$(python3 -I -c 'import json, os
+print(json.dumps({"passcode": os.environ["HARMONY_PASSCODE"], "next": "/"}))' |
+    curl -sS -o /dev/null -w '%{http_code}' -b "$work/$jar.jar" -c "$work/$jar.jar" \
+      -H 'Content-Type: application/json' --data @- "$BASE/api/gate") || true
+  if [[ $status == 200 ]]; then
+    touch "$work/$jar.unlocked"
+  else
+    echo "unlock ($jar): POST /api/gate returned $status" >&2
+  fi
+}
+
 # call JAR METHOD PATH [JSON]: the response body goes to $work/body, its headers to
 # $work/headers, and the status code to stdout.
 call() {
   local jar=$1 method=$2 path=$3 body=${4:-}
+  unlock "$jar"
   local args=(-sS -o "$work/body" -D "$work/headers" -w '%{http_code}'
     -b "$work/$jar.jar" -c "$work/$jar.jar" -X "$method")
   if [[ -n $body ]]; then

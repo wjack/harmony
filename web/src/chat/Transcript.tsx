@@ -13,6 +13,8 @@ export interface TranscriptActions {
   /** Answering inline questions: which one is sending, and failures by escalation id. */
   answering: string | null;
   answerErrors: Readonly<Record<string, string>>;
+  /** Why live turns can't start now (`budgetLine`): answers hold until it clears. */
+  blocked: string | null;
   onAnswer: (escalationId: string, text: string) => void;
   onUnavailable: (feature: string) => void;
 }
@@ -24,12 +26,10 @@ export interface TranscriptProps extends TranscriptActions {
   working: boolean;
   /** Draw the spark: a turn is running (not paused on a card). */
   showSpark: boolean;
-  /** Claude's last turn failed and nothing has run since. */
-  failed: boolean;
+  /** Why Claude's last turn failed (failureCopy.ts), while nothing has run since; else null. */
+  failure: string | null;
   streaming: StreamingText | null;
 }
-
-export const TURN_FAILED_TEXT = "Claude couldn't reply to this. Send a message to try again.";
 
 /** Cards sit a little outside the text column, as Claude's tool results do. */
 const CARD_KINDS: ReadonlySet<Block["kind"]> = new Set(["outreach", "request", "question"]);
@@ -60,10 +60,11 @@ export function Transcript({
   memberId,
   working,
   showSpark,
-  failed,
+  failure,
   streaming,
   answering,
   answerErrors,
+  blocked,
   onAnswer,
   onUnavailable,
 }: TranscriptProps) {
@@ -95,6 +96,7 @@ export function Transcript({
           <InlineQuestionCard
             item={block.item}
             busy={answering === block.item.escalation_id}
+            blocked={blocked}
             error={answerErrors[block.item.escalation_id] ?? null}
             onAnswer={(text) => {
               onAnswer(block.item.escalation_id, text);
@@ -122,9 +124,9 @@ export function Transcript({
           <StreamingSpark />
         </div>
       )}
-      {failed && !showSpark && (
+      {failure !== null && !showSpark && (
         <p role="alert" className={cx(last?.kind === "user" ? "mt-12" : "mt-5", "text-[14px] leading-6 text-danger")}>
-          {TURN_FAILED_TEXT}
+          {failure}
         </p>
       )}
     </div>

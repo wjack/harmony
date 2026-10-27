@@ -42,6 +42,8 @@ export interface SettingsDraft {
   directoryVisibility: DirectoryVisibility;
   routingPrompt: string;
   defaultAssigneeId: string | null;
+  /** The org default for Harmony Network requests: send them without a member's review. */
+  sendWithoutConfirmation: boolean;
   /** Trusted organizations by counterparty org id. */
   trusted: Readonly<Record<string, TrustedDraft>>;
   /** Each member's profile (what they handle, in prose) by member id. */
@@ -77,6 +79,7 @@ const SCALARS = [
   "directoryVisibility",
   "routingPrompt",
   "defaultAssigneeId",
+  "sendWithoutConfirmation",
 ] as const satisfies readonly SettingsField[];
 type ScalarField = (typeof SCALARS)[number];
 
@@ -94,6 +97,7 @@ export function draftFrom(view: HarmonySettingsView): SettingsDraft {
     directoryVisibility: view.directory_visibility,
     routingPrompt: view.routing_prompt,
     defaultAssigneeId: view.default_assignee?.id ?? null,
+    sendWithoutConfirmation: view.send_without_confirmation,
     trusted: Object.fromEntries(
       view.trusted_organizations.map((row) => [
         row.counterparty.id,
@@ -335,6 +339,9 @@ export function toUpdate(view: HarmonySettingsView, edits: DraftEdits): HarmonyS
         break;
       case "defaultAssigneeId":
         update.default_assignee_id = next.defaultAssigneeId;
+        break;
+      case "sendWithoutConfirmation":
+        update.send_without_confirmation = next.sendWithoutConfirmation;
         break;
       case "profiles":
         update.member_profiles = Object.fromEntries(

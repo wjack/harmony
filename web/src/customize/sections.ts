@@ -50,8 +50,8 @@ export const SECTION_GROUPS: readonly SectionGroup[] = [
         label: "Autonomy",
         Icon: Gauge,
         description:
-          "How much your representative does without a teammate. A change applies at the next decision on every thread.",
-        fields: ["autonomy"],
+          "How much your representative does without a teammate, and whether requests Claude writes for your members wait for their review. A change applies at the next decision.",
+        fields: ["autonomy", "sendWithoutConfirmation"],
       },
     ],
   },

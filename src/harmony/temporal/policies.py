@@ -27,9 +27,12 @@ from harmony.errors import WorldRetired
 
 # Workflows and short database activities run on `MAIN`; model calls run on `MODEL`,
 # whose worker caps concurrency and rate so a burst of turns can't exhaust either the
-# API rate limit or the database pool (§7).
+# API rate limit or the database pool (§7). Internal Claude's turns run on `CHAT`, with
+# slots of their own: one visitor's fan-out of representatives and answerers can hold
+# every `MODEL` slot, and must not queue every other visitor's typed chat (3.7).
 MAIN_TASK_QUEUE = "harmony-main"
 MODEL_TASK_QUEUE = "harmony-model"
+CHAT_TASK_QUEUE = "harmony-chat"
 
 WORLD_RETIRED = WorldRetired.__name__
 # `harmony.llm.errors` classes, plus `GuardMismatch` (a model client paired with the
@@ -59,18 +62,31 @@ MAIN_START_TO_CLOSE = timedelta(seconds=60)
 
 
 def model_retry_policy() -> RetryPolicy:
-    """Three attempts in all; a 400, an exhausted budget or a retired world stops at once."""
-    return RetryPolicy(maximum_attempts=3, non_retryable_error_types=list(MODEL_NON_RETRYABLE))
+    """Six attempts at 5 s, 10 s, 20 s, 40 s and 60 s: a burst of 429s or 529s on a
+    low-tier workspace outlasts a shorter schedule, and a failed turn closes a thread for
+    good (3.5). A 400, an exhausted budget or a retired world stops at once."""
+    return RetryPolicy(
+        initial_interval=timedelta(seconds=5),
+        backoff_coefficient=2.0,
+        maximum_interval=timedelta(seconds=60),
+        maximum_attempts=6,
+        non_retryable_error_types=list(MODEL_NON_RETRYABLE),
+    )
 
 
-def model_activity_options() -> ActivityConfig:
+def model_activity_options(*, task_queue: str = MODEL_TASK_QUEUE) -> ActivityConfig:
     """Options for one checkpointed model turn on `harmony-model` (§5)."""
     return ActivityConfig(
-        task_queue=MODEL_TASK_QUEUE,
+        task_queue=task_queue,
         start_to_close_timeout=MODEL_START_TO_CLOSE,
         heartbeat_timeout=MODEL_HEARTBEAT,
         retry_policy=model_retry_policy(),
     )
+
+
+def chat_activity_options() -> ActivityConfig:
+    """Options for one internal Claude turn: a model turn on `harmony-chat`."""
+    return model_activity_options(task_queue=CHAT_TASK_QUEUE)
 
 
 def main_retry_policy(*, maximum_attempts: int = 5) -> RetryPolicy:

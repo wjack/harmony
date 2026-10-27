@@ -1,0 +1,46 @@
+# Copy to terraform.tfvars (gitignored; keep it at mode 600) and fill in. Never paste
+# a value into chat. Every name below is a variable in variables.tf, which has the
+# descriptions and defaults; uncomment a line to set it.
+#
+# Precedence: terraform.tfvars wins over TF_VAR_* in the environment, so a value here
+# overrides what scripts/tf.sh maps from .env.local (PROD_ANTHROPIC_API_KEY,
+# TEMPORAL_CLOUD_ACCOUNT_ID, TF_VAR_*). A stale value here wins silently.
+
+# Required: the production key, from its own Console workspace with a spend limit.
+anthropic_api_key = ""
+
+# The master passcode: 16 or more printable ASCII characters, no whitespace at either
+# end. Unset, the generated one is used (`scripts/tf.sh output -raw access_code`).
+# access_code = ""
+
+# Provider credentials. scripts/tfvars_from_env.sh copies them from .env.local.
+# render_api_key         = ""
+# render_owner_id        = ""
+# temporal_cloud_api_key = ""
+# temporal_account_id    = ""
+
+# Hosted spend caps, in US dollars.
+# lineage_budget_usd      = 10
+# client_daily_budget_usd = 25
+# daily_budget_usd        = 60
+# global_budget_usd       = 250
+
+# Where the gate reads a visitor's address: x-forwarded-for, true-client-ip or
+# cf-connecting-ip.
+# client_ip_header = "x-forwarded-for"
+
+# Worker capacity and instance types.
+# worker_model_concurrency = 12
+# worker_model_rate        = 5
+# worker_chat_concurrency  = 4
+# worker_plan              = "standard"
+# web_plan                 = "starter"
+# minio_plan               = "starter"
+
+# Placement and source.
+# render_region         = "oregon"
+# temporal_region       = "aws-us-west-2"
+# postgres_disk_size_gb = 5
+# minio_disk_size_gb    = 10
+# repo_url              = "https://github.com/wjack/harmony"
+# branch                = "main"

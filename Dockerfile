@@ -61,8 +61,9 @@ RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
 
 COPY pyproject.toml uv.lock .python-version README.md alembic.ini ./
 # --parents keeps each directory's name. scenarios/ arrives with the seed loader; the
-# wildcard lets the image build before it exists. The cassettes are what
-# MODEL_MODE=scripted (the hosted default) plays, at config's default CASSETTE_DIR.
+# wildcard lets the image build before it exists. The cassettes are for CI's
+# compose-smoke, which runs this image with APP_ENV=ci and MODEL_MODE=scripted, at
+# config's default CASSETTE_DIR. Production never plays them: prod refuses scripted mode.
 COPY --parents ./src/ ./migrations/ ./scenario[s]/ ./tests/fixtures/cassettes/ ./
 RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
     --mount=type=cache,id=harmony-uv-cache,target=/root/.cache/uv \
@@ -79,5 +80,7 @@ ENV PATH="/app/.venv/bin:${PATH}"
 EXPOSE 10000
 
 # Shell form so ${PORT} expands (Render sets it); exec makes uvicorn PID 1, so it gets
-# SIGTERM directly and shuts down gracefully.
-CMD exec uvicorn harmony.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*'
+# SIGTERM directly and shuts down gracefully. X-Forwarded-For is trusted only from
+# private addresses (Render's proxy, Docker's bridge), so a client can't set
+# request.client or the access log's address by forging the header.
+CMD exec uvicorn harmony.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='10.0.0.0/8,172.16.0.0/12,192.168.0.0/16'

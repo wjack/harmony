@@ -22,7 +22,9 @@ const OPEN: InlineQuestionItem = {
 
 function show(item: Partial<InlineQuestionItem>): void {
   cleanup();
-  render(<InlineQuestionCard item={{ ...OPEN, ...item }} busy={false} error={null} onAnswer={() => undefined} />);
+  render(
+    <InlineQuestionCard item={{ ...OPEN, ...item }} busy={false} blocked={null} error={null} onAnswer={() => undefined} />,
+  );
 }
 
 it("says how a settled question was settled, not 'Answered' for every one", () => {
@@ -45,11 +47,4 @@ it("keeps a question whose conversation ended, as no longer needed", () => {
   expect(screen.getByText("No longer needed")).toBeTruthy();
   expect(screen.getByText("What is the project's budget?")).toBeTruthy();
   expect(screen.queryByRole("textbox")).toBeNull();
-});
-
-it("says the scripted demo carries on as recorded whatever the answer, only while it's open", () => {
-  show({});
-  expect(screen.getByText(/^Scripted demo: Claude replays the recorded story/)).toBeTruthy();
-  show({ status: "resolved", action: "approve", answer: "About $2,000." });
-  expect(screen.queryByText(/^Scripted demo/)).toBeNull();
 });

@@ -25,12 +25,15 @@ from harmony.agents.models import (
     EscalationResolution,
     InlineQuestionItem,
     Route,
+    RouteAssignee,
 )
+from harmony.agents.runtime import OwedResult
 from harmony.db import repo
 from harmony.db.models import (
     Consult,
     Conversation,
     Escalation,
+    Member,
     NetworkRequest,
     RepNotice,
     RepPolicy,
@@ -40,7 +43,7 @@ from harmony.db.models import (
 )
 from harmony.db.models.choices import Autonomy
 from harmony.db.uow import unit_of_work
-from harmony.domain import consults, conversations, escalations, routing, threads
+from harmony.domain import consults, conversations, escalations, notes, routing, threads
 from harmony.domain.settings import mode_toward
 from harmony.temporal.activities.network import (
     REQUEST_LIFETIME,
@@ -52,6 +55,7 @@ from harmony.temporal.activities.network import (
     ReassignInput,
     SettledCardInput,
     ThreadStateInput,
+    UnsummarizedInput,
 )
 from harmony.temporal.workflows.payloads import (
     CARD_NOT_PENDING_ERROR,
@@ -74,6 +78,7 @@ from tests.integration._e4_world import (
     approved_outreach,
     consult_draft,
     open_thread,
+    outreach_payload,
     propose,
     routed_consult,
     seeded_world,
@@ -214,6 +219,63 @@ async def test_rejecting_a_card_returns_the_feedback(db_sessionmaker: Sessionmak
     assert (applied.resolved.status, applied.content) == ("rejected", "rejected: Ask Calder too.")
 
 
+async def test_a_card_sent_without_review_says_so_and_no_member_can_settle_it(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    world_id = await seeded_world(db_sessionmaker)
+    conversation_id = await start_chat(db_sessionmaker, world_id)
+    payload = outreach_payload(NORTHLAKE, CALDER).model_copy(
+        update={"auto_send_recipients": [NORTHLAKE]}
+    )
+    card_id = await propose(db_sessionmaker, world_id, conversation_id, payload=payload, auto=True)
+    activities = _offline(db_sessionmaker)
+
+    def resolving(*, auto: bool) -> CardResolutionInput:
+        return CardResolutionInput(
+            world_id=world_id,
+            conversation_id=conversation_id,
+            resolution=CardResolution(
+                card_id=card_id, decision="approve", member_id=ALEX, auto=auto
+            ),
+            request_id=request_id,
+        )
+
+    request_id = uuid4()
+    with pytest.raises(ApplicationError) as refused:
+        await activities.apply_card_resolution(resolving(auto=False))
+    assert refused.value.type == CARD_NOT_PENDING_ERROR
+    applied = await activities.apply_card_resolution(resolving(auto=True))
+    assert (applied.resolved.status, applied.is_error) == ("approved", False)
+    assert applied.content == (
+        f"Sent without review (this chat's setting): request {request_id} to "
+        "Northlake Characterization Core."
+    )
+
+
+async def test_a_card_that_couldnt_be_sent_says_nothing_went_out(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    world_id = await seeded_world(db_sessionmaker)
+    conversation_id = await start_chat(db_sessionmaker, world_id)
+    card_id = await propose(db_sessionmaker, world_id, conversation_id, NORTHLAKE, auto=True)
+    applied = await _offline(db_sessionmaker).apply_card_resolution(
+        CardResolutionInput(
+            world_id=world_id,
+            conversation_id=conversation_id,
+            resolution=CardResolution(
+                card_id=card_id,
+                decision="reject",
+                member_id=ALEX,
+                feedback="no recipient is left to send to",
+                auto=True,
+            ),
+            request_id=uuid4(),
+        )
+    )
+    assert (applied.resolved.status, applied.is_error) == ("rejected", True)
+    assert applied.content == ("Couldn't send: no recipient is left to send to. Nothing went out.")
+
+
 # --- Consult resolutions -------------------------------------------------------------
 
 
@@ -321,7 +383,7 @@ async def _two_revs(
     """A Northlake consult escalation routed to Raj with rev 1 and a redraft, rev 2
     (drawn on the internal reserve block), now current."""
     consult_id, escalation_id = uuid4(), uuid4()
-    route = Route(assignees=["raj"], reason="Raj runs the XRD.")
+    route = Route(assignees=[RouteAssignee(member="raj", why="Raj runs the XRD.")])
     async with unit_of_work(sessionmaker, world_id) as uow:
         await consults.open(
             uow,
@@ -455,6 +517,33 @@ async def test_a_declined_held_message_sends_nothing(db_sessionmaker: Sessionmak
     assert await _messages(db_sessionmaker, world_id, thread_id) == []
 
 
+async def test_a_held_message_sent_back_names_who_asked_and_sends_nothing(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
+    drafted, note = "Our other client has Nov 4.", "Don't mention other clients."
+    escalation_id = await _held(db_sessionmaker, world_id, thread_id, drafted)
+    applied = await _offline(db_sessionmaker).apply_resolution(
+        _resolve(world_id, thread_id, escalation_id, "revise", text=note)
+    )
+    async with db_sessionmaker() as session:
+        helen = await repo.get_required(session, Member, world_id, HELEN)
+    assert (applied.resolved.action, applied.resolved.message_id, applied.sent) == (
+        "revise",
+        None,
+        False,
+    )
+    # Who asked is the member who settled it, never a stand-in.
+    assert applied.owed == OwedResult(
+        tool_use_id="",
+        content=answerer.held_result("revise", text=note, drafted=drafted, member_name=helen.name),
+        is_error=True,
+    )
+    assert applied.owed is not None
+    assert (applied.owed.content or "").startswith("Not sent: Helen asked you to change it.")
+    assert await _messages(db_sessionmaker, world_id, thread_id) == []
+
+
 async def test_an_unedited_approval_says_only_that_it_was_sent(
     db_sessionmaker: Sessionmaker,
 ) -> None:
@@ -533,7 +622,9 @@ async def test_reassigning_a_question_to_the_requester_refreshes_their_chat(
             side="requester",
             consult_id=consult_id,
         )
-        await routing.apply_route(uow, escalation, Route(assignees=["maya"], reason="Spending."))
+        await routing.apply_route(
+            uow, escalation, Route(assignees=[RouteAssignee(member="maya", why="Spending.")])
+        )
         await uow.commit()
 
     async def chat_version() -> int:
@@ -576,6 +667,43 @@ async def test_a_refusal_tells_the_other_side_once(db_sessionmaker: Sessionmaker
     async with db_sessionmaker() as session:
         thread = await repo.get_required(session, Thread, world_id, thread_id)
     assert thread.state == "closed"
+
+
+async def test_a_failed_last_turn_tells_its_org_why_there_is_no_summary_once(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
+    activities = _offline(db_sessionmaker)
+    await activities.set_thread_state(
+        ThreadStateInput(world_id=world_id, thread_id=thread_id, state="closed")
+    )
+    turn_id = uuid4()
+    arg = UnsummarizedInput(
+        world_id=world_id,
+        thread_id=thread_id,
+        org_id=HENDERSON,
+        turn_id=turn_id,
+        reason="session_budget",
+    )
+    # A retry after the commit writes nothing more.
+    for _ in range(2):
+        await activities.note_unsummarized(arg)
+    async with db_sessionmaker() as session:
+        ours = await notes.list_for(
+            session, world_id=world_id, thread_id=thread_id, org_id=HENDERSON
+        )
+        theirs = await notes.list_for(
+            session, world_id=world_id, thread_id=thread_id, org_id=NORTHLAKE
+        )
+    assert [(note.author_kind, note.body) for note in ours] == [
+        (
+            "claude",
+            "Claude couldn't write a closing summary for our side: this session's live-model "
+            "budget had too little left when its last turn ran. The other side had already "
+            "closed the conversation.",
+        )
+    ]
+    assert theirs == []
 
 
 # --- Mode toward a counterparty ------------------------------------------------------

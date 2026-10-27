@@ -25,6 +25,7 @@ from harmony.llm.requests import (
     ROLE_PROFILES,
     Tier,
     build_request,
+    production_body,
     resolve_model,
 )
 from harmony.llm.wire import JsonObject, as_object, objects
@@ -198,13 +199,35 @@ def test_haiku_has_no_fallbacks_and_disables_thinking_only_up_to_high() -> None:
 
 
 def test_haiku_background_roles_keep_adaptive_thinking() -> None:
-    for role in ("representative", "answerer"):
+    # A background org's internal Claude is on Haiku too (3.1).
+    assert ROLE_PROFILES[("internal", "background")].model == HAIKU_5_5
+    for role in ("internal", "representative", "answerer"):
         request = build(role, "background")
         assert request.body["model"] == HAIKU_5_5
         assert thinking(request) == {"type": "adaptive"}
         assert "fallbacks" not in request.body
         # Haiku never streams thinking updates.
         assert "display" not in thinking(build(role, "background", stream_to_ui=True))
+
+
+# --- Re-pricing (3.14) -----------------------------------------------------------------
+
+
+def test_production_body_puts_a_call_back_on_its_roles_model() -> None:
+    # Made under the dev override: Haiku for every role.
+    sent = build("representative", "featured", override=HAIKU_5_5).body
+    assert (sent["model"], "fallbacks" in sent) == (HAIKU_5_5, False)
+    featured = production_body(sent, "representative", "featured")
+    assert (featured["model"], featured["fallbacks"]) == (OPUS_5_5, "default")
+    assert {k: v for k, v in featured.items() if k not in ("model", "fallbacks")} == {
+        k: v for k, v in sent.items() if k != "model"
+    }, "only what pricing reads changes"
+    # Made on Opus, priced as a Haiku role: its fallback hop goes.
+    opus = build("answerer", "background", override=OPUS_5_5).body
+    background = production_body(opus, "answerer", "background")
+    assert background["model"] == HAIKU_5_5
+    assert "fallbacks" not in background
+    assert background["messages"] == opus["messages"]
 
 
 # --- The contract checker catches what the API would reject --------------------------
@@ -380,38 +403,3 @@ def test_check_requests_follows_each_conversation_separately() -> None:
     with pytest.raises(ContractViolation) as caught:
         assert_contract([a1, b1, rewritten])
     assert caught.value.violations == tuple(violations)
-
-
-# --- harmony llm ping (dry run only; --live is never run in tests) ---------------------
-
-
-def test_ping_dry_run_builds_a_valid_request_without_sending() -> None:
-    import json
-    import subprocess
-    import sys
-
-    from typer.testing import CliRunner
-
-    from harmony import cli_llm
-
-    request = cli_llm.ping_request()
-    assert check_request(request) == []
-    assert request.body["model"] == OPUS_5_5
-    assert request.key.role == "internal"
-
-    result = CliRunner().invoke(cli_llm.app, ["ping"])
-    assert result.exit_code == 0, result.output
-    body_line, betas_line, summary = result.output.splitlines()
-    assert json.loads(body_line)["max_tokens"] == cli_llm.PING_MAX_TOKENS
-    assert betas_line == f"betas: {BETA_FALLBACK_DEFAULT}"
-    assert summary.startswith("dry run: would reserve up to $")
-
-    # The dry run never loads the SDK (checked in a clean interpreter).
-    probe = (
-        "import sys\n"
-        "from typer.testing import CliRunner\n"
-        "from harmony import cli_llm\n"
-        "assert CliRunner().invoke(cli_llm.app, ['ping']).exit_code == 0\n"
-        "assert 'anthropic' not in sys.modules, 'dry run imported the SDK'\n"
-    )
-    subprocess.run([sys.executable, "-c", probe], check=True, timeout=60)

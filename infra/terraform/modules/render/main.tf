@@ -1,6 +1,6 @@
 # The app on Render: Postgres 17, the web service (API, SSE, SPA) and the Temporal
-# worker, both built from the repo's Dockerfile and sharing one env group
-# (ARCHITECTURE.md §3, §13). Both deploy only once CI is green.
+# worker, both built from the repo's Dockerfile (ARCHITECTURE.md §3, §13). Both deploy
+# only once CI is green.
 
 terraform {
   required_providers {
@@ -17,10 +17,11 @@ locals {
   database_url = render_postgres.db.connection_info.internal_connection_string
   # Render has no transaction-mode pooler in front of Postgres, so LISTEN and
   # migrations use the same URL.
-  env = merge(var.app_env, {
+  web_env = merge(var.app_env, {
     DATABASE_URL        = local.database_url
     DATABASE_DIRECT_URL = local.database_url
   })
+  worker_env = merge(local.web_env, var.worker_env)
 }
 
 # Basic-1gb, never the free plan (which expires). 100 connections; the budget is in
@@ -38,13 +39,6 @@ resource "render_postgres" "db" {
   ip_allow_list = []
 }
 
-resource "render_env_group" "app" {
-  name           = "${var.name}-app"
-  environment_id = var.environment_id
-  # Unset values (no production model key while scripted) are left out.
-  env_vars = { for key, value in local.env : key => { value = value } if value != null }
-}
-
 resource "render_web_service" "web" {
   name              = "${var.name}-web"
   plan              = var.web_plan
@@ -55,6 +49,9 @@ resource "render_web_service" "web" {
   # Migrations run before the new version starts; they are additive. The worker runs
   # the same command, since Render deploys the two services independently.
   pre_deploy_command = "alembic upgrade head"
+  # On the service itself: Render starts a service's first deploy, pre-deploy migration
+  # included, as soon as it creates the service, before a linked env group could attach.
+  env_vars = { for key, value in local.web_env : key => { value = value } }
 
   runtime_source = {
     docker = {
@@ -83,6 +80,7 @@ resource "render_background_worker" "worker" {
   pre_deploy_command = "alembic upgrade head"
   # The worker drains in-flight activities for about 90 s after SIGTERM.
   max_shutdown_delay_seconds = 120
+  env_vars                   = { for key, value in local.worker_env : key => { value = value } }
 
   runtime_source = {
     docker = {
@@ -96,9 +94,4 @@ resource "render_background_worker" "worker" {
       }
     }
   }
-}
-
-resource "render_env_group_link" "app" {
-  env_group_id = render_env_group.app.id
-  service_ids  = [render_web_service.web.id, render_background_worker.worker.id]
 }

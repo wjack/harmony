@@ -442,8 +442,17 @@ async def test_seeded_rows_carry_the_scenario_values(
         )
         assert (open_request.brief, open_request.status) == ("Find a lab for 14 powders.", "active")
         assert open_request.recipients == [
-            {"org_id": str(alpha_id), "fit": "strong", "reason": "Runs XRD."}
+            {
+                "org_id": str(alpha_id),
+                "fit": "strong",
+                "reason": "Runs XRD.",
+                "ask": None,
+                "title": None,
+                "suggested": None,
+            }
         ]
+        # Untitled requests and threads fall back to their briefs and openings.
+        assert (seeded.title, thread.title, open_request.title) == (None, None, None)
         settings = await session.get_one(RepSettings, (world_id, alpha_id, 1))
         assert (settings.public_summary, settings.instructions) == (
             "alpha does things.",
@@ -459,6 +468,61 @@ async def test_seeded_rows_carry_the_scenario_values(
             1,
         )
         assert await session.get(TrustedOrganization, (world_id, beta_id, alpha_id)) is None
+
+
+async def test_seeded_titles_and_asks_are_stored(
+    db_sessionmaker: Sessionmaker, tmp_path: Path
+) -> None:
+    titled = _thread(
+        request={
+            "brief": "Do a thing",
+            "title": "XRD on 14 powders",
+            "at": "-3d",
+            "created_by": "ann",
+        }
+    )
+    recipient = {
+        "org": "alpha",
+        "reason": "Runs XRD.",
+        "fit": "strong",
+        "title": "XRD for a battery program",
+        "ask": "Can you run 14 powders by Nov 6?",
+        "suggested": True,
+    }
+    _tiny(
+        tmp_path,
+        threads=[titled],
+        requests=[
+            {
+                "slug": "r1",
+                "requester": "beta",
+                "created_by": "bob",
+                "brief": "Find a lab for 14 powders. Up to $2,000.",
+                "title": "Powder XRD, up to $2,000",
+                "recipients": [recipient],
+            }
+        ],
+    )
+    world_id = await load_world(db_sessionmaker, "tiny", build_sha="test", root=tmp_path)
+    async with db_sessionmaker() as session:
+        thread = await session.get_one(Thread, (world_id, seed_id("tiny", "thread", "t1")))
+        seeded = await session.get_one(NetworkRequest, (world_id, thread.request_id))
+        # A seeded thread is the request's only one: both sides see the same title.
+        assert (seeded.title, thread.title) == ("XRD on 14 powders", "XRD on 14 powders")
+        open_request = await session.get_one(
+            NetworkRequest, (world_id, seed_id("tiny", "network_request", "r1"))
+        )
+        assert open_request.title == "Powder XRD, up to $2,000"
+        assert open_request.recipients == [
+            {
+                "org_id": str(seed_id("tiny", "org", "alpha")),
+                "fit": "strong",
+                "reason": "Runs XRD.",
+                "ask": "Can you run 14 powders by Nov 6?",
+                "title": "XRD for a battery program",
+                "suggested": True,
+            }
+        ]
 
 
 _SEEDED_TABLES = ("worlds", "world_event_seq", "events", "orgs", "members", "knowledge_items")

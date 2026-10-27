@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from harmony.agents.models import OutreachRecipient
 from harmony.db.models import Conversation, Event, NetworkRequest
 from harmony.db.models.choices import Side
 from harmony.db.uow import unit_of_work
@@ -76,7 +77,12 @@ async def open_thread(
             conversation_id=conversation.id,
             created_by_member_id=sender,
             brief="Powder XRD on 14 air-sensitive powders by Nov 6, up to $2,000.",
-            recipients=[],
+            # Threads open only for a request's recipients.
+            recipients=[
+                OutreachRecipient(org_id=responder, fit="strong", reason="Fits.").model_dump(
+                    mode="json"
+                )
+            ],
         )
         uow.session.add(request)
         await uow.session.flush()

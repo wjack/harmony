@@ -87,6 +87,7 @@ export const northlakeSettings: HarmonySettingsView = {
       profile: "Runs the instruments. Sample prep and air-free handling questions.",
     },
   ],
+  send_without_confirmation: false,
   policy_version: 7,
   editable: true,
 };
@@ -121,6 +122,7 @@ export const hendersonSettings: HarmonySettingsView = {
       profile: "Approves spending and external collaborations.",
     },
   ],
+  send_without_confirmation: false,
   policy_version: 4,
   editable: false,
 };
@@ -131,6 +133,7 @@ const POLICY_FIELDS = [
   "directory_visibility",
   "routing_prompt",
   "default_assignee_id",
+  "send_without_confirmation",
 ] as const;
 
 /** The view after `update`, as the API would return it. */
@@ -147,6 +150,7 @@ function applyUpdate(view: HarmonySettingsView, update: HarmonySettingsUpdate): 
     autonomy: update.autonomy ?? view.autonomy,
     directory_visibility: update.directory_visibility ?? view.directory_visibility,
     routing_prompt: update.routing_prompt ?? view.routing_prompt,
+    send_without_confirmation: update.send_without_confirmation ?? view.send_without_confirmation,
     default_assignee: assignee,
     members: view.members.map((member) => ({
       ...member,

@@ -1,4 +1,4 @@
-import createClient, { type Client } from "openapi-fetch";
+import createClient, { type Client, type Middleware } from "openapi-fetch";
 
 import type { paths } from "./schema";
 
@@ -84,6 +84,43 @@ export class ApiError extends Error {
         : response.statusText || "request failed";
     return new ApiError(response.status, `${response.status} ${detail}`, isProblemBody(body) ? body : null, detail);
   }
+}
+
+/**
+ * The passcode gate refused the request: the visitor never unlocked, locked Harmony in
+ * another tab, or the passcode was rotated. Nothing will succeed until they unlock again.
+ */
+export class PasscodeRequired extends Error {
+  constructor() {
+    super("passcode required");
+    this.name = "PasscodeRequired";
+  }
+}
+
+/** The gate's 401 (`passcode_required`), as opposed to the API's own (`no_session`…). */
+export async function isPasscodeRequired(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  try {
+    const body: unknown = await response.clone().json();
+    return isProblemBody(body) && body.code === "passcode_required";
+  } catch {
+    return false;
+  }
+}
+
+/** Calls `lock` on any gate 401. Every request goes through it, mutations included. */
+export function lockOnPasscodeRequired(lock: () => void): Middleware {
+  return {
+    async onResponse({ response }) {
+      if (await isPasscodeRequired(response)) lock();
+      return undefined;
+    },
+  };
+}
+
+/** The server's passcode page, sending the visitor back to `next` once they unlock. */
+export function gatePath(next: string): string {
+  return `/api/gate?next=${encodeURIComponent(next)}`;
 }
 
 /** Why a request failed, in a sentence fit for a toast ("World is retired."). */

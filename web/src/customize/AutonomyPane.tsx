@@ -1,4 +1,4 @@
-import { ArrowRight, TriangleAlert } from "lucide-react";
+import { ArrowRight, SendHorizontal, TriangleAlert, UserCheck } from "lucide-react";
 
 import { Button, OrgAvatar } from "../shell/ui";
 import { byName, useCounterparties } from "./counterparties";
@@ -8,7 +8,30 @@ import type { PaneProps } from "./pane";
 import { RadioList } from "./RadioList";
 import type { Autonomy, OrgRef } from "./types";
 
-/** Autonomy: the default mode, and which trusted organizations have their own (§4.4, §9). */
+type SendMode = "review" | "send";
+
+const SEND_MODES = [
+  {
+    value: "review",
+    label: "Review before sending",
+    description: "Claude shows the brief and the organizations it chose. Nothing goes out until you approve.",
+    icon: <UserCheck size={15} strokeWidth={1.75} aria-hidden />,
+    tag: <Tag>Recommended</Tag>,
+  },
+  {
+    value: "send",
+    label: "Send without review",
+    description:
+      "Claude sends requests as soon as it writes them, to the organizations it chose. Nobody checks what is asked or who is asked. Spend limits still apply.",
+    icon: <SendHorizontal size={15} strokeWidth={1.75} aria-hidden />,
+  },
+] as const;
+
+/**
+ * Autonomy: the default mode, which trusted organizations have their own (§4.4, §9),
+ * and whether requests internal Claude writes go out without a member's review
+ * (LIVE_DEMO_PLAN 3.10). Its nav row stays one of the five sections.
+ */
 export function AutonomyPane({ view, draft, edit, editable, onSection }: PaneProps) {
   const orgs = useCounterparties(view);
   const own = Object.entries(draft.trusted)
@@ -88,6 +111,34 @@ export function AutonomyPane({ view, draft, edit, editable, onSection }: PanePro
             })}
           </ul>
         )}
+      </Section>
+
+      <Section
+        title="Sending Harmony Network Requests"
+        description="For requests Claude sends to other organizations for your members. It doesn't change how your representative answers them."
+      >
+        <RadioList<SendMode>
+          name="send-mode"
+          label="Sending Harmony Network Requests"
+          value={draft.sendWithoutConfirmation ? "send" : "review"}
+          options={SEND_MODES}
+          onChange={(mode) => {
+            edit({ sendWithoutConfirmation: mode === "send" });
+          }}
+          disabled={!editable}
+        />
+        {draft.sendWithoutConfirmation && (
+          <Callout tone="warning" icon={<TriangleAlert size={15} strokeWidth={1.75} />} className="mt-4">
+            <p className="font-medium">Requests go out before anyone reads them.</p>
+            <p className="text-secondary">
+              Claude sends only to organizations its search rated a strong or possible fit, at most eight per request.
+              What each one is asked, and what it&apos;s told about your members, is up to Claude.
+            </p>
+          </Callout>
+        )}
+        <p className="mt-3 text-[13px] leading-5 text-muted">
+          Members can change this for one chat from the composer&apos;s + menu.
+        </p>
       </Section>
     </>
   );

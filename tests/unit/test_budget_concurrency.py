@@ -5,7 +5,7 @@ import json
 import random
 import sys
 from collections import Counter
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -17,7 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from harmony.db.models import Budget, BudgetReservation
 from harmony.llm import CallKey
 from harmony.llm.budget import BudgetGuard, FreeSpend, Reservation, spend_guard
-from harmony.llm.budget_pg import HostedBudgets, ensure_budget, lineage_key
+from harmony.llm.budget_pg import (
+    GLOBAL_KEY,
+    HostedBudgets,
+    client_budget_key,
+    ensure_budget,
+    lineage_key,
+)
 from harmony.llm.errors import BudgetExhausted, LedgerUnavailable
 from harmony.llm.ledger import SpendLedger
 from harmony.llm.pricing import OPUS_5_5
@@ -231,12 +237,21 @@ async def test_a_call_in_flight_in_another_process_counts_until_that_process_die
 
 async def test_a_guard_with_nothing_to_charge_refuses() -> None:
     guard = BudgetGuard(ledger=None, cap_usd=CAP, thresholds=THRESHOLDS, env="ci")
-    with pytest.raises(BudgetExhausted):
+    with pytest.raises(BudgetExhausted) as uncovered:
         await guard.reserve_amount(Decimal(1), key=key(), model=OPUS_5_5)
-    with pytest.raises(BudgetExhausted):
+    with pytest.raises(BudgetExhausted) as no_database:
         await guard.reserve_amount(
             Decimal(1), key=key(), model=OPUS_5_5, budget_keys=["daily:2026-10-25"]
         )
+    # Fail closed: a guard that can meter nothing reads as paused.
+    assert (uncovered.value.kind, no_database.value.kind) == ("paused", "paused")
+
+
+async def test_the_dev_cap_refuses_as_the_whole_demo(tmp_path: Path) -> None:
+    guard = guard_for(empty_ledger(tmp_path))
+    with pytest.raises(BudgetExhausted) as refused:
+        await guard.reserve_amount(CAP + 1, key=key(), model=OPUS_5_5)
+    assert (refused.value.kind, refused.value.budget) == ("global", "dev")
 
 
 # --- Live mode refuses to start without its ledger ------------------------------------
@@ -302,34 +317,44 @@ async def _budget(sessionmaker: async_sessionmaker[AsyncSession], budget_key: st
 async def test_hosted_caps_hold_under_concurrency(
     db_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    lineage, daily = lineage_key(uuid4()), "daily:2026-10-25"
-    await _make_budget(db_sessionmaker, lineage, Decimal(200))
-    await _make_budget(db_sessionmaker, daily, Decimal(1000))
+    # A call's four keys, given in no particular order; the lineage is the tightest.
+    lineage, client, daily = (
+        lineage_key(uuid4()),
+        client_budget_key("c" * 32, date(2026, 10, 25)),
+        "daily:2026-10-25",
+    )
+    caps = {lineage: Decimal(200), client: Decimal(500), daily: Decimal(1000), GLOBAL_KEY: CAP * 5}
+    for budget_key, cap in caps.items():
+        await _make_budget(db_sessionmaker, budget_key, cap)
     hosted = HostedBudgets(db_sessionmaker)
     ids = [uuid4() for _ in range(100)]
+    orders = [random.sample(list(caps), k=len(caps)) for _ in ids]
     results = await asyncio.gather(
-        *(hosted.reserve(i, [daily, lineage], Decimal(3)) for i in ids),
+        *(hosted.reserve(i, keys, Decimal(3)) for i, keys in zip(ids, orders, strict=True)),
         return_exceptions=True,
     )
     unexpected = [r for r in results if r is not None and not isinstance(r, BudgetExhausted)]
     assert not unexpected
+    assert {r.kind for r in results if isinstance(r, BudgetExhausted)} == {"session"}
     held = [i for i, r in zip(ids, results, strict=True) if r is None]
     assert len(held) == 66
-    assert (await _budget(db_sessionmaker, lineage)).reserved_usd == Decimal(198)
-    assert (await _budget(db_sessionmaker, daily)).reserved_usd == Decimal(198)
+    for budget_key in caps:
+        assert (await _budget(db_sessionmaker, budget_key)).reserved_usd == Decimal(198)
 
     await asyncio.gather(*(hosted.settle(i, Decimal(2)) for i in held))
     await asyncio.gather(*(hosted.settle(i, Decimal(2)) for i in held))  # idempotent
-    row = await _budget(db_sessionmaker, lineage)
-    assert (row.spent_usd, row.reserved_usd) == (Decimal(132), Decimal(0))
+    for budget_key in caps:
+        row = await _budget(db_sessionmaker, budget_key)
+        assert (row.spent_usd, row.reserved_usd) == (Decimal(132), Decimal(0))
 
 
 async def test_a_hosted_key_without_a_row_fails_closed(
     db_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     hosted = HostedBudgets(db_sessionmaker)
-    with pytest.raises(BudgetExhausted, match="no budget row"):
+    with pytest.raises(BudgetExhausted, match="no budget row") as refused:
         await hosted.reserve(uuid4(), ["lineage:nobody"], Decimal(1))
+    assert refused.value.kind == "session"
 
 
 async def test_guard_reserves_dev_and_hosted_caps_together(

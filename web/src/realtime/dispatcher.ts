@@ -23,10 +23,14 @@
  *   than an empty shell; it is cleared in the same synchronous step that primes the new
  *   snapshot and bumps `generation`, so nothing fetched during the switch survives it.
  *   The epoch makes this happen once per switch.
+ * - **Locked** (the passcode gate refused a snapshot or any other request): terminal.
+ *   Nothing retries, the cache goes, the visitor's other tabs reload (and so lock too),
+ *   and the tab leaves for the passcode page, which brings it back once unlocked.
  */
 import type { QueryClient } from "@tanstack/react-query";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import { PasscodeRequired, gatePath } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
 import type { DemoEvent, EventEnvelope, StreamEvent } from "../api/types";
 import { applyEntitySnapshot } from "./cache";
@@ -75,6 +79,8 @@ export type RealtimeStatus =
   | "reconnecting"
   /** The acting identity or world changed: cache cleared, fetching a fresh snapshot. */
   | "resetting"
+  /** The passcode gate refused us; the tab is leaving for the passcode page. */
+  | "locked"
   | "stopped";
 
 export interface RealtimeState {
@@ -92,6 +98,7 @@ export interface RealtimeState {
 export type DemoListener = (event: DemoEvent, envelope: EventEnvelope) => void;
 export type StreamListener = (event: StreamEvent, envelope: EventEnvelope) => void;
 export type EnvelopeListener = (envelope: EventEnvelope) => void;
+export type LockListener = () => void;
 type Unsubscribe = () => void;
 
 export interface DispatcherOptions {
@@ -105,6 +112,10 @@ export interface DispatcherOptions {
   streamUrl?: (after: number | null, epoch: number | null) => string;
   /** Delay before retry number `attempt` (0-based) of a failed snapshot or stream. */
   retryDelayMs?: (attempt: number) => number;
+  /** Where the visitor is (path, query and hash), to come back to once they unlock. */
+  here?: () => string;
+  /** Leaves the app for the passcode page. */
+  leave?: (url: string) => void;
 }
 
 /** The visitor's tabs share this BroadcastChannel (same origin, so same session). */
@@ -115,6 +126,13 @@ export interface MemberChangedMessage {
   type: "member_changed";
   epoch: number;
 }
+
+/** What one tab tells the others: Harmony is locked, so nothing they hold is usable. */
+export interface LockedMessage {
+  type: "locked";
+}
+
+type TabMessage = MemberChangedMessage | LockedMessage;
 
 // EventSource.readyState values; not read from the global, which Node lacks.
 const READY_STATE_CLOSED = 2;
@@ -154,11 +172,20 @@ function reloadPage(): void {
   window.location.reload();
 }
 
-function parseTabMessage(data: unknown): MemberChangedMessage | null {
+function currentPath(): string {
+  return window.location.pathname + window.location.search + window.location.hash;
+}
+
+function leavePage(url: string): void {
+  window.location.assign(url);
+}
+
+function parseTabMessage(data: unknown): TabMessage | null {
   if (typeof data !== "object" || data === null) return null;
-  const message = data as Partial<MemberChangedMessage>;
+  const message = data as { type?: unknown; epoch?: unknown };
+  if (message.type === "locked") return { type: "locked" };
   if (message.type !== "member_changed" || typeof message.epoch !== "number") return null;
-  return { type: message.type, epoch: message.epoch };
+  return { type: "member_changed", epoch: message.epoch };
 }
 
 function notify<A extends unknown[]>(listeners: Iterable<(...args: A) => void>, ...args: A): void {
@@ -182,8 +209,11 @@ export class RealtimeDispatcher {
   readonly #reload: () => void;
   readonly #streamUrl: (after: number | null, epoch: number | null) => string;
   readonly #retryDelayMs: (attempt: number) => number;
+  readonly #here: () => string;
+  readonly #leave: (url: string) => void;
 
   readonly #demoListeners = new Set<DemoListener>();
+  readonly #lockListeners = new Set<LockListener>();
   readonly #streamListeners = new Set<StreamListener>();
   readonly #envelopeListeners = new Set<EnvelopeListener>();
 
@@ -206,13 +236,15 @@ export class RealtimeDispatcher {
     this.#reload = options.reload ?? reloadPage;
     this.#streamUrl = options.streamUrl ?? eventStreamUrl;
     this.#retryDelayMs = options.retryDelayMs ?? backoffDelayMs;
+    this.#here = options.here ?? currentPath;
+    this.#leave = options.leave ?? leavePage;
   }
 
   get state(): RealtimeState {
     return this.store.getState();
   }
 
-  /** Open the stream from a fresh snapshot. A no-op while already running. */
+  /** Open the stream from a fresh snapshot. A no-op while already running, or locked. */
   start(): Promise<void> {
     const { status } = this.state;
     if (status !== "idle" && status !== "no-session" && status !== "stopped") {
@@ -240,6 +272,7 @@ export class RealtimeDispatcher {
    * stream, or from a successful act-as in this tab (whichever comes first).
    */
   memberChanged(epoch: number): Promise<void> {
+    if (this.state.status === "locked") return Promise.resolve();
     const current = this.state.epoch;
     if (current !== null && epoch <= current) return Promise.resolve();
     this.#set({ epoch });
@@ -250,7 +283,36 @@ export class RealtimeDispatcher {
 
   /** Rebuild from a fresh snapshot without an identity change (the world was retired). */
   resync(): Promise<void> {
+    if (this.state.status === "locked") return Promise.resolve();
     return this.#reset();
+  }
+
+  /**
+   * The passcode gate refused a request. Stop for good, drop everything fetched behind
+   * the gate, have the visitor's other tabs reload (they lock too), and leave for the
+   * passcode page, which returns here once unlocked. Idempotent.
+   */
+  lock(): void {
+    if (this.state.status === "locked") return;
+    this.#run += 1;
+    this.#closeSource();
+    this.#cancelRetry();
+    this.#cacheStale = false;
+    this.#setFailures(0);
+    this.#set({ status: "locked" });
+    this.#queryClient.clear();
+    notify(this.#lockListeners);
+    const message: LockedMessage = { type: "locked" };
+    this.#channel?.postMessage(message);
+    this.#leave(gatePath(this.#here()));
+  }
+
+  /** Called as the tab locks, after the cache is cleared: for state kept outside it. */
+  onLocked(listener: LockListener): Unsubscribe {
+    this.#lockListeners.add(listener);
+    return () => {
+      this.#lockListeners.delete(listener);
+    };
   }
 
   onDemo(listener: DemoListener): Unsubscribe {
@@ -294,6 +356,10 @@ export class RealtimeDispatcher {
       snapshot = await this.#snapshot();
     } catch (error) {
       if (run !== this.#run) return;
+      if (error instanceof PasscodeRequired) {
+        this.lock();
+        return;
+      }
       console.warn("realtime: snapshot failed; retrying", error);
       this.#retryLater(run, () => void this.#rebuild(status));
       return;
@@ -361,6 +427,11 @@ export class RealtimeDispatcher {
       snapshot = await this.#snapshot();
     } catch (error) {
       if (run !== this.#run) return;
+      if (error instanceof PasscodeRequired) {
+        // The stream was refused because Harmony is locked, not because the session moved.
+        this.lock();
+        return;
+      }
       console.warn("realtime: snapshot failed; retrying", error);
       this.#retryLater(run, () => void this.#recover());
       return;
@@ -418,7 +489,13 @@ export class RealtimeDispatcher {
     if (channel === null) return;
     channel.onmessage = (event) => {
       const message = parseTabMessage(event.data);
-      if (message === null) return;
+      if (message === null || this.state.status === "locked") return;
+      // Another tab locked Harmony: reload, so this one meets the gate too rather than
+      // leaving the cast and the story on screen.
+      if (message.type === "locked") {
+        this.#reload();
+        return;
+      }
       // Another tab switched accounts. Unless this tab already handled that switch
       // from its own stream, reload it: routes, drafts and caches all belong to the
       // previous member.

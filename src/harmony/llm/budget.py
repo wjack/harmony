@@ -5,14 +5,17 @@
    cap, counting harmony's settled spend from the shared ledger plus every process's
    open reservations (the ledger's sidecar file), under an `asyncio.Lock` and an
    exclusive `flock`;
-2. reserves the same amount against any hosted caps in Postgres (`budget_pg`);
+2. reserves the same amount against any hosted caps in Postgres (`budget_pg`): in
+   prod, or locally with `HOSTED_CAPS_IN_DEV`, so both caps apply;
 3. after the call, appends one `call` line with the billed cost (also for failed and
    cut-off calls, from their partial usage) and drops the open reservation under the
    same lock, and writes one `alert` line the first time spend reaches each threshold.
 
-A reservation that would pass the cap raises the non-retryable `BudgetExhausted`;
-the first such refusal also writes the cap's alert (reason `refused`), since spend
-can then never reach the cap exactly.
+A reservation that would pass the cap raises the non-retryable `BudgetExhausted`
+(kind `global`: the dev cap is this machine's whole demo); the first such refusal also
+writes the cap's alert (reason `refused`), since spend can then never reach the cap
+exactly. When the provider's own spend limit refuses a call, the model client calls
+`block_provider`, and hosted reservations are refused locally for a while (3.4).
 
 With `MODEL_MODE=live` and `APP_ENV=local` the ledger is mandatory: a missing,
 unreadable or unwritable ledger refuses to start (`LedgerUnavailable`), and the guard
@@ -108,6 +111,10 @@ class SpendGuard(Protocol):
         """Free a reservation for a call that billed nothing. Idempotent."""
         ...
 
+    async def block_provider(self) -> None:
+        """The provider's spend limit refused a call: refuse hosted calls for a while."""
+        ...
+
 
 class FreeSpend:
     """The guard for `ScriptedModel`: everything is $0 and nothing is recorded."""
@@ -136,6 +143,9 @@ class FreeSpend:
         return ()
 
     async def release(self, reservation: Reservation) -> None:
+        return None
+
+    async def block_provider(self) -> None:
         return None
 
 
@@ -215,6 +225,7 @@ class BudgetGuard:
         if self._ledger is None and not reservation.budget_keys:
             raise BudgetExhausted(
                 "no budget covers this call: no dev ledger and no hosted budget keys",
+                kind="paused",
                 budget="none",
                 cap_usd=Decimal(0),
                 committed_usd=Decimal(0),
@@ -223,6 +234,7 @@ class BudgetGuard:
         if reservation.budget_keys and self._hosted is None:
             raise BudgetExhausted(
                 "hosted budget keys given but the guard has no database",
+                kind="paused",
                 budget=",".join(reservation.budget_keys),
                 cap_usd=Decimal(0),
                 committed_usd=Decimal(0),
@@ -276,6 +288,12 @@ class BudgetGuard:
         if self._hosted is not None and reservation.budget_keys:
             await self._hosted.release(reservation.id)
 
+    async def block_provider(self) -> None:
+        """Without hosted caps (local dev) there is nothing to block: the provider's
+        error itself already failed the call."""
+        if self._hosted is not None:
+            await self._hosted.block_provider()
+
     async def _drop(self, reservation: Reservation) -> bool:
         """Forget an open reservation here and in the shared sidecar."""
         async with self._lock:
@@ -312,6 +330,7 @@ class BudgetGuard:
             f"dev budget exhausted: ${summary.spent_usd:,.2f} spent and "
             f"${in_flight:,.2f} in flight of ${self._cap:,.2f}; the call needs up "
             f"to ${reservation.est_usd:,.2f}",
+            kind="global",
             budget="dev",
             cap_usd=self._cap,
             committed_usd=committed,

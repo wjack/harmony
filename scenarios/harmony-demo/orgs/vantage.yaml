@@ -1,5 +1,8 @@
 # Vantage Market Intelligence, the adversary (docs/SCENARIO.md, ARCHITECTURE.md §11.6).
-# Its side is played by ScriptedModel; these records exist so its world rows are complete.
+# Its probe of Northlake (threads.yaml `requests`) starts on the first act-as into
+# Northlake or Vantage. In the hosted demo a live model plays its side from these
+# records and its brief, so it may probe, act politely, refuse the part or consult its
+# own side; in tests, ScriptedModel plays it (story_adversary.yaml).
 slug: vantage
 name: Vantage Market Intelligence
 kind: procurement

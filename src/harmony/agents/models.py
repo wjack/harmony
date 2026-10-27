@@ -18,10 +18,10 @@ the database enforces.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Final, Literal
+from typing import Annotated, Any, Final, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harmony.auth.views import OrgRef
 from harmony.db.models.choices import CardStatus, Fit
@@ -30,6 +30,7 @@ __all__ = [
     "BRIEF_MAX_CHARS",
     "BRIEF_TITLE_CHARS",
     "ActivityLine",
+    "Ask",
     "AssistantTextItem",
     "Brief",
     "CardDecision",
@@ -53,6 +54,7 @@ __all__ = [
     "RequestStatus",
     "RequestStatusItem",
     "Route",
+    "RouteAssignee",
     "ScreenedCounts",
     "ThinkingSummaryItem",
     "ToolActivityItem",
@@ -71,7 +73,12 @@ BRIEF_MAX_CHARS: Final = 8000
 # The brief internal Claude writes and the member approves on the outreach card: the
 # requester representative's mandate, in prose (§7). Approving it is what releases it.
 Brief = Annotated[str, Field(min_length=1, max_length=BRIEF_MAX_CHARS)]
+# What one recipient is asked, in prose, as the member may edit it on the card: only our
+# representative in that recipient's conversation sees it (3.13 E2).
+Ask = Annotated[str, Field(min_length=1, max_length=BRIEF_MAX_CHARS)]
 BRIEF_TITLE_CHARS: Final = 80
+# How many of a request's conversations run at once (`NetworkRequestInput`).
+MAX_ACTIVE_THREADS: Final = 8
 
 
 def first_line(text: str, limit: int) -> str:
@@ -117,12 +124,30 @@ class MemberRef(_Model):
 # --- Consults and the inbox (§4, §6) -------------------------------------------------
 
 
-class Route(_Model):
-    """Who should review, as the answerer proposes it. Code validates the slugs against
-    the org's members and falls back to the default assignee (§6)."""
+class RouteAssignee(_Model):
+    member: str = Field(description="A member slug.")
+    # One short clause addressed to them: "you run XRD and SEM".
+    why: str
 
-    assignees: list[str] = Field(description="Member slugs.")
-    reason: str
+
+class Route(_Model):
+    """Who should review, each with why, as the answerer proposes it. Code validates
+    the slugs against the org's members and falls back to the default assignee (§6)."""
+
+    assignees: list[RouteAssignee]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shared_reason(cls, data: object) -> object:
+        """Drafts and cassettes from before per-assignee whys stored member slugs and
+        one `reason`: each slug takes that reason as its why."""
+        if not isinstance(data, dict):
+            return data
+        fields = cast(dict[str, Any], data)
+        if "reason" not in fields:
+            return fields
+        slugs = cast(list[Any], fields.get("assignees", []))
+        return {"assignees": [{"member": slug, "why": fields["reason"]} for slug in slugs]}
 
 
 class ActivityLine(_Model):
@@ -136,8 +161,11 @@ class ActivityLine(_Model):
 
 # What a representative's frozen system prompt holds (§2), as the context inspector
 # ("What our representative saw") lists it: `sharing` appears once for the org's
-# default description and again for a trusted organization's extra one.
-ContextPartKind = Literal["public_summary", "instructions", "sharing", "brief", "counterparty"]
+# default description and again for a trusted organization's extra one; `ask` is what
+# the requester asks this one counterparty.
+ContextPartKind = Literal[
+    "public_summary", "instructions", "sharing", "brief", "ask", "counterparty"
+]
 
 
 class ContextPart(_Model):
@@ -156,8 +184,11 @@ class ContextPart(_Model):
 #   declined, with `text` as the reason it may give.
 # - `take_over`: the member writes to the counterparty directly (`text`, provenance
 #   `human`); the escalation closes.
+# - `revise` (`outbound_review` only, `text` required): nothing is sent; the
+#   representative gets `text` as an instruction to rewrite the message, never as
+#   text it may pass on.
 # "Redraft" and "Reassign" are their own Updates (`Redraft`, `Reassignment`).
-EscalationAction = Literal["approve", "decline", "take_over"]
+EscalationAction = Literal["approve", "decline", "take_over", "revise"]
 
 
 class EscalationResolution(_Model):
@@ -192,11 +223,19 @@ class ScreenedCounts(_Model):
 
 
 class OutreachRecipient(_Model):
-    """A proposed recipient as stored in the card payload."""
+    """A proposed recipient as stored in the card payload and, once sent, in
+    `network_requests.recipients`. Cards from before asks, titles and suggestions
+    stored none."""
 
     org_id: UUID
     fit: Fit | None
     reason: str
+    # What to ask this recipient alone (3.13 E2).
+    ask: str | None = None
+    # Its conversation's subject, which both sides see.
+    title: str | None = None
+    # Internal Claude suggests sending to it; false lists it for the member's decision.
+    suggested: bool | None = None
 
 
 class OutreachCardPayload(_Model):
@@ -208,6 +247,10 @@ class OutreachCardPayload(_Model):
     screened: ScreenedCounts | None = None
     # The `search_network` calls the card's fit and counts came from.
     search_ids: list[UUID] = []
+    # The request's name for the member; never shown to a recipient.
+    title: str | None = None
+    # A card raised in a chat that sends without review: who it goes to (3.10).
+    auto_send_recipients: list[UUID] | None = None
 
 
 # `cards.payload`: the outreach approval is the one kind of card (`cards.kind`).
@@ -218,10 +261,11 @@ CardDecision = Literal["approve", "reject"]
 
 class OutreachEdits(_Model):
     """Approval edits on an outreach card: a subset of the proposed recipients (org
-    ids), and the brief as the member rewrote it."""
+    ids), the brief as the member rewrote it, and asks they rewrote, by org id."""
 
     recipients: list[UUID] | None = None
     brief: Brief | None = None
+    asks: dict[UUID, Ask] | None = None
 
 
 class CardResolution(_Model):
@@ -236,6 +280,9 @@ class CardResolution(_Model):
     member_id: UUID
     edits: OutreachEdits | None = None
     feedback: str | None = None
+    # Settled by the workflow for a chat that sends without review, not by a member
+    # (`member_id` is the chat's owner).
+    auto: bool = False
 
 
 # --- Chat items: the chat view model (GET /api/conversations/{id}) -------------------
@@ -293,7 +340,11 @@ class CardRecipient(_Model):
     org: OrgRef
     fit: Fit | None
     reason: str
-    # False when the member dropped it on approval.
+    ask: str | None = None
+    title: str | None = None
+    suggested: bool | None = None
+    # In the request: every listed row while pending or once rejected; once approved,
+    # the rows the request went to (`requests.chosen_recipients`).
     selected: bool = True
 
 
@@ -303,6 +354,11 @@ class OutreachCardItem(_ChatItem):
     type: Literal["outreach_card"] = "outreach_card"
     card_id: UUID
     status: CardStatus
+    # The request's name for the member (`OutreachCardPayload.title`).
+    title: str | None = None
+    # Raised in a chat that sends without review: the workflow settles it, never a
+    # member (`cards.auto`).
+    auto: bool = False
     brief: Brief
     recipients: list[CardRecipient]
     screened: ScreenedCounts | None

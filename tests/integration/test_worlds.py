@@ -1,5 +1,6 @@
-"""Sessions and worlds through the API: lazy creation, act-as, reset, build pinning and
-the admin wipe (ARCHITECTURE.md §7, §11.1, §11.3)."""
+"""Sessions and worlds through the API: lazy creation, act-as, reset, build pinning,
+the lazy start of seeded requests (LIVE_DEMO_PLAN 3.3) and the admin wipe
+(ARCHITECTURE.md §7, §11.1, §11.3)."""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import asyncio
 import shutil
 from collections.abc import Sequence
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -15,15 +17,17 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from harmony.api.deps import AppServices
+from harmony.api.deps import AppServices, get_world_service
 from harmony.auth.session import SESSION_COOKIE, sign_session_id
 from harmony.config import Settings
-from harmony.db.models import Event, Org, VisitorSession, World
+from harmony.db.models import Event, Org, VisitorSession, World, WorldWorkflow
 from harmony.events.bus import SESSION_CHANNEL
-from harmony.seeds.ids import seed_id
+from harmony.llm.budget_pg import HostedCaps, set_live
 from harmony.seeds.loader import DEFAULT_SCENARIO, SCENARIOS_DIR, load_scenario, load_world
+from harmony.temporal.workflows.payloads import request_workflow_id
 from harmony.worlds.retirer import SyncRetirer
 from harmony.worlds.service import WorldService
 from tests.conftest import ClonedDatabase
@@ -301,53 +305,208 @@ async def test_concurrent_resets_of_one_world_fork_it_once(
     assert len(await _worlds(db_sessionmaker)) == 2
 
 
+# --- Seeded open requests (3.3) ----------------------------------------------------------
+
+# The Vantage probe of Northlake: requester Vantage (Jordan), recipient Northlake (Helen,
+# Raj).
+ADVERSARY = demo_id("network_request", "vantage-northlake-thursday-sem")
+
+
 class _RecordingStarter:
-    def __init__(self, *, fail: bool = False) -> None:
+    """Records each start, and its `world_workflows` row as `start_world_workflow` does."""
+
+    def __init__(self, sm: Sessionmaker, *, fail: bool = False) -> None:
         self.started: list[tuple[UUID, tuple[UUID, ...]]] = []
+        self._sm = sm
         self._fail = fail
 
     async def start(self, world_id: UUID, request_ids: Sequence[UUID]) -> None:
         self.started.append((world_id, tuple(request_ids)))
         if self._fail:
             raise RuntimeError("temporal is down")
+        rows = [
+            {
+                "world_id": world_id,
+                "workflow_id": request_workflow_id(world_id, request_id),
+                "workflow_type": "NetworkRequestWorkflow",
+            }
+            for request_id in request_ids
+        ]
+        async with self._sm() as session, session.begin():
+            await session.execute(insert(WorldWorkflow).values(rows).on_conflict_do_nothing())
 
 
-async def test_every_new_world_starts_its_seeded_open_requests(
+def _starting(
+    app: FastAPI,
+    sm: Sessionmaker,
+    starter: _RecordingStarter,
+    *,
+    build_sha: str,
+    caps: HostedCaps | None = None,
+) -> FastAPI:
+    """`app` with `starter` in place of Temporal's, and `caps` as hosted live calls."""
+    app.dependency_overrides[get_world_service] = lambda: WorldService(
+        sm, build_sha=build_sha, retirer=SyncRetirer(sm), requests=starter, caps=caps
+    )
+    return app
+
+
+# Hosted caps with only a lineage key, so no global row is needed.
+LIVE_CAPS = HostedCaps(lineage_usd=Decimal(10))
+
+
+async def test_creating_a_world_starts_no_seeded_request(
     app_settings: Settings, db_sessionmaker: Sessionmaker
 ) -> None:
-    starter = _RecordingStarter()
+    starter = _RecordingStarter(db_sessionmaker)
     service = WorldService(
         db_sessionmaker,
         build_sha=app_settings.build_sha,
         retirer=SyncRetirer(db_sessionmaker),
         requests=starter,
     )
-    adversary = seed_id(DEFAULT_SCENARIO, "network_request", "vantage-northlake-thursday-sem")
-
     session_id = await service.start(None)
     first = (await _visitor_row(db_sessionmaker, str(session_id))).desk_world_id
     assert first is not None
     reset = await service.fork_and_reset(session_id, "desk", observed_world_id=first)
-    assert starter.started == [(first, (adversary,)), (reset.world_id, (adversary,))]
-
-    # A scenario without open requests starts nothing.
-    await service.start(None, scenario="minimal")
-    assert len(starter.started) == 2
-
-
-async def test_a_failed_request_start_still_gives_the_visitor_their_world(
-    app_settings: Settings, db_sessionmaker: Sessionmaker
-) -> None:
-    service = WorldService(
+    # A fork for a new build keeps Alex, whose lab is party to no seeded request.
+    deployed = WorldService(
         db_sessionmaker,
-        build_sha=app_settings.build_sha,
+        build_sha="the-next-build",
         retirer=SyncRetirer(db_sessionmaker),
-        requests=_RecordingStarter(fail=True),
+        requests=starter,
     )
-    session_id = await service.start(None)
-    world_id = (await _visitor_row(db_sessionmaker, str(session_id))).desk_world_id
-    assert world_id is not None
-    assert (await _worlds(db_sessionmaker))[world_id].status == "live"
+    forked = await deployed.ensure_current_build(session_id, "desk")
+    assert forked is not None
+    assert forked.previous_world_id == reset.world_id
+    await service.start(None, scenario="minimal")
+    assert starter.started == []
+
+
+async def test_the_first_act_as_into_a_party_org_starts_the_seeded_request(
+    app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
+) -> None:
+    starter = _RecordingStarter(db_sessionmaker)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    async with visitor(app) as v:
+        world = UUID((await v.start())["world_id"])
+        await v.act_as("maya")
+        assert starter.started == []
+        await v.act_as("helen")
+        assert starter.started == [(world, (ADVERSARY,))]
+        # Once per world, however the visitor switches.
+        await v.act_as("raj")
+        await v.act_as("alex")
+        await v.act_as("helen")
+        # A Reset starts over as Alex, so it starts nothing either.
+        await v.json("POST", "/worlds/reset")
+    assert starter.started == [(world, (ADVERSARY,))]
+
+    async with visitor(app) as requester:
+        vantage_world = UUID((await requester.start())["world_id"])
+        await requester.act_as("jordan")
+    assert starter.started[1:] == [(vantage_world, (ADVERSARY,))]
+
+
+async def test_a_double_clicked_act_as_starts_it_once(
+    app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
+) -> None:
+    starter = _RecordingStarter(db_sessionmaker)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    async with visitor(app) as v:
+        world = UUID((await v.start())["world_id"])
+        helen = (await v.member_ids())["helen"]
+        await asyncio.gather(
+            *(v.json("POST", "/session/act-as", json={"member_id": str(helen)}) for _ in range(3))
+        )
+    assert starter.started == [(world, (ADVERSARY,))]
+
+
+async def test_a_fork_that_keeps_a_party_member_starts_it_in_the_new_world(
+    app: FastAPI, app_settings: Settings, db_engine: AsyncEngine, db_sessionmaker: Sessionmaker
+) -> None:
+    starter = _RecordingStarter(db_sessionmaker)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    async with visitor(app) as v:
+        old = UUID((await v.start())["world_id"])
+        await v.act_as("helen")
+        cookies = v.cookies()
+
+    deployed = _starting(
+        build_app(app_settings, db_engine, build_sha="the-next-build"),
+        db_sessionmaker,
+        starter,
+        build_sha="the-next-build",
+    )
+    async with visitor(deployed, cookies) as v:
+        current = await v.session()
+        assert current["member"]["slug"] == "helen"
+        await v.session()
+        await v.act_as("helen")
+    new = UUID(current["world_id"])
+    assert new != old
+    assert starter.started == [(old, (ADVERSARY,)), (new, (ADVERSARY,))]
+
+
+async def test_a_seeded_request_waits_while_live_calls_cant_run(
+    app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
+) -> None:
+    starter = _RecordingStarter(db_sessionmaker)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha, caps=LIVE_CAPS)
+    await set_live(db_sessionmaker, enabled=False)
+    async with visitor(app) as v:
+        world = UUID((await v.start())["world_id"])
+        await v.act_as("helen")
+        # Its threads' first turns would be refused and end for good: nothing starts,
+        # and nothing is recorded that would stop a later start.
+        assert starter.started == []
+        await set_live(db_sessionmaker, enabled=True)
+        await v.act_as("raj")
+        await v.act_as("helen")
+    assert starter.started == [(world, (ADVERSARY,))]
+
+
+async def test_a_fork_while_live_calls_cant_run_starts_it_once_they_can(
+    app: FastAPI, app_settings: Settings, db_engine: AsyncEngine, db_sessionmaker: Sessionmaker
+) -> None:
+    starter = _RecordingStarter(db_sessionmaker)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha, caps=LIVE_CAPS)
+    await set_live(db_sessionmaker, enabled=False)
+    async with visitor(app) as v:
+        await v.start()
+        await v.act_as("helen")
+        cookies = v.cookies()
+
+    deployed = _starting(
+        build_app(app_settings, db_engine, build_sha="the-next-build"),
+        db_sessionmaker,
+        starter,
+        build_sha="the-next-build",
+        caps=LIVE_CAPS,
+    )
+    async with visitor(deployed, cookies) as v:
+        # The fork keeps Helen, while live models are still paused.
+        current = await v.session()
+        assert current["member"]["slug"] == "helen"
+        assert starter.started == []
+        await set_live(db_sessionmaker, enabled=True)
+        await v.act_as("helen")
+    assert starter.started == [(UUID(current["world_id"]), (ADVERSARY,))]
+
+
+async def test_a_failed_request_start_still_lets_the_visitor_act(
+    app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
+) -> None:
+    starter = _RecordingStarter(db_sessionmaker, fail=True)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.build_sha)
+    async with visitor(app) as v:
+        world = UUID((await v.start())["world_id"])
+        switched = await v.act_as("helen")
+        assert switched["member"]["slug"] == "helen"
+        # Nothing was recorded, so the next act-as tries again.
+        await v.act_as("raj")
+    assert starter.started == [(world, (ADVERSARY,)), (world, (ADVERSARY,))]
+    assert (await _worlds(db_sessionmaker))[world].status == "live"
 
 
 async def test_a_world_from_another_build_is_forked_on_the_next_visit(
@@ -419,25 +578,18 @@ async def test_a_world_whose_scenario_a_later_build_removed_forks_into_the_defau
 # --- The network lens -----------------------------------------------------------------
 
 
-async def test_the_network_lens_has_its_own_world_and_member(app: FastAPI) -> None:
+async def test_the_network_world_is_not_started_until_p3(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
     async with visitor(app) as v:
+        refused = await v.request("POST", "/session/start", params={"world": "network"}, expect=404)
+        assert refused.json()["code"] == "not_found"
+        assert await _worlds(db_sessionmaker) == {}
         desk = await v.start()
+        await v.request("POST", "/session/start", params={"world": "network"}, expect=404)
         await v.request("GET", "/session", params={"world": "network"}, expect=401)
-        network = await v.json("POST", "/session/start", params={"world": "network"})
-        assert network["lens"] == "network"
-        assert network["world_id"] != desk["world_id"]
-        assert network["session_id"] == desk["session_id"]
-
-        raj = (await v.member_ids())["raj"]
-        switched = await v.json(
-            "POST", "/session/act-as", params={"world": "network"}, json={"member_id": str(raj)}
-        )
-        assert switched["member"]["slug"] == "raj"
-        assert (await v.session())["member"]["slug"] == "alex"
-        assert (await v.session(world="network"))["member"]["slug"] == "raj"
-        network_inbox = await v.json("GET", "/threads", params={"world": "network"})
-        assert {t["responder"]["slug"] for t in network_inbox} == {"northlake"}
-        assert network_inbox != await v.json("GET", "/threads")
+    row = await _visitor_row(db_sessionmaker, desk["session_id"])
+    assert row.network_world_id is None
 
 
 # --- Admin wipe -----------------------------------------------------------------------
@@ -450,7 +602,8 @@ async def test_the_admin_wipe_needs_the_secret_and_retires_every_world(
         first = await v.start()
         await other.start()
 
-        await v.request("POST", "/admin/wipe", expect=403)
+        refused = await v.request("POST", "/admin/wipe", expect=403)
+        assert refused.json()["code"] == "not_admin"
         await v.request("POST", "/admin/wipe", headers={"X-Admin-Secret": "wrong"}, expect=403)
         unset = build_app(app_settings, db_engine, admin_secret=None)
         async with visitor(unset) as anyone:

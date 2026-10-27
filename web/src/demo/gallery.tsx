@@ -1,6 +1,7 @@
 /** The demo layer's gallery sections (/__gallery). */
 import { useSession } from "../app/queries";
-import { members, needsHumanEnvelope } from "../fixtures/shell";
+import type { BudgetView } from "../app/budget";
+import { budgets, members, needsHumanEnvelope } from "../fixtures/shell";
 import { useFixtureEmit } from "../gallery/fixtureContext";
 import type { GallerySection } from "../gallery/types";
 import { Button } from "../shell/ui";
@@ -72,13 +73,28 @@ function ControlsLauncher() {
   );
 }
 
+/** The demo bar over one `GET /api/budget` answer. */
+function budgetBar(title: string, description: string, budget: BudgetView): GallerySection {
+  return { title, description, layout: "bare", fixtures: { "GET /api/budget": budget }, render: () => <LiveDemoBar /> };
+}
+
 export default [
   {
     title: "Demo bar",
-    description: "Acting account, world date and Reset, styled apart from the product.",
+    description: "Acting account, world date, this session's live budget and Reset, styled apart from the product.",
     layout: "bare",
     render: () => <LiveDemoBar />,
   },
+  budgetBar("Demo bar: session budget used up", "This session's cap is spent; Reset doesn't refill it.", budgets.sessionExhausted),
+  budgetBar("Demo bar: daily budget used up", "Today's cap, or this client's, is spent until 00:00 UTC.", budgets.dailyExhausted),
+  budgetBar("Demo bar: demo budget used up", "The demo's global cap is spent.", budgets.demoExhausted),
+  budgetBar(
+    "Demo bar: provider block",
+    "The model provider refused (billing or a usage limit): the same line as the global cap.",
+    budgets.providerBlocked,
+  ),
+  budgetBar("Demo bar: paused", "The operator paused live models.", budgets.paused),
+  budgetBar("Demo bar: caps off", "Hosted caps are off (local development): no budget to show.", budgets.off),
   {
     title: "Demo bar before a session",
     layout: "bare",

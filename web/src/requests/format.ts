@@ -123,17 +123,18 @@ export function stateLabel({ state, side, side_to_move }: Standing, counterparty
 
 /**
  * The inbox row's subtitle after the counterparty's name. `needsYou` is the row's
- * section: an open item assigned to someone else reads as theirs, not yours.
+ * section: an open item assigned to someone else reads as theirs, not yours. As in the
+ * view's pill, a thread that stopped or ended says so before who shared it.
  */
 export function rowStatus(item: InboxItem, needsYou: boolean): string {
   const open = item.escalation !== null && item.escalation.status === "open" ? item.escalation : null;
   if (open !== null && needsYou) return needsLabel(open.kind);
+  if (item.stop_reason != null) return "Stopped";
+  const where = { state: item.thread_state, side: item.side, side_to_move: item.side_to_move };
+  if (isTerminal(item.thread_state)) return stateLabel(where, item.counterparty.name);
   if (item.shared_by !== null) return `Shared by ${firstName(item.shared_by.name)}`;
   if (open !== null && open.assignees.length > 0) {
     return `Waiting on ${open.assignees.map((assignee) => firstName(assignee.name)).join(", ")}`;
   }
-  return stateLabel(
-    { state: item.thread_state, side: item.side, side_to_move: item.side_to_move },
-    item.counterparty.name,
-  );
+  return stateLabel(where, item.counterparty.name);
 }

@@ -8,7 +8,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from harmony.config import Settings
-from tests.conftest import settings_without_dotenv
+from tests.conftest import prod_settings, settings_without_dotenv
 
 _ENV_KEYS = (
     "APP_ENV",
@@ -21,6 +21,10 @@ _ENV_KEYS = (
     "DATABASE_URL",
     "DATABASE_DIRECT_URL",
     "ADMIN_SECRET",
+    "ACCESS_CODE",
+    "DAILY_BUDGET_USD",
+    "GLOBAL_BUDGET_USD",
+    "CLIENT_DAILY_BUDGET_USD",
 )
 
 
@@ -71,10 +75,113 @@ def test_direct_url_falls_back_to_database_url_and_wins_when_set() -> None:
 
 def test_prod_requires_a_strong_session_secret() -> None:
     with pytest.raises(ValidationError, match="SESSION_SECRET"):
-        make(app_env="prod")
+        prod_settings(session_secret=None)
     with pytest.raises(ValidationError, match="SESSION_SECRET"):
-        make(app_env="prod", session_secret=SecretStr("short"))
-    assert make(app_env="prod", session_secret=SecretStr("x" * 32)).app_env == "prod"
+        prod_settings(session_secret=SecretStr("short"))
+    assert prod_settings(session_secret=SecretStr("x" * 32)).app_env == "prod"
+
+
+def test_prod_settings_load() -> None:
+    settings = prod_settings()
+    assert (settings.app_env, settings.model_mode, settings.model_override) == (
+        "prod",
+        "live",
+        None,
+    )
+    assert settings.access_code is not None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        None,
+        "x" * 15,
+        " correct horse battery",
+        "correct horse battery ",
+        "correct horse batterý",
+        "correct\thorse battery",
+    ],
+    ids=["missing", "15-chars", "leading-space", "trailing-space", "non-ascii", "tab"],
+)
+def test_prod_refuses_a_weak_or_malformed_access_code(code: str | None) -> None:
+    with pytest.raises(ValidationError, match="ACCESS_CODE"):
+        prod_settings(access_code=SecretStr(code) if code is not None else None)
+
+
+def test_prod_accepts_a_sixteen_character_access_code() -> None:
+    assert prod_settings(access_code=SecretStr("x" * 16)).access_code is not None
+
+
+def test_prod_refuses_scripted_models() -> None:
+    with pytest.raises(ValidationError, match="MODEL_MODE"):
+        prod_settings(model_mode="scripted")
+
+
+def test_prod_refuses_a_model_override() -> None:
+    with pytest.raises(ValidationError, match="MODEL_OVERRIDE"):
+        prod_settings(model_override="claude-haiku-5-5")
+
+
+def test_a_refusal_never_prints_a_secret_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # In prod every setting arrives as a raw string, and the S3 secret, the last field,
+    # would fill the tail of a printed input dict in Render's deploy logs.
+    s3_secret = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn"
+    secrets = {
+        "SESSION_SECRET": "s" * 40,
+        "ACCESS_CODE": "correct horse battery",
+        "ADMIN_SECRET": "fixture-admin-secret-0123456789ab",
+        "DATABASE_URL": "postgresql://harmony:db-password-fixture@db.invalid/harmony",
+        "S3_SECRET_ACCESS_KEY": s3_secret,
+    }
+    env = secrets | {
+        "APP_ENV": "prod",
+        "MODEL_MODE": "live",
+        "MODEL_OVERRIDE": "claude-haiku-5-5",
+        "DAILY_BUDGET_USD": "60",
+        "GLOBAL_BUDGET_USD": "250",
+        "CLIENT_DAILY_BUDGET_USD": "25",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError) as refused:
+        make()
+    text = str(refused.value)
+    assert "MODEL_OVERRIDE must be unset" in text
+    for secret in secrets.values():
+        assert not any(secret[i : i + 8] in text for i in range(len(secret) - 7)), secret
+
+
+@pytest.mark.parametrize(
+    ("field", "env_name"),
+    [
+        ("daily_budget_usd", "DAILY_BUDGET_USD"),
+        ("global_budget_usd", "GLOBAL_BUDGET_USD"),
+        ("client_daily_budget_usd", "CLIENT_DAILY_BUDGET_USD"),
+    ],
+)
+def test_prod_refuses_a_missing_cap(field: str, env_name: str) -> None:
+    with pytest.raises(ValidationError, match=env_name):
+        prod_settings(**{field: None})
+
+
+@pytest.mark.parametrize("app_env", ["local", "ci"])
+def test_local_and_ci_defaults_are_unchanged(app_env: str) -> None:
+    settings = make(app_env=app_env)
+    assert settings.access_code is None
+    assert settings.model_mode == "scripted"
+    assert settings.model_override == ("claude-haiku-5-5" if app_env == "local" else None)
+    assert (settings.daily_budget_usd, settings.global_budget_usd) == (None, None)
+    assert settings.client_daily_budget_usd is None
+    assert settings.lineage_budget_usd == Decimal(10)
+    assert settings.client_ip_header == "x-forwarded-for"
+    assert not settings.hosted_caps_in_dev
+    assert (
+        settings.worker_model_concurrency,
+        settings.worker_model_rate,
+        settings.worker_chat_concurrency,
+    ) == (4, 2.0, 2)
 
 
 def test_local_has_a_dev_session_secret_when_unset() -> None:

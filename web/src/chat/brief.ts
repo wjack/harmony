@@ -1,12 +1,12 @@
-/** The outreach card's brief: free text Claude wrote, which the member may edit before sending. */
+/** The outreach card's brief and asks: free text Claude wrote, which the member may edit before sending. */
 import { plural } from "./format";
 import type { ScreenedCounts } from "./types";
 
-/** The longest brief the API takes (`agents.models.BRIEF_MAX_CHARS`). */
+/** The longest brief, or ask, the API takes (`agents.models.BRIEF_MAX_CHARS`). */
 export const BRIEF_MAX_CHARS = 8000;
 
-/** The member's version of the brief to send, or null when it reads the same as Claude's. */
-export function editedBrief(original: string, draft: string): string | null {
+/** The member's version of a brief or an ask to send, or null when it reads the same as Claude's. */
+export function editedText(original: string, draft: string): string | null {
   const text = draft.trim();
   return text === "" || text === original.trim() ? null : text;
 }

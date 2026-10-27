@@ -2,10 +2,14 @@
 
 Seeds a world through the API (`POST /api/session/start`), sends the story's message
 as its member (`--as` another member of that org, with `--live`), and acts where people
-would: approving the outreach card and resolving escalations by the story's `humans`
-rules or as drafted (`--interactive` asks instead). Prints each beat as it is seen,
-waits for the request to close and Claude's summary, then prints the transcripts, every
-agent turn with its latency and cost, and harmony's spend.
+would: approving outreach cards and resolving escalations by the story's `humans`
+rules or as drafted (`--interactive` asks instead, `--approve all` approves every listed
+recipient). `--message TEXT` sends that instead, as `--as` or the story's member, and
+follows whatever requests come of it to their end (the 10-org sim: `--message ... --as
+<member> --approve all`). `--send-without-confirmation` starts the chat sending without
+review. Prints each beat as it is seen, waits for the requests to close and Claude's
+summary, then prints the transcripts, every agent turn with its latency and cost, how
+the engine ran (`storyrun.report`, `storyrun.checks`) and harmony's spend.
 
 The app runs in process. So does the Temporal worker, playing the cassettes
 (`MODEL_MODE=scripted`, the default) or calling the API (`--live`, which spends). It
@@ -13,8 +17,9 @@ refuses to start while another worker polls the task queues. `--worker external`
 the story on that worker instead (`make dev`'s), with its cassettes. The world is
 retired at the end unless `--keep`.
 
-Exit codes: 0 every expected beat was seen; 1 the story stopped short (timeout, a
-missing beat, a failed model call, an API error); 2 it could not start.
+Exit codes: 0 every expected beat was seen (or, for `--message`, every request
+ended); 1 the story stopped short (timeout, a missing beat, a failed model call, an API
+error); 2 it could not start, or its calls asked for a model other than the override.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from temporalio.client import Client
 from harmony.agents.keys import chat_key
 from harmony.config import Settings, get_settings
 from harmony.db.engine import create_sessionmaker, engine_from_settings
+from harmony.seeds.dates import render_dates
 from harmony.seeds.loader import (
     DEFAULT_SCENARIO,
     Scenario,
@@ -43,17 +49,22 @@ from harmony.seeds.loader import (
     load_scenario,
 )
 from harmony.seeds.schema import ScenarioError, StorySpec
-from harmony.storyrun.beats import recast
+from harmony.storyrun.beats import free_form, recast
 
 if TYPE_CHECKING:
+    from decimal import Decimal
+
     from harmony.storyrun.beats import StoryRun
+    from harmony.storyrun.decide import Decisions
     from harmony.storyrun.play import StoryPlayer
-    from harmony.storyrun.worker import InProcessWorker
+    from harmony.storyrun.spend import LineageMeter
+    from harmony.storyrun.worker import ActivityLog, InProcessWorker
     from harmony.worlds.retirer import Retirer
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 WorkerChoice = Literal["in-process", "external"]
+ApproveChoice = Literal["story", "all"]
 RETIRE_WAIT_S = 60.0
 
 
@@ -71,6 +82,9 @@ class RunOptions:
     worker: WorkerChoice
     timeout_s: float
     keep: bool
+    message: str | None = None
+    approve: ApproveChoice = "story"
+    send_without_confirmation: bool = False
 
 
 @app.command()
@@ -87,9 +101,31 @@ def run(
         typer.Option(
             "--as",
             help="Play the story's member as another member of their org (needs --live: "
-            "the cassettes play the story's own member).",
+            "the cassettes play the story's own member). With --message, the member who "
+            "sends it.",
         ),
     ] = None,
+    message: Annotated[
+        str | None,
+        typer.Option(
+            "--message",
+            help="Send this instead of the story, and follow its requests to their end.",
+        ),
+    ] = None,
+    approve: Annotated[
+        str,
+        typer.Option(
+            help="story: approve the recipients the story or the card suggests; all: every "
+            "listed recipient, and every escalation as drafted.",
+        ),
+    ] = "story",
+    send_without_confirmation: Annotated[
+        bool,
+        typer.Option(
+            "--send-without-confirmation",
+            help="Start the chat sending requests without review.",
+        ),
+    ] = False,
     interactive: Annotated[
         bool,
         typer.Option("--interactive", help="Ask at each decision instead of following the story."),
@@ -107,6 +143,9 @@ def run(
     if worker not in ("in-process", "external"):
         typer.echo("--worker is in-process or external", err=True)
         raise typer.Exit(code=2)
+    if approve not in ("story", "all"):
+        typer.echo("--approve is story or all", err=True)
+        raise typer.Exit(code=2)
     options = RunOptions(
         scenario=scenario,
         story=story,
@@ -116,10 +155,14 @@ def run(
         worker="external" if worker == "external" else "in-process",
         timeout_s=timeout,
         keep=keep,
+        message=message,
+        approve="all" if approve == "all" else "story",
+        send_without_confirmation=send_without_confirmation,
     )
     try:
+        if interactive and options.approve == "all":
+            raise SetupError("--interactive asks at each decision; drop --approve all")
         loaded, spec = load_story(options)
-        spec = cast_story(loaded, spec, options)
         settings = run_settings(get_settings(), options)
         code = asyncio.run(_run(options, loaded, spec, settings))
     except SetupError as exc:
@@ -129,6 +172,7 @@ def run(
 
 
 def load_story(options: RunOptions) -> tuple[Scenario, StorySpec]:
+    """The scenario, and the story as this run plays it (`--message`, `--as`)."""
     try:
         scenario = load_scenario(options.scenario)
     except ScenarioNotFound as exc:
@@ -136,6 +180,8 @@ def load_story(options: RunOptions) -> tuple[Scenario, StorySpec]:
         raise SetupError(f"{exc} (available: {known})") from exc
     except ScenarioError as exc:
         raise SetupError(str(exc)) from exc
+    if options.message is not None:
+        return scenario, message_story(scenario, options.message, options.member)
     story = scenario.story
     if story is None:
         raise SetupError(f"scenario {scenario.name} has no story.yaml")
@@ -143,7 +189,24 @@ def load_story(options: RunOptions) -> tuple[Scenario, StorySpec]:
         raise SetupError(
             f"scenario {scenario.name} has story {story.name!r}, not {options.story!r}"
         )
-    return scenario, story
+    return scenario, cast_story(scenario, story, options)
+
+
+def message_story(scenario: Scenario, message: str, member: str | None) -> StorySpec:
+    """`--message` as a story with no beats, sent by `member`, else by the scenario
+    story's member. Any member of any org may send it; on the cassettes, only a chat
+    they key (`chat:<member>:1`) plays."""
+    sender = member or (scenario.story.member if scenario.story is not None else None)
+    if sender is None:
+        raise SetupError(f"--message: scenario {scenario.name} has no story; pass --as")
+    slugs = [m.slug for org in scenario.orgs for m in org.members]
+    if sender not in slugs:
+        raise SetupError(f"--as {sender}: no member {sender!r} in {scenario.name}")
+    try:
+        render_dates(message, scenario.anchor)
+    except ValueError as exc:
+        raise SetupError(f"--message: {exc}") from exc
+    return free_form(sender, message)
 
 
 def cast_story(scenario: Scenario, story: StorySpec, options: RunOptions) -> StorySpec:
@@ -184,13 +247,16 @@ async def _run(
     options: RunOptions, scenario: Scenario, story: StorySpec, settings: Settings
 ) -> int:
     # Imported here: `harmony run --help` shouldn't load the app, Temporal or the SDK.
+    from harmony.storyrun import report
     from harmony.storyrun.api import ApiError, in_process
-    from harmony.storyrun.decide import PromptDecisions, StoryDecisions
     from harmony.storyrun.play import StoryPlayer
+    from harmony.storyrun.spend import LineageMeter
     from harmony.worlds.retirer_temporal import TemporalRetirer
 
     engine = engine_from_settings(settings, application_name="harmony-run")
     sessionmaker = create_sessionmaker(engine)
+    meter = LineageMeter(sessionmaker)
+    ledger_before = report.ledger_total(settings)
     try:
         async with _temporal(options, settings, sessionmaker) as (client, worker):
             # Its transcripts are printed by then, so the rows needn't stay readable.
@@ -200,22 +266,34 @@ async def _run(
                     f"harmony run {scenario.name}: story {story.name} as {story.member}, "
                     f"model {settings.model_mode}, worker {options.worker}"
                 )
-                decisions = PromptDecisions(story) if options.interactive else StoryDecisions(story)
                 player = StoryPlayer(
                     api,
                     scenario,
                     story,
-                    decisions,
+                    _decisions(options, story),
                     log=typer.echo,
                     timeout_s=options.timeout_s,
                     worker=worker.serving if worker is not None else None,
                     failures=worker.log.failures if worker is not None else None,
+                    send_without_review=options.send_without_confirmation,
+                    on_poll=meter.sample,
                 )
                 try:
                     result = await player.play()
                     if result.outcome == "done" and not await player.settle(result):
-                        typer.echo("the request hadn't closed with Claude's summary yet")
-                    return await _report(player, result, settings, sessionmaker)
+                        typer.echo("the requests hadn't closed with Claude's summary yet")
+                    return await _report(
+                        player,
+                        result,
+                        RunMeasures(
+                            scenario=scenario.name,
+                            log=worker.log if worker is not None else None,
+                            meter=meter,
+                            ledger_before=ledger_before,
+                        ),
+                        settings,
+                        sessionmaker,
+                    )
                 except (ApiError, OSError, SQLAlchemyError) as exc:
                     if player.world_id is not None:
                         raise
@@ -229,9 +307,29 @@ async def _run(
         await engine.dispose()
 
 
+def _decisions(options: RunOptions, story: StorySpec) -> Decisions:
+    from harmony.storyrun.decide import ApproveAll, PromptDecisions, StoryDecisions
+
+    if options.interactive:
+        return PromptDecisions(story)
+    return ApproveAll() if options.approve == "all" else StoryDecisions(story)
+
+
+@dataclass(frozen=True, slots=True)
+class RunMeasures:
+    """What the run measured while it played, for the report."""
+
+    scenario: str
+    # The in-process worker's failed attempts; None on an external worker.
+    log: ActivityLog | None
+    meter: LineageMeter
+    ledger_before: Decimal | None
+
+
 async def _report(
     player: StoryPlayer,
     result: StoryRun,
+    measures: RunMeasures,
     settings: Settings,
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> int:
@@ -252,8 +350,49 @@ async def _report(
         _echo(report.turn_lines(turns, totals))
     except SQLAlchemyError as exc:
         typer.echo(f"agent turns unavailable: {exc}")
+    setup_failed = await _engine_report(result, measures, settings, sessionmaker)
     _echo(report.section("Spend") + report.spend_lines(settings))
+    if setup_failed:
+        return 2
     return 0 if result.outcome == "done" else 1
+
+
+async def _engine_report(
+    result: StoryRun,
+    measures: RunMeasures,
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> bool:
+    """Print how the engine ran and its checks. True if the run asked for a model
+    other than the override (a setup failure)."""
+    from harmony.storyrun import report
+    from harmony.storyrun.checks import engine_check_lines, engine_checks
+    from harmony.storyrun.spend import peak_rss_mb, run_spend
+
+    _echo(report.section("Engine"))
+    try:
+        spend = await run_spend(sessionmaker, result.world_id)
+        stopped = await report.stop_reasons(sessionmaker, result.world_id)
+        checks = await engine_checks(sessionmaker, result.world_id, measures.scenario)
+    except SQLAlchemyError as exc:
+        typer.echo(f"engine figures unavailable: {exc}")
+        return False
+    models, setup_failed = report.model_lines(spend.models, settings.model_override)
+    _echo(
+        models
+        + report.latency_lines(spend.latencies_ms)
+        + report.failure_lines(spend.refusals, stopped, measures.log)
+        + report.run_spend_lines(
+            spend,
+            result,
+            ledger_before=measures.ledger_before,
+            ledger_after=report.ledger_total(settings),
+            measured_peak_usd=measures.meter.peak_usd,
+        )
+        + report.rss_lines(peak_rss_mb() if measures.log is not None else None)
+    )
+    _echo(report.section("Engine checks") + engine_check_lines(checks))
+    return setup_failed
 
 
 async def _retire(

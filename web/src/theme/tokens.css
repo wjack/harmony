@@ -51,6 +51,9 @@
   --warning-soft: #f8e7df;
   --danger: #b93a32;
   --danger-soft: #f7e1df;
+  /* Amber: a setting that skips a safeguard (sending without review) while it is on. */
+  --caution: #8a5a00;
+  --caution-soft: #fbefd5;
 
   /* The demo bar is deliberately not Claude-styled (ARCHITECTURE.md §11.4). */
   --demo-bg: #1f1e1d;
@@ -111,6 +114,8 @@
   --success-soft: #1f3528;
   --warning-soft: #45291f;
   --danger-soft: #45211f;
+  --caution: #e8b75a;
+  --caution-soft: #3b3120;
 
   --elevation-card: 0 1px 2px rgb(0 0 0 / 0.3);
   --elevation-composer: 0 4px 18px rgb(0 0 0 / 0.3);
@@ -152,6 +157,8 @@
   --color-warning-soft: var(--warning-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-caution: var(--caution);
+  --color-caution-soft: var(--caution-soft);
 
   --color-demo: var(--demo-bg);
   --color-demo-surface: var(--demo-surface);

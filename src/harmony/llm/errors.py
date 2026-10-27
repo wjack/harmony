@@ -10,10 +10,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
 from harmony.errors import HarmonyError
+
+if TYPE_CHECKING:
+    # Typing only: `harmony spend` must not load the ORM package.
+    from harmony.db.models.choices import BudgetKind
 
 
 class ModelCallError(HarmonyError):
@@ -42,18 +47,25 @@ class BadRequest(ModelCallError):
 
 
 class BudgetExhausted(HarmonyError):
-    """A reservation would exceed a spend cap. Non-retryable."""
+    """A spend cap, the live switch or the provider's own limit refused a call.
+    Non-retryable.
+
+    `kind` says which (3.4), and becomes the failure reason the visitor sees
+    (`payloads.BUDGET_FAILURES`); `budget` names the refusing key for logs.
+    """
 
     def __init__(
         self,
         message: str,
         *,
+        kind: BudgetKind,
         budget: str,
         cap_usd: Decimal,
         committed_usd: Decimal,
         requested_usd: Decimal,
     ) -> None:
         super().__init__(message)
+        self.kind: BudgetKind = kind
         self.budget = budget
         self.cap_usd = cap_usd
         self.committed_usd = committed_usd

@@ -53,6 +53,11 @@ export function dismissToastsWithKeyPrefix(prefix: string): void {
   }
 }
 
+/** Dismiss every toast: the app is locking, and what they point at is gone. */
+export function dismissAllToasts(): void {
+  for (const existing of toastStore.getState().toasts) dismissToast(existing.id);
+}
+
 /** Show a toast (UI_REFERENCE.md §9: "Northlake replied", "Switched to Dr. Helen Ward"). */
 export function toast(input: ToastInput | string): number {
   const toastInput = typeof input === "string" ? { text: input } : input;

@@ -3,7 +3,17 @@ import { describe, expect, it } from "vitest";
 import { unwrap } from "../api/client";
 import { problemOf } from "../requests/api";
 import { createFixtureApi } from "./index";
-import { ESCALATION, THREAD, inboxFor, requestsRoutes, requestsWorld } from "./requests";
+import {
+  ESCALATION,
+  HENDERSON_SHORT_QUESTION,
+  HENDERSON_WHY,
+  THREAD,
+  inboxFor,
+  requestsRoutes,
+  requestsWorld,
+  routedToBoth,
+  stopped,
+} from "./requests";
 import { members } from "./shell";
 
 const NOW = Date.parse("2026-10-26T10:30:00Z");
@@ -33,6 +43,29 @@ describe("inboxFor", () => {
       question: "Review the outgoing message",
       reason: "A teammate approves every message in Ask mode.",
     });
+  });
+
+  it("carries the answerer's short question, and why the system stopped a thread", () => {
+    const inbox = inboxFor(stopped(requestsWorld(NOW), THREAD.pacific, "demo_budget"), members.helen);
+    const question = inbox.needs_you.find((item) => item.thread_id === THREAD.henderson);
+    expect(question?.escalation?.short_question).toBe(HENDERSON_SHORT_QUESTION);
+    expect(question?.stop_reason).toBeNull();
+    // A held message has no question of its own to shorten.
+    expect(inbox.needs_you.find((item) => item.thread_id === THREAD.vantage)?.escalation?.short_question).toBeNull();
+    expect(inbox.done.find((item) => item.thread_id === THREAD.pacific)).toMatchObject({
+      thread_state: "closed",
+      stop_reason: "demo_budget",
+    });
+  });
+
+  it("routes Henderson's item to Helen and Raj, each with their own why", () => {
+    const world = routedToBoth(requestsWorld(NOW));
+    expect(sections(inboxFor(world, members.raj).needs_you)).toEqual([THREAD.henderson]);
+    const route = world.threads.get(THREAD.henderson)?.workspace.escalations[0]?.drafts[0]?.route;
+    expect(route?.assignees).toEqual([
+      { slug: "helen", why: HENDERSON_WHY.helen },
+      { slug: "raj", why: HENDERSON_WHY.raj },
+    ]);
   });
 
   it("shows Raj only what was routed or shared to him", () => {
@@ -145,6 +178,30 @@ describe("requestsRoutes", () => {
     );
     const messages = world.threads.get(THREAD.vantage)?.detail.messages ?? [];
     expect(messages.at(-1)).toMatchObject({ id: sent.message_id, provenance: "agent_approved" });
+  });
+
+  it("sends nothing for a held message sent back to be revised, and leaves the turn with Claude", async () => {
+    const world = requestsWorld(NOW);
+    const api = createFixtureApi(requestsRoutes({ world }));
+    const before = world.threads.get(THREAD.vantage)?.detail.messages.length;
+    const resolved = await unwrap(
+      api.POST("/api/escalations/{escalation_id}/resolve", {
+        params: { path: { escalation_id: ESCALATION.vantage } },
+        body: { action: "revise", text: "Point them to the public price list.", draft_rev: 1 },
+      }),
+    );
+    expect(resolved).toMatchObject({ action: "revise", message_id: null });
+    const record = world.threads.get(THREAD.vantage);
+    expect(record?.detail.messages).toHaveLength(before ?? 0);
+    expect(record?.detail.state).toBe("active");
+    expect(record?.workspace.escalations[0]).toMatchObject({ status: "resolved", resolution: { action: "revise" } });
+    // An instruction to the representative, never words it may pass on.
+    expect(record?.workspace.representative?.released).toEqual([]);
+  });
+
+  it("says what the budget is doing", async () => {
+    const api = createFixtureApi(requestsRoutes({ world: requestsWorld(NOW), budget: "paused" }));
+    expect(await unwrap(api.GET("/api/budget"))).toEqual({ live: false, state: "paused" });
   });
 
   it("answers a second resolve with who got there first", async () => {

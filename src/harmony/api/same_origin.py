@@ -43,6 +43,11 @@ def is_same_origin(headers: Headers) -> bool:
     return host is not None and urlsplit(origin.strip()).netloc.lower() == host.strip().lower()
 
 
+def cross_site_refusal() -> JSONResponse:
+    """The 403 for a write whose browser labels name another site."""
+    return JSONResponse({"detail": REFUSAL}, status_code=403)
+
+
 class SameOriginWrites:
     """ASGI middleware: a 403 for a cross-site write under `prefix`."""
 
@@ -57,8 +62,7 @@ class SameOriginWrites:
             and not is_same_origin(Headers(scope=scope))
         )
         if refused:
-            response = JSONResponse({"detail": REFUSAL}, status_code=403)
-            await response(scope, receive, send)
+            await cross_site_refusal()(scope, receive, send)
             return
         await self._app(scope, receive, send)
 
@@ -69,4 +73,4 @@ class SameOriginWrites:
         return under and method not in SAFE_METHODS
 
 
-__all__ = ["SameOriginWrites", "is_same_origin"]
+__all__ = ["SameOriginWrites", "cross_site_refusal", "is_same_origin"]

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import timedelta
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -17,15 +16,14 @@ import typer
 from harmony.config import get_settings
 from harmony.db.engine import create_sessionmaker, engine_from_settings
 from harmony.errors import WorldRetired
+from harmony.logs import configure_logging
 from harmony.temporal.client import connect_client
 from harmony.temporal.start import WorldNotFound, start_world_workflow, world_workflow_id
-from harmony.temporal.worker import WorkerConfig, run_worker
+from harmony.temporal.worker import run_worker
 from harmony.temporal.workflows.hello import HelloInput, HelloWorkflow
 
 worker_app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 dev_app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
-
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 @worker_app.command()
@@ -39,10 +37,11 @@ def worker(
         ),
     ] = 90.0,
 ) -> None:
-    """Run the Temporal worker for harmony-main and harmony-model."""
-    logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
-    config = WorkerConfig(graceful_shutdown=timedelta(seconds=graceful_shutdown))
-    asyncio.run(run_worker(get_settings(), config))
+    """Run the Temporal worker for harmony-main, harmony-model and harmony-chat. Model
+    and chat capacity come from WORKER_MODEL_CONCURRENCY, WORKER_MODEL_RATE and
+    WORKER_CHAT_CONCURRENCY."""
+    configure_logging()
+    asyncio.run(run_worker(get_settings(), graceful_shutdown=timedelta(seconds=graceful_shutdown)))
 
 
 @dev_app.callback()

@@ -7,6 +7,12 @@ const baseURL = process.env.E2E_BASE_URL;
 if (baseURL === undefined || baseURL === "") {
   throw new Error("E2E_BASE_URL is not set: run the story with `make e2e-ui` (scripts/e2e_ui.sh)");
 }
+// The app is behind the master passcode gate (LIVE_DEMO_PLAN 3.2): every spec unlocks
+// with the passcode it was started with, and the locked spec types it into the page.
+const passcode = process.env.E2E_PASSCODE;
+if (passcode === undefined || passcode === "") {
+  throw new Error("E2E_PASSCODE is not set: give it the app's ACCESS_CODE (scripts/e2e_ui.sh)");
+}
 
 export default defineConfig({
   testDir: "e2e",

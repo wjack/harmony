@@ -17,15 +17,24 @@ call that stops it:
   the refusal) or the member's own message (`take_over`);
 - `close`: the thread is `closed` for both sides. The other side gets the `closed`
   notice and one last turn, in which only its own `close` (its summary) takes effect.
+  If that turn fails or is refused, the close stands (with no `stop_reason`), and its
+  org gets a note from Claude saying why there is no summary (`note_unsummarized`).
 
 Otherwise the other side moves next. A refusal closes the thread as a `close` without a
-summary would; a failed turn closes it with no last turn. The thread ends `expired` at
-`max_turns` (both sides' turns together) or at `deadline_at`, which bounds every wait,
-a person's included, so the thread writes its own terminal state inside the execution
-timeout: these are §5's turn cap and idle timeout. Each state change is mirrored to the
-row (`set_thread_state`, which the tools read to check whose turn it is) and signalled
-to the request (`thread_changed`); the terminal state only once the last turn is done,
-so the request never reports a thread before both summaries could be written.
+summary would, the other side's failed last turn getting the same note, or, before any
+message has crossed, with no last turn (the responder has nothing to answer or
+summarize); a failed turn or answer closes it with no last turn.
+Either way the row gets a `stop_reason` (3.5): `refused`, a spend cap's reason, or
+`model_error`. The thread ends `expired` after two silent turns in a row, one per side
+(no message, no consult, no close: 3.13 E3), after a requester turn that ends before any
+message has crossed (its opener declined, say: the responder would have nothing to
+answer, and the requester always writes first), at `max_turns` (both sides' turns
+together) or at `deadline_at`, which bounds every wait, a person's included, so the
+thread writes its own terminal state inside the execution timeout: these are §5's turn
+cap and idle timeout. Each state change is mirrored to the row (`set_thread_state`,
+which the tools read to check whose turn it is) and signalled to the request
+(`thread_changed`); the terminal state only once the last turn is done, so the request
+never reports a thread before both summaries could be written.
 
 Rep turn ids are `ids.turn_id_for(world, thread, org, side turn)`, as P0's turns are.
 
@@ -53,7 +62,7 @@ with workflow.unsafe.imports_passed_through():
         OwedResult,
         TurnStop,
     )
-    from harmony.db.models.choices import EscalationKind, Side, ThreadState
+    from harmony.db.models.choices import EscalationKind, FailureReason, Side, ThreadState
     from harmony.ids import turn_id_for
     from harmony.temporal.activities.agents import (
         AgentActivities,
@@ -69,7 +78,9 @@ with workflow.unsafe.imports_passed_through():
         RedraftFailedInput,
         ResolutionApplied,
         ThreadStateInput,
+        UnsummarizedInput,
     )
+    from harmony.temporal.failures import failure_reason
     from harmony.temporal.policies import (
         main_activity_options,
         mirror_activity_options,
@@ -93,6 +104,10 @@ with workflow.unsafe.imports_passed_through():
     )
 
 TERMINAL: frozenset[ThreadState] = frozenset(("closed", "expired"))
+# Consecutive turns that sent nothing, consulted no one and didn't close, after which
+# the thread expires: with bare text kept private and no early close, two quiet sides
+# would otherwise use up every turn (3.13 E3).
+SILENT_TURNS_TO_EXPIRE = 2
 
 
 @dataclass(slots=True)
@@ -152,6 +167,10 @@ class ThreadWorkflow:
         self._consults: dict[Side, int] = {"requester": 0, "responder": 0}
         self._closed_by: Side | None = None
         self._last_stop: TurnStop | None = None
+        self._silent_turns = 0
+        # Whether a message has reached the responder: until one has, it has nothing to
+        # answer and is never woken.
+        self._crossed = False
         # Insertion-ordered (a set iterates by object address): the end of the run
         # cancels these in order, and a replay must issue the same cancel commands.
         self._tasks: dict[asyncio.Task[None], None] = {}
@@ -169,13 +188,18 @@ class ThreadWorkflow:
                 break
             await self._move(side)
             result = await self._rep_turn(side)
-            if result is None:
-                await self._end("closed")
+            if not isinstance(result, RepTurnResult):
+                await self._end("closed", stop_reason=result)
                 break
             side = await self._after_turn(side, result)
         if self._closed_by is not None and not self._past_deadline():
             # Its effects don't matter to the thread: only its summary can be written.
-            await self._rep_turn(other(self._closed_by))
+            last = other(self._closed_by)
+            result = await self._rep_turn(last)
+            if not isinstance(result, RepTurnResult):
+                await self._note_unsummarized(last, result)
+            elif result.stop == "refusal":
+                await self._note_unsummarized(last, "refused")
         # A redraft nobody can use any more must not keep calling the model, nor a
         # read-back wait on an item the ended thread cancelled.
         for task in self._tasks:
@@ -191,8 +215,10 @@ class ThreadWorkflow:
         """Apply a member's resolution (`apply_resolution`) and resume the thread. On a
         consult, `approve` releases the answer (the member's `text`, else the draft) as
         the representative's owed `consult` result, and `decline` owes it a refusal. On
-        an `outbound_review`, `approve` sends the held message (`text` replaces it) and
-        `decline` drops it. `take_over` sends `text` as the member's own message. A
+        an `outbound_review`, `approve` sends the held message (`text` replaces it),
+        `decline` drops it, and `revise` drops it and owes the representative `text` as
+        an instruction to rewrite it. `take_over` sends `text` as the member's own
+        message. A
         consult resolution is pinned to a draft rev (`draft_rev`, else the newest rev
         written), so a redraft landing meanwhile never changes what is released. An item
         (or rev) still being written is resolved once it is. When the apply fails, the
@@ -224,9 +250,10 @@ class ThreadWorkflow:
     def validate_resolve_escalation(self, resolution: EscalationResolution) -> None:
         """Reject with `ESCALATION_NOT_OPEN_ERROR` unless the escalation is open on this
         thread; with `NOT_IN_ORG_ERROR` unless `resolution.org_id` is the escalation's
-        org; with `INVALID_RESOLUTION_ERROR` for `take_over` without `text`, a consult
-        `approve` with neither `text` nor a written draft, or a `draft_rev` not yet
-        written. Accepts an item or rev still being written (`_pending`)."""
+        org; with `INVALID_RESOLUTION_ERROR` for `take_over` without `text`, `revise` on
+        anything but a held message or without `text`, a consult `approve` with neither
+        `text` nor a written draft, or a `draft_rev` not yet written. Accepts an item or
+        rev still being written (`_pending`)."""
         if not self._pending(resolution.escalation_id):
             self._check_resolution(resolution, ready=False)
 
@@ -322,6 +349,14 @@ class ThreadWorkflow:
         text = (resolution.text or "").strip()
         if resolution.action == "take_over" and not text:
             raise ApplicationError("take_over needs text", type=INVALID_RESOLUTION_ERROR)
+        if resolution.action == "revise":
+            if item.kind != "outbound_review":
+                raise ApplicationError(
+                    "only a held message can be sent back to be revised",
+                    type=INVALID_RESOLUTION_ERROR,
+                )
+            if not text:
+                raise ApplicationError("revise needs text", type=INVALID_RESOLUTION_ERROR)
         if item.kind != "consult":
             return item, resolution
         rev = resolution.draft_rev if resolution.draft_rev is not None else item.newest_rev
@@ -349,8 +384,8 @@ class ThreadWorkflow:
 
     # --- Turns ----------------------------------------------------------------------------
 
-    async def _rep_turn(self, side: Side) -> RepTurnResult | None:
-        """One turn of `side`, opening with what it is owed; None when it failed."""
+    async def _rep_turn(self, side: Side) -> RepTurnResult | FailureReason:
+        """One turn of `side`, opening with what it is owed; why it failed, if it did."""
         thread = self._input
         org_id = self._org(side)
         self._turns[side] += 1
@@ -375,7 +410,7 @@ class ThreadWorkflow:
             )
         except ActivityError as failed:
             workflow.logger.warning("%s turn %d failed: %s", side, turn, failed)
-            return None
+            return failure_reason(failed)
         finally:
             # A held message is tracked (`_held`) before the workflow next yields.
             self._opening -= 1
@@ -383,12 +418,34 @@ class ThreadWorkflow:
         self._last_stop = result.stop
         return result
 
+    async def _note_unsummarized(self, side: Side, reason: FailureReason) -> None:
+        """`side`'s last turn failed or was refused (`reason`): tell its org why it has
+        no summary."""
+        thread = self._input
+        org_id = self._org(side)
+        await workflow.execute_activity_method(
+            NetworkActivities.note_unsummarized,
+            UnsummarizedInput(
+                world_id=thread.world_id,
+                thread_id=thread.thread_id,
+                org_id=org_id,
+                turn_id=turn_id_for(thread.world_id, thread.thread_id, org_id, self._turns[side]),
+                reason=reason,
+            ),
+            **mirror_activity_options(),
+        )
+
     async def _after_turn(self, side: Side, result: RepTurnResult) -> Side:
         """Apply how the turn ended; returns the side that moves next."""
         effects = result.effects
+        quiet = result.stop != "refusal" and not any(
+            isinstance(e, MessageSent | ConsultOpened | MessageHeld) for e in effects
+        )
+        self._silent_turns = self._silent_turns + 1 if quiet else 0
         if any(isinstance(e, MessageSent) and e.message_kind == "message" for e in effects):
             # The row handed the move over with the first message (`append_message`).
             self._side_to_move = other(side)
+            self._crossed = True
         if any(isinstance(e, MessageSent) and e.message_kind == "close" for e in effects):
             await self._close(side)
             return other(side)
@@ -399,9 +456,16 @@ class ThreadWorkflow:
         if held is not None:
             return await self._held(side, held, result.owed)
         if result.stop == "refusal":
-            await self._close(side)
+            if self._crossed:
+                await self._close(side, stop_reason="refused")
+            else:
+                # Nothing reached the responder: it has nothing to summarize, and is
+                # never woken on a thread nobody wrote to (3.13 E3).
+                await self._end("closed", stop_reason="refused")
             return other(side)
         self._owe(side, result.owed)
+        if self._silent_turns >= SILENT_TURNS_TO_EXPIRE or not self._crossed:
+            await self._end("expired")
         return other(side)
 
     def _owe(self, side: Side, owed: OwedResult | None, *, tool_use_id: str | None = None) -> None:
@@ -438,7 +502,7 @@ class ThreadWorkflow:
             )
         except ActivityError as failed:
             workflow.logger.warning("consult %s failed: %s", opened.consult_id, failed)
-            await self._end("closed")
+            await self._end("closed", stop_reason=failure_reason(failed))
             return side
         finally:
             self._opening -= 1
@@ -451,7 +515,7 @@ class ThreadWorkflow:
             return side
         self._owe(side, applied.owed, tool_use_id=tool_use_id)
         # `take_over`: the member wrote to the counterparty, who answers next.
-        return other(side) if applied.sent else side
+        return self._sent_on(side) if applied.sent else side
 
     async def _held(self, side: Side, held: MessageHeld, owed: OwedResult | None) -> Side:
         """*Ask*: the representative's message waits for a person. The call's result is
@@ -468,7 +532,12 @@ class ThreadWorkflow:
         if applied is None:
             return side
         self._owe(side, applied.owed, tool_use_id=tool_use_id)
-        return other(side) if applied.sent else side
+        return self._sent_on(side) if applied.sent else side
+
+    def _sent_on(self, side: Side) -> Side:
+        """A person let a message of `side`'s through: the other side answers next."""
+        self._crossed = True
+        return other(side)
 
     def _track(
         self,
@@ -586,17 +655,22 @@ class ThreadWorkflow:
         if self._state != "active" or self._side_to_move != side:
             await self._set_state("active", side)
 
-    async def _close(self, closer: Side) -> None:
+    async def _close(self, closer: Side, *, stop_reason: FailureReason | None = None) -> None:
         """`closer` ended the conversation; the other side's last turn follows."""
         self._closed_by = closer
-        await self._set_state("closed", None, closed_by=closer)
+        await self._set_state("closed", None, closed_by=closer, stop_reason=stop_reason)
 
-    async def _end(self, state: ThreadState) -> None:
+    async def _end(self, state: ThreadState, *, stop_reason: FailureReason | None = None) -> None:
         if self._state not in TERMINAL:
-            await self._set_state(state, None)
+            await self._set_state(state, None, stop_reason=stop_reason)
 
     async def _set_state(
-        self, state: ThreadState, side_to_move: Side | None, *, closed_by: Side | None = None
+        self,
+        state: ThreadState,
+        side_to_move: Side | None,
+        *,
+        closed_by: Side | None = None,
+        stop_reason: FailureReason | None = None,
     ) -> None:
         changed = state != self._state
         self._state = state
@@ -614,6 +688,7 @@ class ThreadWorkflow:
                 state=state,
                 side_to_move=side_to_move,
                 closed_by=closed_by,
+                stop_reason=stop_reason,
             ),
             **mirror_activity_options(),
         )

@@ -22,6 +22,7 @@ from harmony.db.models.base import (
 )
 from harmony.db.models.choices import (
     AccessReason,
+    FailureReason,
     NoteAuthor,
     Provenance,
     Side,
@@ -58,6 +59,7 @@ class Thread(CreatedAt, VersionedEntity, Base):
         Index(None, "world_id", "responder_org_id"),
         one_of("state", ThreadState),
         one_of("side_to_move", Side),
+        one_of("stop_reason", FailureReason),
         CheckConstraint("requester_org_id <> responder_org_id", name="bilateral"),
     )
     entity_type = "thread"
@@ -74,6 +76,11 @@ class Thread(CreatedAt, VersionedEntity, Base):
     deadline_at: Mapped[datetime | None]
     # The network view's edge recency.
     last_activity_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # This conversation's subject: the recipient's title from the card, which both
+    # sides see (`threads.thread_title`). NULL on threads opened without one.
+    title: Mapped[str | None]
+    # Why the thread stopped early (a cap, the pause, a model error); NULL otherwise.
+    stop_reason: Mapped[FailureReason | None]
 
 
 class ThreadMessage(CreatedAt, Entity, Base):

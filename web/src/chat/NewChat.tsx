@@ -5,6 +5,7 @@ import { firstName } from "../shell/names";
 import { Spark } from "../shell/ui/Spark";
 import { Composer, type ComposerHandle } from "./Composer";
 import { greeting } from "./format";
+import type { SendModeProps } from "./SendMode";
 
 const STARTERS = [
   { label: "Write", Icon: PenLine },
@@ -17,13 +18,15 @@ const STARTERS = [
 const CHIP =
   "inline-flex h-8 items-center gap-2 rounded-control border border-border bg-canvas px-2.5 text-[15px] text-secondary transition-colors hover:border-border-strong hover:bg-hover hover:text-ink";
 
-export interface NewChatProps {
+export interface NewChatProps extends SendModeProps {
   /** The acting member's display name ("Alex Chen"). */
   memberName: string | null;
   /** The walkthrough's suggested opening message, if the story has one. */
   suggestion: string | null;
   sending: boolean;
   error: string | null;
+  /** The organization's default didn't load, so a chat that follows it can't start: load it again. */
+  onRetrySendMode?: (() => void) | null;
   onSend: (text: string) => void;
   onUnavailable: (feature: string) => void;
   /** For the gallery: a fixed hour instead of the clock's. */
@@ -35,7 +38,18 @@ export interface NewChatProps {
  * starter chips. Harmony adds the walkthrough's suggested message as one more chip: a
  * click fills the composer, and the visitor can edit or ignore it.
  */
-export function NewChat({ memberName, suggestion, sending, error, onSend, onUnavailable, hour }: NewChatProps) {
+export function NewChat({
+  memberName,
+  suggestion,
+  sending,
+  error,
+  onRetrySendMode = null,
+  onSend,
+  onUnavailable,
+  sendMode,
+  onSendModeChange,
+  hour,
+}: NewChatProps) {
   const [draft, setDraft] = useState("");
   const composerRef = useRef<ComposerHandle>(null);
   const salutation = greeting(hour ?? new Date().getHours());
@@ -57,11 +71,25 @@ export function NewChat({ memberName, suggestion, sending, error, onSend, onUnav
           autoFocus
           placeholder="How can I help you today?"
           onUnavailable={onUnavailable}
+          sendMode={sendMode}
+          onSendModeChange={onSendModeChange}
           ref={composerRef}
         />
         {error !== null && (
           <p role="alert" className="mt-3 text-[13px] text-danger">
             {error}
+          </p>
+        )}
+        {onRetrySendMode !== null && (
+          <p role="alert" className="mt-3 text-center text-[13px] text-danger">
+            Couldn&apos;t load how your organization sends requests, so this chat can&apos;t start yet.{" "}
+            <button
+              type="button"
+              onClick={onRetrySendMode}
+              className="font-medium underline decoration-danger/40 underline-offset-[3px] hover:decoration-danger"
+            >
+              Try again
+            </button>
           </p>
         )}
         <div className="mt-4 flex flex-wrap justify-center gap-2">

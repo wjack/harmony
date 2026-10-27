@@ -8,4 +8,4 @@ What the teammate asked for:
 
 {instruction}
 
-Look things up again if you need to, then return a new draft in the same form. It replaces the one above.
+Look things up again if you need to, then return a new draft in the same form, with its own `route` and `short_question`. It replaces the one above.

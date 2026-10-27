@@ -6,8 +6,9 @@ truth. Stream events are never persisted, so they are best-effort end to end.
 
 - `PgStreamPublisher` is the worker's one dedicated autocommit notify connection.
 - `TurnStream` coalesces one representative turn attempt's text into a `stream.delta`
-  about every 200 ms, announces the turn with `stream.typing`, and opens a retried
-  attempt with `stream.reset` so clients drop the earlier attempt's partial text.
+  about every 200 ms, announces the turn with `stream.typing` and repeats it every 5 s
+  until the turn ends, and opens a retried attempt with `stream.reset` so clients drop
+  the earlier attempt's partial text.
 - `ChatStream` does the same for internal Claude in a conversation, as
   `stream.chat_delta`; its `attempt` alone tells clients to drop an earlier attempt.
 
@@ -15,15 +16,17 @@ Who sees what is decided by the API (`events/sse.py`): the producing org's membe
 thread access and the network lens get deltas; others with thread access get typing. A
 conversation's deltas go to its owner and the lens.
 
-Deltas are only worth sending for turns somebody watches: featured orgs, or (from P2)
-a thread open in the network view's inspector. The caller decides that and passes
-`enabled`; `org_streams_tokens` is the P0 rule.
+Deltas are only worth sending for turns somebody watches. The caller decides that and
+passes `enabled`: a representative turn streams for a featured org
+(`org_streams_tokens`), and internal Claude streams in every org's chat, since its owner
+is the one watching.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID
@@ -46,6 +49,9 @@ from harmony.events.schemas import (
 logger = logging.getLogger(__name__)
 
 STREAM_INTERVAL_S = 0.2
+# Thinking and tool steps can run far longer than the clients' typing timeout with no
+# delta, so a representative turn says it is still typing at this interval (3.5).
+TYPING_HEARTBEAT_S = 5.0
 # Characters per `stream.delta`. Even if every character took a 6-byte JSON escape, the
 # NOTIFY payload stays under Postgres's 8000-byte limit.
 MAX_DELTA_CHARS = 1000
@@ -208,7 +214,8 @@ class TurnStream(_CoalescedStream):
                               turn_id=..., attempt=info.attempt, enabled=watched) as out:
             result = await client.call(request, on_stream_event=...)  # calls out.push(text)
 
-    Entering publishes `stream.reset` (attempt > 1) and `stream.typing`.
+    Entering publishes `stream.reset` (attempt > 1) and `stream.typing`, then
+    `stream.typing` again every `typing_every_s` until the block exits.
     """
 
     def __init__(
@@ -222,15 +229,44 @@ class TurnStream(_CoalescedStream):
         attempt: int,
         enabled: bool = True,
         interval_s: float = STREAM_INTERVAL_S,
+        typing_every_s: float = TYPING_HEARTBEAT_S,
     ) -> None:
         super().__init__(publisher, world_id=world_id, enabled=enabled, interval_s=interval_s)
         self._org_id = org_id
         self._thread_id = thread_id
         self._turn_id = turn_id
         self._attempt = attempt
+        self._typing_every_s = typing_every_s
+        self._typing: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> Self:
+        await super().__aenter__()
+        if self._enabled:
+            self._typing = asyncio.create_task(self._keep_typing())
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if self._typing is not None:
+            self._typing.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._typing
+        await super().__aexit__(exc_type, exc, traceback)
+
+    async def _keep_typing(self) -> None:
+        while True:
+            await asyncio.sleep(self._typing_every_s)
+            await self._publish(self._typing_event())
+
+    def _typing_event(self) -> StreamTyping:
+        return StreamTyping(org_id=self._org_id, thread_id=self._thread_id, turn_id=self._turn_id)
 
     def _opening(self) -> list[StreamEvent]:
-        typing = StreamTyping(org_id=self._org_id, thread_id=self._thread_id, turn_id=self._turn_id)
+        typing = self._typing_event()
         if self._attempt == 1:
             return [typing]
         reset = StreamReset(

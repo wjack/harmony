@@ -37,6 +37,8 @@ class Conversation(CreatedAt, VersionedEntity, Base):
     title: Mapped[str | None]
     # Sidebar recents sort on this, never on id.
     last_activity_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # The owner's override of `rep_policy.send_without_confirmation`; NULL follows it.
+    send_without_confirmation: Mapped[bool | None]
 
 
 class ChatMessage(CreatedAt, Entity, Base):
@@ -85,3 +87,6 @@ class Card(CreatedAt, VersionedEntity, Base):
     payload: Mapped[JsonObject]
     status: Mapped[CardStatus] = mapped_column(server_default=text("'pending'"))
     resolution: Mapped[JsonObject | None]
+    # Raised in a chat that sends without review: the workflow settles it, never a
+    # member, so it is never "pending" for one (3.10).
+    auto: Mapped[bool] = mapped_column(server_default=text("false"))

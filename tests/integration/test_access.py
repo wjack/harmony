@@ -3,20 +3,29 @@ predicate, against the harmony-demo access fixtures."""
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 from uuid import UUID, uuid4
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from harmony.api.deps import ServicesDep, get_world_service
 from harmony.auth.access import can_see_thread, visible_threads
-from harmony.config import Settings
-from harmony.db.models import Event, Member, Thread, ThreadAccess, ThreadMessage
+from harmony.auth.views import internal_model
+from harmony.config import REPO_ROOT, Settings
+from harmony.db.models import Event, Member, Org, Thread, ThreadAccess, ThreadMessage
 from harmony.db.models.choices import AccessReason, MemberRole
+from harmony.llm.pricing import HAIKU_5_5, OPUS_5_5
 from harmony.seeds.loader import load_scenario, load_world
+from harmony.worlds.retirer import SyncRetirer
+from harmony.worlds.service import WorldService
+from tests.conftest import settings_without_dotenv
 from tests.integration._visitors import HISTORY, RAJ_THREAD, Visitor, build_app, cursor_of, visitor
 
 type Sessionmaker = async_sessionmaker[AsyncSession]
@@ -74,7 +83,7 @@ async def test_the_inbox_shows_each_side_its_own_view_of_a_thread(app: FastAPI) 
     async with visitor(app) as v:
         await v.start()
         [summary] = (await v.inbox()).values()
-        assert summary["title"] == "Powder XRD on 6 cathode precursor powders within two weeks"
+        assert summary["title"] == "Powder XRD on 6 precursors"
         assert (summary["state"], summary["side"], summary["access_reason"]) == (
             "closed",
             "requester",
@@ -309,3 +318,84 @@ async def test_worlds_with_the_same_seed_ids_stay_apart(
         await b.request("GET", f"/threads/{RAJ_THREAD}", expect=404)
 
     assert (await _member(db_sessionmaker, world_a, "helen")).name == helen.name == "Dr. Helen Ward"
+
+
+# --- What each side names a thread, and the model the session shows -------------------
+
+
+async def test_a_seeded_title_names_the_thread_on_both_sides(app: FastAPI, tmp_path: Path) -> None:
+    title = "Precursor XRD on six powders"
+    scenarios = tmp_path / "scenarios"
+    shutil.copytree(REPO_ROOT / "scenarios" / "harmony-demo", scenarios / "harmony-demo")
+    path = scenarios / "harmony-demo" / "threads.yaml"
+    data = yaml.safe_load(path.read_text())
+    (seeded,) = [t for t in data["threads"] if t["slug"] == "henderson-northlake-precursor-xrd"]
+    seeded["request"]["title"] = title
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+
+    def worlds(services: ServicesDep) -> WorldService:
+        return WorldService(
+            services.sessionmaker,
+            build_sha=services.settings.build_sha,
+            retirer=SyncRetirer(services.sessionmaker),
+            scenarios_dir=scenarios,
+        )
+
+    app.dependency_overrides[get_world_service] = worlds
+    async with visitor(app) as v:
+        await v.start()
+        for slug in ("alex", "helen"):
+            await v.act_as(slug)
+            inbox = await v.json("GET", "/inbox")
+            titles = [
+                item["title"]
+                for section in inbox.values()
+                for item in section
+                if item["thread_id"] == str(HISTORY)
+            ]
+            assert titles == [title], slug
+
+
+def _org(*, featured: bool) -> Org:
+    return Org(featured=featured)
+
+
+@pytest.mark.parametrize(
+    ("org", "values", "expected"),
+    [
+        (
+            _org(featured=True),
+            {"model_mode": "live", "model_override": HAIKU_5_5},
+            {"id": HAIKU_5_5, "label": "Haiku 5.5", "adaptive": True},
+        ),
+        (
+            _org(featured=True),
+            {"model_mode": "live", "model_override": None},
+            {"id": OPUS_5_5, "label": "Opus 5.5", "adaptive": True},
+        ),
+        (
+            _org(featured=False),
+            {"model_mode": "scripted", "model_override": None},
+            {"id": HAIKU_5_5, "label": "Scripted", "adaptive": False},
+        ),
+    ],
+    ids=["haiku-override", "featured", "scripted"],
+)
+def test_the_session_names_internal_claudes_model(
+    org: Org, values: dict[str, object], expected: dict[str, object]
+) -> None:
+    view = internal_model(org, settings_without_dotenv(**values))
+    assert view.model_dump() == expected
+
+
+async def test_the_session_view_carries_the_internal_model(
+    app_settings: Settings, db_engine: AsyncEngine
+) -> None:
+    app = build_app(app_settings, db_engine, model_mode="scripted", model_override=None)
+    async with visitor(app) as v:
+        await v.start()
+        assert (await v.session())["internal_model"] == {
+            "id": OPUS_5_5,
+            "label": "Scripted",
+            "adaptive": False,
+        }

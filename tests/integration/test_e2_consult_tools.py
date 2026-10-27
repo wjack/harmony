@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Final
 from uuid import UUID, uuid4
 
 import pytest
+import yaml
 from sqlalchemy import select
 from temporalio.testing import ActivityEnvironment
 
@@ -36,7 +39,9 @@ from harmony.agents.discovery import SearchOrigin, Shortlist, ShortlistEntry
 from harmony.agents.models import (
     EscalationResolution,
     OutreachCardPayload,
+    OutreachRecipient,
     Route,
+    RouteAssignee,
     ScreenedCounts,
 )
 from harmony.agents.runtime import (
@@ -48,8 +53,24 @@ from harmony.agents.runtime import (
     ToolCall,
     ToolExecution,
 )
-from harmony.agents.tools.internal import InternalToolExecutor, InternalToolScope
-from harmony.agents.tools.rep import CLOSED, SENT, TEXT_REPLY_ID, RepToolExecutor, RepToolScope
+from harmony.agents.tools.internal import (
+    ALREADY_IN_TOUCH,
+    AUTO_SEND_MAX_RECIPIENTS,
+    AUTO_SENDS_PER_TURN,
+    BRIEF_NAMES_RECIPIENT,
+    TITLE_MAX_CHARS,
+    InternalToolExecutor,
+    InternalToolScope,
+)
+from harmony.agents.tools.rep import (
+    CLOSED,
+    NOT_REPLIED,
+    NOTHING_SENT,
+    SENT,
+    TEXT_REPLY_ID,
+    RepToolExecutor,
+    RepToolScope,
+)
 from harmony.db import repo
 from harmony.db.models import (
     Card,
@@ -68,9 +89,9 @@ from harmony.db.models import (
     ThreadMessage,
     TrustedOrganization,
 )
-from harmony.db.models.choices import Autonomy, Side
+from harmony.db.models.choices import Autonomy, Fit, Side
 from harmony.db.uow import unit_of_work
-from harmony.domain import clock, consults, escalations, threads
+from harmony.domain import clock, consults, conversations, escalations, threads
 from harmony.domain import settings as org_settings
 from harmony.domain.settings import SettingsEdit, TrustedEdit
 from harmony.events.bus import StreamMessage
@@ -80,7 +101,7 @@ from harmony.llm.budget import FreeSpend
 from harmony.llm.checkpoint import CheckpointedCall
 from harmony.llm.errors import ModelCallError
 from harmony.llm.pricing import HAIKU_5_5, OPUS_5_5
-from harmony.llm.scripted import CassetteEntry, CassetteKey, ScriptedModel
+from harmony.llm.scripted import Cassette, CassetteEntry, CassetteKey, ScriptedModel
 from harmony.llm.wire import canonical_json
 from harmony.temporal.activities.agents import (
     AgentActivities,
@@ -106,10 +127,12 @@ from tests.integration._e2_world import (
     event_count,
     open_thread,
     seeded_world,
+    sid,
     to_move,
 )
 from tests.unit._turns import Checkpointed, say, use
 
+CASSETTES: Final = Path(__file__).parents[1] / "fixtures" / "cassettes"
 QUESTION: Final = "Can you run XRD on 14 air-sensitive powders by Nov 6?"
 NORTHLAKE_NAME: Final = "Northlake Characterization Core"
 
@@ -305,7 +328,9 @@ async def test_the_answerer_looks_records_up_then_drafts(
         True,
         1,
     )
-    assert first.draft.route == Route(assignees=["helen"], reason="Reserve slots go to Helen.")
+    assert first.draft.route == Route(
+        assignees=[RouteAssignee(member="helen", why="Reserve slots go to Helen.")]
+    )
     assert isinstance(second, DraftReady)
     assert second.draft.answer == "Nov 4, morning."
     requests = model.requests
@@ -419,6 +444,24 @@ async def test_the_answerer_is_told_how_its_answer_is_released_and_whose_request
         context.quoted("brief", "Powder XRD on 14 air-sensitive powders by Nov 6, up to $2,000.")
         in henderson
     )
+    # A request from before per-recipient asks has none to show.
+    assert "What it asks" not in henderson
+
+    # Each recipient's own ask, and its limit, reach the go-ahead's answerer; another
+    # recipient's never do.
+    xrd = "XRD on the 14 powders by Nov 6. Up to $1,600."
+    async with unit_of_work(sm, world) as uow:
+        request = await repo.get_required(uow.session, NetworkRequest, world, opened.request_id)
+        request.recipients = [
+            OutreachRecipient(org_id=org_id, fit="strong", reason="Fits.", ask=ask).model_dump(
+                mode="json"
+            )
+            for org_id, ask in ((NORTHLAKE, xrd), (RIDGELINE, "A holder. Up to $400."))
+        ]
+        await uow.commit()
+    asked = await prompt(requester)
+    assert f"What it asks {NORTHLAKE_NAME}:\n\n" + context.quoted("ask", xrd) in asked
+    assert "$400" not in asked
 
 
 async def test_an_answerer_that_never_stops_looking_fails_without_a_draft(
@@ -571,7 +614,7 @@ async def test_auto_hands_an_answer_outside_sharing_to_the_proposed_reviewer(
     consult_id = await open_consult(sm, opened)
     proposed = draft(
         "We can run them Wed Nov 4, morning.",
-        route=Route(assignees=["raj"], reason="Raj holds the block."),
+        route=Route(assignees=[RouteAssignee(member="raj", why="Raj holds the block.")]),
     )
     failed = SharingCheck(within_sharing=False, reason="Reserve slots aren't shared.")
 
@@ -786,7 +829,8 @@ async def test_a_sharing_check_that_keeps_failing_hands_the_draft_to_a_person(
     with pytest.raises(ModelCallError):
         await answer_on_attempt(sm, opened, consult_id, model, attempt=1)
     # On the last one the check counts as failed: Helen decides, not the thread's end.
-    decided = await answer_on_attempt(sm, opened, consult_id, model, attempt=3)
+    last = model_retry_policy().maximum_attempts
+    decided = await answer_on_attempt(sm, opened, consult_id, model, attempt=last)
 
     assert isinstance(decided, ConsultEscalated)
     assert (decided.draft_rev, decided.assignee_ids) == (1, [HELEN])
@@ -816,7 +860,12 @@ async def test_an_answerer_whose_call_cant_succeed_goes_to_the_default_assignee(
 
 
 def rep(
-    sm: Sessionmaker, opened: Opened, side: Side, *, turn_id: UUID | None = None
+    sm: Sessionmaker,
+    opened: Opened,
+    side: Side,
+    *,
+    turn_id: UUID | None = None,
+    bare_text_sends: bool = True,
 ) -> RepToolExecutor:
     ours, theirs = (HENDERSON, NORTHLAKE) if side == "requester" else (NORTHLAKE, HENDERSON)
     scope = RepToolScope(
@@ -826,8 +875,20 @@ def rep(
         org_id=ours,
         counterparty_org_id=theirs,
         turn_id=turn_id or uuid4(),
+        bare_text_sends=bare_text_sends,
     )
     return RepToolExecutor(sm, scope)
+
+
+OPENER: Final = "Can you run XRD on 14 powders by Nov 6?"
+
+
+async def henderson_opens(sm: Sessionmaker, opened: Opened) -> None:
+    """Henderson's opening message: the thread starts with the requester to move."""
+    opener = await rep(sm, opened, "requester").execute(
+        call("send_message", text=OPENER), step_idx=0
+    )
+    assert isinstance(opener.effect, MessageSent)
 
 
 def call(name: str, **args: Any) -> ToolCall:
@@ -882,7 +943,11 @@ async def test_a_turn_sends_several_messages_and_bare_text_only_before_any(
     assert await henderson.execute(hello, step_idx=0) == first
 
     for sent in (first, second):
-        assert (sent.result, sent.ends_turn, sent.owed_result) == (SENT, False, None)
+        assert (sent.result, sent.ends_turn, sent.owed_result) == (
+            SENT.format(counterparty=NORTHLAKE_NAME),
+            False,
+            None,
+        )
         assert isinstance(sent.effect, MessageSent)
     assert later_text is None
     assert replied is not None
@@ -899,6 +964,81 @@ async def test_a_turn_sends_several_messages_and_bare_text_only_before_any(
         thread = await session.get(Thread, (world, opened.thread_id))
         assert thread is not None
         assert (thread.turn_count, thread.side_to_move) == (2, "requester")
+
+
+async def test_bare_text_after_nothing_new_stays_with_the_representative(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """3.13 E3: a turn that brought nothing to answer sends no bare text."""
+    sm = db_sessionmaker
+    before = await event_count(sm, world)
+
+    kept = await rep(sm, opened, "requester", bare_text_sends=False).text_reply(
+        "Awaiting Northlake's reply.", step_idx=0
+    )
+
+    assert kept is None
+    assert await messages(sm, opened) == []
+    assert await event_count(sm, world) == before
+
+
+async def test_a_close_waits_until_the_counterparty_has_written(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """3.13 E1: a close can't stand in for waiting. Henderson's close right after its
+    opener is refused and writes nothing; once Northlake has replied, it closes."""
+    sm = db_sessionmaker
+    await freeze(sm, opened, "requester")
+    henderson = rep(sm, opened, "requester")
+    await henderson.execute(call("send_message", text=OPENER), step_idx=0)
+    before = await event_count(sm, world)
+
+    early = await henderson.execute(call("close", summary="Asked; awaiting reply."), step_idx=1)
+
+    assert early.is_error
+    assert early.result == NOT_REPLIED.format(counterparty=NORTHLAKE_NAME)
+    assert early.effect is None
+    assert await event_count(sm, world) == before
+    async with sm() as session:
+        thread = await session.get(Thread, (world, opened.thread_id))
+    assert thread is not None
+    assert (thread.state, thread.side_to_move) == ("active", "responder")
+    assert (await rep_session(sm, opened, "requester")).close_summary is None
+
+    await rep(sm, opened, "responder").execute(call("send_message", text="Nov 4."), step_idx=0)
+    closed = await rep(sm, opened, "requester").execute(
+        call("close", summary="Northlake can run it on Nov 4."), step_idx=0
+    )
+
+    assert (closed.ends_turn, closed.owed_result) == (True, CLOSED)
+    assert isinstance(closed.effect, MessageSent)
+    rows = await messages(sm, opened)
+    assert [(m.kind, m.from_org_id) for m in rows] == [
+        ("message", HENDERSON),
+        ("message", NORTHLAKE),
+        ("close", HENDERSON),
+    ]
+
+
+async def test_a_close_before_anything_was_sent_says_there_is_no_reply_to_wait_for(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """Henderson's opener never went out (declined in Ask, say): "hasn't replied yet"
+    would have it wait for a reply that can't come. Ending the turn ends the thread."""
+    sm = db_sessionmaker
+    await freeze(sm, opened, "requester")
+    before = await event_count(sm, world)
+
+    early = await rep(sm, opened, "requester").execute(
+        call("close", summary="Alex chose not to contact Northlake."), step_idx=0
+    )
+
+    assert early.is_error
+    assert early.result == NOTHING_SENT.format(counterparty=NORTHLAKE_NAME)
+    assert early.effect is None
+    assert await messages(sm, opened) == []
+    assert await event_count(sm, world) == before
+    assert (await rep_session(sm, opened, "requester")).close_summary is None
 
 
 async def test_a_side_waits_for_its_turn(
@@ -952,6 +1092,7 @@ async def test_ask_mode_never_holds_a_close(
     and its summary stays with this side, so no teammate is asked to approve it as a
     reply."""
     sm = db_sessionmaker
+    await henderson_opens(sm, opened)
     await set_mode(sm, world, "ask")
     await to_move(sm, opened, "responder")
     await freeze(sm, opened, "responder")
@@ -962,7 +1103,10 @@ async def test_ask_mode_never_holds_a_close(
     assert (closed.ends_turn, closed.owed_result) == (True, CLOSED)
     assert isinstance(closed.effect, MessageSent)
     rows = await messages(sm, opened)
-    assert [(m.kind, m.body, m.provenance) for m in rows] == [("close", "", "agent")]
+    assert [(m.kind, m.body, m.provenance) for m in rows] == [
+        ("message", OPENER, "agent"),
+        ("close", "", "agent"),
+    ]
     async with sm() as session:
         held = await session.scalar(select(Escalation).where(Escalation.world_id == world))
         thread = await session.get(Thread, (world, opened.thread_id))
@@ -978,7 +1122,7 @@ async def test_close_ends_it_for_both_and_keeps_each_summary_on_its_own_side(
     sm = db_sessionmaker
     for side in ("requester", "responder"):
         await freeze(sm, opened, side)
-    await to_move(sm, opened, "responder")
+    await henderson_opens(sm, opened)
     summary = "Henderson wanted XRD by Nov 6; we couldn't meet it."
 
     closed = await rep(sm, opened, "responder").execute(call("close", summary=summary), step_idx=0)
@@ -994,9 +1138,14 @@ async def test_close_ends_it_for_both_and_keeps_each_summary_on_its_own_side(
     assert closed.effect.message_kind == "close"
     assert after.is_error
     assert "ended (closed)" in (after.result or "")
+    # Henderson's last turn closes it too, though Northlake never wrote: only its summary
+    # is left to write.
     assert (theirs.ends_turn, theirs.owed_result, theirs.effect) == (True, CLOSED, None)
     rows = await messages(sm, opened)
-    assert [(m.kind, m.body, m.from_org_id) for m in rows] == [("close", "", NORTHLAKE)]
+    assert [(m.kind, m.body, m.from_org_id) for m in rows] == [
+        ("message", OPENER, HENDERSON),
+        ("close", "", NORTHLAKE),
+    ]
     assert (await rep_session(sm, opened, "responder")).close_summary == summary
     assert (await rep_session(sm, opened, "requester")).close_summary == (
         "Northlake can't meet Nov 6."
@@ -1019,7 +1168,7 @@ async def test_a_summary_written_after_the_close_refreshes_only_its_own_side(
     sm = db_sessionmaker
     for side in ("requester", "responder"):
         await freeze(sm, opened, side)
-    await to_move(sm, opened, "responder")
+    await henderson_opens(sm, opened)
     await rep(sm, opened, "responder").execute(call("close", summary="Couldn't help."), step_idx=0)
 
     async def thread_snapshots() -> list[tuple[UUID | None, int]]:
@@ -1236,6 +1385,74 @@ def internal(
     return InternalToolExecutor(sm, scope, discovery), discovery
 
 
+def recipient(
+    org: str,
+    *,
+    reason: str = "Fits.",
+    title: str = "Quote",
+    ask: str = "Quote this part, with dates.",
+    suggested: bool = True,
+) -> dict[str, Any]:
+    """One `send_network_request` recipient as internal Claude writes it."""
+    return {"org": org, "reason": reason, "title": title, "ask": ask, "suggested": suggested}
+
+
+def request_call(
+    *recipients: dict[str, Any],
+    title: str = "Cathode XRD",
+    brief: str = "XRD on 12 air-sensitive powders by Nov 6.",
+) -> ToolCall:
+    return call("send_network_request", title=title, brief=brief, recipients=list(recipients))
+
+
+async def chat_cards(sm: Sessionmaker, opened: Opened) -> list[Card]:
+    async with sm() as session:
+        rows = await session.scalars(
+            select(Card)
+            .where(Card.world_id == opened.world_id, Card.conversation_id == opened.conversation_id)
+            .order_by(Card.created_at, Card.id)
+        )
+        return list(rows)
+
+
+async def searched(sm: Sessionmaker, opened: Opened, fits: Mapping[UUID, Fit]) -> UUID:
+    """One `search_network` call in the chat, in an earlier turn, that screened `fits`."""
+    turn = uuid4()
+    search_id = side_effect_id(turn, 0, "toolu_search")
+    async with sm() as session, session.begin():
+        session.add(
+            ChatMessage(
+                world_id=opened.world_id,
+                id=uuid4(),
+                conversation_id=opened.conversation_id,
+                seq=1,
+                role="assistant",
+                content_text=json.dumps(
+                    [{"type": "tool_use", "id": "toolu_search", "name": "search_network"}]
+                ),
+                turn_id=turn,
+            )
+        )
+        session.add_all(
+            Screening(
+                world_id=opened.world_id,
+                search_id=search_id,
+                org_id=org_id,
+                requester_org_id=HENDERSON,
+                fit=fit,
+            )
+            for org_id, fit in fits.items()
+        )
+    return search_id
+
+
+async def send_without_review(sm: Sessionmaker, opened: Opened, on: bool = True) -> None:
+    """Alex sets his chat to send requests without his review (3.10)."""
+    async with unit_of_work(sm, opened.world_id) as uow:
+        await conversations.set_send_mode(uow, opened.conversation_id, on)
+        await uow.commit()
+
+
 async def test_internal_claude_searches_and_reads_its_own_records(
     db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
 ) -> None:
@@ -1355,27 +1572,25 @@ async def test_send_network_request_raises_an_outreach_card_with_the_brief(
         "sample count and handling needs; keep compositions private. Agree up to $2,000. "
     )
 
-    unknown = await executor.execute(
-        call("send_network_request", brief=brief, recipients=[{"org": "nowhere", "reason": "?"}]),
-        step_idx=0,
-    )
-    own = await executor.execute(
-        call("send_network_request", brief=brief, recipients=[{"org": "henderson", "reason": "?"}]),
-        step_idx=0,
-    )
+    ask = "Quote the XRD with dates; up to $2,000 is fine, but keep that to yourself."
+
+    unknown = await executor.execute(request_call(recipient("nowhere"), brief=brief), step_idx=0)
+    own = await executor.execute(request_call(recipient("henderson"), brief=brief), step_idx=0)
     raised = await executor.execute(
-        call(
-            "send_network_request",
+        request_call(
+            recipient("@northlake", reason="Air-free XRD", title=" XRD quote ", ask=f" {ask} "),
             brief=brief,
-            recipients=[{"org": "@northlake", "reason": "Air-free XRD"}],
         ),
         step_idx=1,
     )
 
     assert unknown.is_error
+    assert "Unknown organizations: nowhere" in (unknown.result or "")
     assert own.is_error
     assert raised.ends_turn
     assert isinstance(raised.effect, CardRaised)
+    # Sent only once Alex approves it: this chat asks for his review.
+    assert (raised.effect.auto, raised.result) == (False, None)
     async with sm() as session:
         card = await session.get(Card, (world, raised.effect.card_id))
         assert card is not None
@@ -1388,11 +1603,19 @@ async def test_send_network_request_raises_an_outreach_card_with_the_brief(
         )
     assert cards_in_chat == [card]
     payload = OutreachCardPayload.model_validate(card.payload)
-    assert card.status == "pending"
-    assert payload.brief == brief.strip()
-    assert [(r.org_id, r.fit, r.reason) for r in payload.recipients] == [
-        (NORTHLAKE, "strong", "Air-free XRD")
+    assert (card.status, card.auto) == ("pending", False)
+    assert (payload.title, payload.brief) == ("Cathode XRD", brief.strip())
+    assert payload.recipients == [
+        OutreachRecipient(
+            org_id=NORTHLAKE,
+            fit="strong",
+            reason="Air-free XRD",
+            ask=ask,
+            title="XRD quote",
+            suggested=True,
+        )
     ]
+    assert payload.auto_send_recipients is None
     assert payload.search_ids == [search_id]
     assert payload.screened == ScreenedCounts(total=2, strong=1, possible=0, no=1, unknown=0)
 
@@ -1435,13 +1658,10 @@ async def test_a_recipient_keeps_its_best_fit_across_the_chats_searches(
     executor, _ = internal(sm, opened)
 
     raised = await executor.execute(
-        call(
-            "send_network_request",
+        request_call(
+            recipient("northlake", reason="XRD"),
+            recipient("ridgeline", reason="Holder"),
             brief="XRD on 12 powders, and a holder for the transfer.",
-            recipients=[
-                {"org": "northlake", "reason": "XRD"},
-                {"org": "ridgeline", "reason": "Holder"},
-            ],
         ),
         step_idx=2,
     )
@@ -1457,6 +1677,321 @@ async def test_a_recipient_keeps_its_best_fit_across_the_chats_searches(
     ]
     assert payload.search_ids == [first, second]
     assert payload.screened == ScreenedCounts(total=3, strong=2, possible=1, no=0, unknown=0)
+
+
+async def test_the_story_chats_request_is_stored_with_its_titles_and_asks(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """The suggested story's proposal (story_suggested_chat.yaml) as its card stores it,
+    for the member to approve: L7's specs match these values."""
+    sm = db_sessionmaker
+    raw = (CASSETTES / "story_suggested_chat.yaml").read_text(encoding="utf-8")
+    (proposed,) = [
+        ToolCall(id=block.id or "toolu_request", name=block.name, input=dict(block.input))
+        for e in Cassette.model_validate(yaml.safe_load(raw)).entries
+        if (e.match.thread, e.match.turn, e.match.step) == ("chat:alex:1", 1, 2)
+        for block in e.content
+        if block.type == "tool_use"
+    ]
+    calder = sid("org", "calder")
+    await searched(sm, opened, {NORTHLAKE: "strong", RIDGELINE: "strong", calder: "no"})
+    executor, _ = internal(sm, opened)
+
+    raised = await executor.execute(proposed, step_idx=2)
+
+    assert isinstance(raised.effect, CardRaised)
+    (card,) = await chat_cards(sm, opened)
+    payload = OutreachCardPayload.model_validate(card.payload)
+    assert (card.auto, payload.auto_send_recipients) == (False, None)
+    assert payload.title == "Cathode characterization and holder"
+    rows = {row.org_id: row for row in payload.recipients}
+    assert {org_id: (row.fit, row.title, row.suggested) for org_id, row in rows.items()} == {
+        NORTHLAKE: ("strong", "XRD and SEM/EDS quote", True),
+        RIDGELINE: ("strong", "Airtight holder quote", True),
+        calder: ("no", "Modelling support enquiry", False),
+    }
+    northlake = rows[NORTHLAKE].ask or ""
+    assert northlake.startswith("Powder XRD and SEM/EDS on the 12 powders")
+    assert "$1,600" in northlake
+    assert "$400" in (rows[RIDGELINE].ask or "")
+
+
+async def test_a_request_to_several_keeps_each_organizations_part_to_itself(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """3.13 E2: our representative in each conversation sees the brief and that
+    organization's ask, and both sides see its title, so with two or more recipients
+    none of them may name another recipient."""
+    sm = db_sessionmaker
+    executor, _ = internal(sm, opened)
+    xrd = recipient("northlake", title="XRD quote", ask="Quote the XRD on the 12 powders.")
+    holder = recipient("ridgeline", title="Holder quote", ask="Quote an airtight holder.")
+    naming = "XRD on 12 powders by Nov 6; Northlake  characterization CORE runs it."
+
+    in_brief = await executor.execute(request_call(xrd, holder, brief=naming), step_idx=0)
+    in_title = await executor.execute(
+        request_call(xrd, {**holder, "title": "Holder for Northlake Characterization Core"}),
+        step_idx=1,
+    )
+    in_ask = await executor.execute(
+        request_call({**xrd, "ask": "XRD, once Ridgeline Fabrication ships the holder."}, holder),
+        step_idx=2,
+    )
+    alone = await executor.execute(request_call(xrd, brief=naming), step_idx=3)
+
+    assert in_brief.is_error
+    assert in_brief.result == f"{BRIEF_NAMES_RECIPIENT} It names {NORTHLAKE_NAME}."
+    assert in_title.is_error
+    assert in_title.result == (
+        f"The title for Ridgeline Fabrication names {NORTHLAKE_NAME}. Your representative in "
+        "each conversation sees only that organization's ask, and both sides see its title, "
+        "so keep each to that organization's part."
+    )
+    assert in_ask.is_error
+    assert (in_ask.result or "").startswith(
+        f"The ask for {NORTHLAKE_NAME} names Ridgeline Fabrication."
+    )
+    # Its own representative may hear its own name.
+    assert isinstance(alone.effect, CardRaised)
+    assert [card.id for card in await chat_cards(sm, opened)] == [alone.effect.card_id]
+
+
+async def test_a_request_without_its_title_or_an_ask_is_invalid(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    sm = db_sessionmaker
+    executor, _ = internal(sm, opened)
+    holder = recipient("ridgeline")
+    no_ask = {key: value for key, value in recipient("northlake").items() if key != "ask"}
+    too_long = "x" * (TITLE_MAX_CHARS + 1)
+    calls = [
+        call("send_network_request", brief="XRD by Nov 6.", recipients=[holder]),
+        request_call(no_ask, holder),
+        request_call(holder, title=too_long),
+        request_call(recipient("ridgeline", title=too_long)),
+        request_call(recipient("ridgeline", title="  ")),
+    ]
+
+    results = [await executor.execute(bad, step_idx=step) for step, bad in enumerate(calls)]
+
+    for result in results:
+        assert result.is_error
+        assert (result.result or "").startswith("Invalid input for send_network_request:")
+        assert result.effect is None
+    assert await chat_cards(sm, opened) == []
+
+
+async def test_without_review_a_request_goes_to_its_suggested_screened_organizations(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """3.10: the card is stored as sent without review, to the suggested recipients a
+    search in this chat screened as strong or possible; one not suggested is only
+    listed."""
+    sm = db_sessionmaker
+    calder = sid("org", "calder")
+    await searched(sm, opened, {RIDGELINE: "strong", VANTAGE: "possible", calder: "no"})
+    await send_without_review(sm, opened)
+    executor, _ = internal(sm, opened)
+
+    raised = await executor.execute(
+        request_call(
+            recipient("ridgeline"), recipient("vantage"), recipient("calder", suggested=False)
+        ),
+        step_idx=0,
+    )
+
+    assert raised.ends_turn
+    assert isinstance(raised.effect, CardRaised)
+    assert raised.effect.auto
+    (card,) = await chat_cards(sm, opened)
+    payload = OutreachCardPayload.model_validate(card.payload)
+    assert card.auto
+    assert [(r.org_id, r.suggested) for r in payload.recipients] == [
+        (RIDGELINE, True),
+        (VANTAGE, True),
+        (calder, False),
+    ]
+    assert payload.auto_send_recipients == [RIDGELINE, VANTAGE]
+
+
+async def test_without_review_a_request_outside_the_guards_is_not_sent(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """3.10: each guard refuses the whole call and stores nothing, so internal Claude
+    can fix it in the same turn."""
+    sm = db_sessionmaker
+    slugs = ["ridgeline", "vantage", "calder", "granite", "bayside", "ostrander", "summit"]
+    slugs += ["tidewater", "pinecrest"]
+    others: dict[UUID, Fit] = {sid("org", slug): "possible" for slug in slugs}
+    await searched(sm, opened, {NORTHLAKE: "strong", **others, sid("org", "harbor"): "no"})
+    await send_without_review(sm, opened)
+    executor, _ = internal(sm, opened)
+    nine = [recipient(slug) for slug in slugs]
+    assert len(nine) == AUTO_SEND_MAX_RECIPIENTS + 1
+
+    refused = {
+        "unscreened": request_call(recipient("ridgeline"), recipient("meridian")),
+        "screened out": request_call(recipient("harbor")),
+        "none suggested": request_call(recipient("ridgeline", suggested=False)),
+        "a ninth": request_call(*nine),
+        # This chat's request already has a live conversation with Northlake.
+        "in touch": request_call(recipient("ridgeline"), recipient("northlake")),
+    }
+    results = {
+        why: await executor.execute(bad, step_idx=step)
+        for step, (why, bad) in enumerate(refused.items())
+    }
+    eight = await executor.execute(request_call(*nine[:-1]), step_idx=len(refused))
+
+    for result in results.values():
+        assert result.is_error
+        assert result.effect is None
+    assert "Meridian Thermal isn't one" in (results["unscreened"].result or "")
+    assert "Harbor Pilot Line isn't one" in (results["screened out"].result or "")
+    assert "none is suggested" in (results["none suggested"].result or "")
+    assert f"at most {AUTO_SEND_MAX_RECIPIENTS} organizations" in (results["a ninth"].result or "")
+    assert results["in touch"].result == ALREADY_IN_TOUCH.format(
+        org=NORTHLAKE_NAME, request=opened.request_id
+    )
+    assert isinstance(eight.effect, CardRaised)
+    assert [card.id for card in await chat_cards(sm, opened)] == [eight.effect.card_id]
+
+
+async def chat_request(
+    sm: Sessionmaker, opened: Opened, recipients: Sequence[UUID], *, opened_to: Sequence[UUID]
+) -> UUID:
+    """A request from the chat to `recipients`, with threads open to `opened_to` only, as
+    its workflow leaves it before it opens the rest."""
+    async with unit_of_work(sm, opened.world_id) as uow:
+        request = NetworkRequest(
+            world_id=opened.world_id,
+            id=uuid4(),
+            requester_org_id=HENDERSON,
+            conversation_id=opened.conversation_id,
+            created_by_member_id=ALEX,
+            brief="XRD on 12 air-sensitive powders by Nov 6.",
+            recipients=[
+                OutreachRecipient(org_id=org_id, fit="strong", reason="Fits.").model_dump(
+                    mode="json"
+                )
+                for org_id in recipients
+            ],
+        )
+        uow.session.add(request)
+        await uow.session.flush()
+        for org_id in opened_to:
+            await threads.open(
+                uow, thread_id=uuid4(), request=request, responder_org_id=org_id, deadline_at=None
+            )
+        await uow.commit()
+    return request.id
+
+
+async def test_without_review_an_organization_waiting_for_its_thread_is_already_in_touch(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """3.10: the guard reads who this chat's requests went to, so a send right after
+    another, before its workflow opens the thread, or to the ninth of a request whose
+    eight threads hold every slot, is refused."""
+    sm = db_sessionmaker
+    slugs = ["ridgeline", "vantage", "calder", "granite", "bayside", "ostrander", "summit"]
+    slugs += ["tidewater", "pinecrest"]
+    nine = [sid("org", slug) for slug in slugs]
+    await searched(sm, opened, dict.fromkeys(nine, "strong"))
+    await send_without_review(sm, opened)
+    just_sent = await chat_request(sm, opened, [RIDGELINE], opened_to=[])
+    waiting = await chat_request(sm, opened, nine[1:], opened_to=nine[1:-1])
+    executor, _ = internal(sm, opened)
+
+    again = await executor.execute(request_call(recipient("ridgeline")), step_idx=0)
+    ninth = await executor.execute(request_call(recipient("pinecrest")), step_idx=1)
+
+    assert again.result == ALREADY_IN_TOUCH.format(org="Ridgeline Fabrication", request=just_sent)
+    assert ninth.result == ALREADY_IN_TOUCH.format(org="Pinecrest Precursors", request=waiting)
+    for refused in (again, ninth):
+        assert refused.is_error
+        assert refused.effect is None
+    assert await chat_cards(sm, opened) == []
+
+
+async def test_without_review_an_ended_conversation_doesnt_stop_a_new_request(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    sm = db_sessionmaker
+    await searched(sm, opened, {NORTHLAKE: "strong"})
+    await send_without_review(sm, opened)
+    async with unit_of_work(sm, world) as uow:
+        await threads.set_state(uow, opened.thread_id, "expired")
+        await uow.commit()
+    executor, _ = internal(sm, opened)
+
+    raised = await executor.execute(request_call(recipient("northlake")), step_idx=0)
+
+    assert isinstance(raised.effect, CardRaised)
+    assert raised.effect.auto
+
+
+async def test_a_live_conversation_from_another_chat_doesnt_stop_a_request(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    sm = db_sessionmaker
+    await open_thread(sm, world, responder=RIDGELINE)
+    await searched(sm, opened, {RIDGELINE: "strong"})
+    await send_without_review(sm, opened)
+    executor, _ = internal(sm, opened)
+
+    raised = await executor.execute(request_call(recipient("ridgeline")), step_idx=0)
+
+    assert isinstance(raised.effect, CardRaised)
+    assert raised.effect.auto
+
+
+async def test_a_turn_sends_at_most_three_requests_without_review(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    sm = db_sessionmaker
+    slugs = ["ridgeline", "vantage", "calder", "granite", "bayside"]
+    await searched(sm, opened, {sid("org", slug): "strong" for slug in slugs})
+    await send_without_review(sm, opened)
+    executor, _ = internal(sm, opened)
+
+    # The workflow resumes the same turn after each card, at the next step.
+    sent = [
+        await executor.execute(request_call(recipient(slug)), step_idx=step)
+        for step, slug in enumerate(slugs[:AUTO_SENDS_PER_TURN])
+    ]
+    fourth = await executor.execute(request_call(recipient("granite")), step_idx=3)
+    next_turn, _ = internal(sm, opened)
+    later = await next_turn.execute(request_call(recipient("bayside")), step_idx=0)
+
+    assert all(isinstance(result.effect, CardRaised) for result in sent)
+    assert fourth.is_error
+    assert fourth.effect is None
+    assert f"already sent {AUTO_SENDS_PER_TURN} requests without review" in (fourth.result or "")
+    assert isinstance(later.effect, CardRaised)
+    assert len(await chat_cards(sm, opened)) == AUTO_SENDS_PER_TURN + 1
+
+
+@pytest.mark.parametrize("before", [True, False])
+async def test_a_retried_request_keeps_the_send_mode_it_was_raised_in(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened, before: bool
+) -> None:
+    sm = db_sessionmaker
+    await searched(sm, opened, {RIDGELINE: "strong"})
+    await send_without_review(sm, opened, before)
+    executor, _ = internal(sm, opened)
+    asked = request_call(recipient("ridgeline"))
+
+    first = await executor.execute(asked, step_idx=0)
+    # Alex flips the setting before Temporal retries the call.
+    await send_without_review(sm, opened, not before)
+    retried = await executor.execute(asked, step_idx=0)
+
+    assert retried == first
+    assert isinstance(first.effect, CardRaised)
+    assert first.effect.auto is before
+    (card,) = await chat_cards(sm, opened)
+    assert card.auto is before
 
 
 async def test_get_request_status_reads_the_chats_request(

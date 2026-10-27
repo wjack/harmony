@@ -1,13 +1,20 @@
 /**
  * Keeps the transcript pinned to its newest message while the member is at the bottom,
- * as Claude does, and lets go when they scroll up to read.
+ * as Claude does, and lets go when they scroll up to read, or when following the bottom
+ * would scroll away what they just unfolded (View more, a row's details).
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** How close to the bottom still counts as at the bottom. */
 export const STICK_TO_BOTTOM_PX = 96;
 
-/** How long after a wheel, touch or key a scroll still counts as the member's. */
+/** The room left above something brought into view from its top. */
+const REVEAL_MARGIN_PX = 16;
+
+/**
+ * How long after a wheel, touch or key a scroll still counts as the member's, and after
+ * a click on a disclosure a resize still counts as its unfolding.
+ */
 const GESTURE_MS = 300;
 
 const SCROLL_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
@@ -35,6 +42,27 @@ export function staysPinned(
   return pinned && !(byMember && position.scrollTop < previousTop);
 }
 
+/**
+ * Whether following the bottom now would scroll something whose top is `top` px below
+ * the viewport's top out of view: the follow moves everything up by the gap left under
+ * the view.
+ */
+export function followHides(top: number, position: ScrollPosition): boolean {
+  return top < position.scrollHeight - position.scrollTop - position.clientHeight;
+}
+
+/**
+ * What a click unfolds: the region a closed disclosure controls, or the disclosure
+ * itself, whose content opens under it. Null for any other click.
+ */
+function unfoldedBy(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof Element)) return null;
+  const toggle = target.closest<HTMLElement>('[aria-expanded="false"]');
+  if (toggle === null) return null;
+  const controls = toggle.getAttribute("aria-controls");
+  return (controls === null ? null : document.getElementById(controls)) ?? toggle;
+}
+
 function isEditable(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -50,6 +78,8 @@ export function useStickToBottom(deps: readonly unknown[]) {
   const gestureAt = useRef(Number.NEGATIVE_INFINITY);
   /** A pointer is down in the transcript: dragging its scrollbar, or selecting text. */
   const pointerDown = useRef(false);
+  /** What the member just unfolded in the transcript, and when. */
+  const unfolded = useRef<{ target: HTMLElement; at: number } | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
   const toBottom = (behavior: "instant" | "smooth" = "instant") => {
@@ -63,17 +93,37 @@ export function useStickToBottom(deps: readonly unknown[]) {
   }, deps);
 
   // Content that grows (a card's data arriving) and a viewport that shrinks (a banner
-  // opening over the composer) both move the bottom; follow it while pinned.
+  // opening over the composer) both move the bottom; follow it while pinned. Growth the
+  // member asked for by unfolding something is theirs to read: if following would
+  // scroll its top away, let go there instead, as if they had scrolled up to read it.
   useEffect(() => {
     const content = contentRef.current;
     const viewport = scrollRef.current;
     if (content === null || viewport === null) return;
+    const unfold = (event: MouseEvent) => {
+      const target = unfoldedBy(event.target);
+      if (target !== null && content.contains(target)) unfolded.current = { target, at: performance.now() };
+    };
     const observer = new ResizeObserver(() => {
-      if (pinned.current) toBottom();
+      const unfolding = unfolded.current;
+      unfolded.current = null;
+      if (!pinned.current) return;
+      if (unfolding !== null && performance.now() - unfolding.at < GESTURE_MS) {
+        const top = unfolding.target.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+        if (followHides(top, viewport)) {
+          pinned.current = false;
+          lastTop.current = viewport.scrollTop;
+          setAtBottom(false);
+          return;
+        }
+      }
+      toBottom();
     });
+    viewport.addEventListener("click", unfold, { capture: true });
     observer.observe(content);
     observer.observe(viewport);
     return () => {
+      viewport.removeEventListener("click", unfold, { capture: true });
       observer.disconnect();
     };
   }, []);
@@ -119,5 +169,21 @@ export function useStickToBottom(deps: readonly unknown[]) {
     setAtBottom(pinned.current);
   };
 
-  return { scrollRef, contentRef, atBottom, onScroll, toBottom };
+  /**
+   * While following the bottom, shows `target` from its top if the bottom would hide
+   * its top, and stops following there, as if the member had scrolled up to read it.
+   */
+  const revealTop = (target: HTMLElement) => {
+    const viewport = scrollRef.current;
+    if (viewport === null || !pinned.current) return;
+    const top =
+      target.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop - REVEAL_MARGIN_PX;
+    if (top >= viewport.scrollHeight - viewport.clientHeight) return;
+    pinned.current = false;
+    viewport.scrollTop = top;
+    lastTop.current = viewport.scrollTop;
+    setAtBottom(false);
+  };
+
+  return { scrollRef, contentRef, atBottom, onScroll, toBottom, revealTop };
 }

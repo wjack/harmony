@@ -93,11 +93,25 @@ class ConsultView(_View):
     version: int
 
 
+class RouteAssigneeView(_View):
+    slug: str
+    # Why it is theirs, addressed to them ("you run XRD and SEM").
+    why: str
+
+
+class RouteView(_View):
+    """A draft's route as it was applied: the members it named, each with why."""
+
+    assignees: list[RouteAssigneeView]
+
+
 class EscalationDraftView(_View):
     draft_rev: int
     # The drafted answer (a consult), or the held message (`outbound_review`).
     answer: str
-    route: Route | None
+    # The decision in one line, for the reviewer; None on older drafts.
+    short_question: str | None = None
+    route: RouteView | None
     rationale: str
     # What internal Claude looked at while drafting, from its tool calls.
     activity: list[ActivityLine]
@@ -147,9 +161,9 @@ class ReleasedAnswerView(_View):
 
 
 class RepresentativeContext(_View):
-    """ "What our representative saw": exactly what entered its requests from this
-    side (§2): its frozen prompt, the notices sent since (R§12), and the results it
-    was given."""
+    """ "What our representative saw": the parts its requests carry and the answers
+    released to it (§2): its frozen prompt, the notices sent since (R§12), and the
+    released results. A send-back's note isn't a released answer, so it isn't listed."""
 
     parts: list[ContextPart]
     notices: list[context.DeliveredNotice]
@@ -355,7 +369,7 @@ def _released(
     members: Mapping[UUID, MemberRef],
 ) -> list[ReleasedAnswerView]:
     """The released results the representative was given: each consult's, and each
-    held message's that quotes what a person wrote."""
+    held message's that releases what a person wrote (a send-back's note doesn't)."""
     released = [
         ReleasedAnswerView(
             id=row.id,
@@ -376,10 +390,13 @@ def _released(
             continue
         resolution = EscalationResolution.model_validate(row.resolution)
         draft = drafts.get((row.id, row.current_draft_rev or 0))
+        resolver = _ref(row.resolved_by_member_id, members)
+        # Rebuilt exactly as the representative got it (`network._held_outcome`).
         text = answerer.held_result(
             resolution.action,
             text=resolution.text or "",
             drafted=draft.answer if draft is not None else "",
+            member_name=resolver.name if resolver is not None else None,
         )
         if context.RELEASED_OPEN in text and text in received:
             released.append(
@@ -388,7 +405,7 @@ def _released(
                     question=None,
                     text=text,
                     released_by="member",
-                    released_by_member=_ref(row.resolved_by_member_id, members),
+                    released_by_member=resolver,
                     released_at=row.resolved_at,
                 )
             )
@@ -415,6 +432,7 @@ def _escalation_view(
             EscalationDraftView(
                 draft_rev=draft.draft_rev,
                 answer=draft.answer,
+                short_question=draft.short_question,
                 route=_route_view(draft.route, org_slugs),
                 rationale=draft.rationale,
                 activity=activity.get((row.id, draft.draft_rev), []),
@@ -434,13 +452,15 @@ def _escalation_view(
     )
 
 
-def _route_view(stored: JsonObject | None, org_slugs: Sequence[str]) -> Route | None:
+def _route_view(stored: JsonObject | None, org_slugs: Sequence[str]) -> RouteView | None:
     """A draft's route as the members it named (`routing.named_slugs`, as it was
     applied), so the client can tell whether the item is still with them."""
     if stored is None:
         return None
-    route = Route.model_validate(stored)
-    return route.model_copy(update={"assignees": routing.named_slugs(route.assignees, org_slugs)})
+    named = routing.named_slugs(Route.model_validate(stored).assignees, org_slugs)
+    return RouteView(
+        assignees=[RouteAssigneeView(slug=slug, why=why) for slug, why in named.items()]
+    )
 
 
 def _note_view(

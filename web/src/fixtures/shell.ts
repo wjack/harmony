@@ -15,6 +15,7 @@ import type {
   ResetResult,
   SessionView,
 } from "../api/types";
+import type { BudgetView } from "../app/budget";
 import type { FixtureRoutes } from "./index";
 
 export const WORLD_ID = "0b1d7a3e-5c2f-4e8a-9a51-000000000001";
@@ -78,6 +79,14 @@ export const memberDirectory: MemberDirectory = {
   all: [members.lena, members.sam],
 };
 
+/** As the hosted app runs internal Claude: Opus 5.5 for featured orgs, Haiku 5.5 for the rest. */
+function internalModel(actingAs: MemberView): SessionView["internal_model"] {
+  const background = memberDirectory.all.some((m) => m.org.id === actingAs.org.id);
+  return background
+    ? { id: "claude-haiku-5-5", label: "Haiku 5.5", adaptive: true }
+    : { id: "claude-opus-5-5", label: "Opus 5.5", adaptive: true };
+}
+
 export function sessionAs(actingAs: MemberView, epoch = 1, worldId = WORLD_ID): SessionView {
   return {
     session_id: SESSION_ID,
@@ -93,6 +102,7 @@ export function sessionAs(actingAs: MemberView, epoch = 1, worldId = WORLD_ID): 
       ff_offset_s: 0,
     },
     member: actingAs,
+    internal_model: internalModel(actingAs),
   };
 }
 
@@ -214,6 +224,29 @@ export const story: DemoStory = {
   steps: [],
 };
 
+function sessionBudget(spentUsd: number, capUsd = 10): NonNullable<BudgetView["session"]> {
+  return { cap_usd: capUsd, spent_usd: spentUsd, reserved_usd: 0, remaining_usd: Math.max(0, capUsd - spentUsd) };
+}
+
+/** `GET /api/budget` in each state the demo bar shows (LIVE_DEMO_PLAN 3.5). */
+export const budgets = {
+  ok: { live: true, state: "ok", session: sessionBudget(2.6) },
+  sessionExhausted: { live: true, state: "session_exhausted", session: sessionBudget(9.99) },
+  dailyExhausted: {
+    live: true,
+    state: "daily_exhausted",
+    session: sessionBudget(1.2),
+    resets_at: "2026-10-27T00:00:00Z",
+  },
+  /** The demo's global cap is spent; this session's own cap isn't. */
+  demoExhausted: { live: true, state: "demo_exhausted", session: sessionBudget(3.1) },
+  /** The provider refused (billing or usage limit): even a session that spent nothing waits. */
+  providerBlocked: { live: true, state: "demo_exhausted", session: sessionBudget(0) },
+  paused: { live: true, state: "paused", session: sessionBudget(2.6) },
+  /** Hosted caps are off (local development). */
+  off: { live: false, state: "ok" },
+} satisfies Record<string, BudgetView>;
+
 /**
  * The shell's routes, acting as `actingAs`. Act-as and reset are stateful, so the
  * gallery's account menu really switches (and the dispatcher really resets).
@@ -241,6 +274,7 @@ export function shellRoutes(actingAs: MemberView = members.alex): FixtureRoutes 
     "GET /api/inbox": () =>
       session.member.slug === "helen" ? inbox : { ...inbox, needs_you: [] },
     "GET /api/demo/story": story,
+    "GET /api/budget": budgets.ok,
   };
 }
 

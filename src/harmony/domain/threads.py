@@ -9,9 +9,13 @@ Writes queue, for each party org with `EventScope.thread(org, thread)`, a
 `thread_message` snapshot (append-only, version 1, through `UnitOfWork.add_event` as
 P0's turn does) and the `thread` snapshot.
 
-The request's title is the requester's: the first line of its brief, which never
-crosses. A responder names the request from what did cross, the requester's first
-message on the thread (`request_title`).
+A thread's own `title` is the recipient's title from the card, written to be seen by
+both sides, so both name the thread by it (`thread_title`). Without one (threads from
+before titles), each side falls back to what it may see: the requester to the
+request's title (`requester_title`: the stored one, else the brief's first line), and
+a responder to what crossed, the requester's first message on the thread, else
+"Request from X". A responder never sees the request's own title, which is written
+for the requester's member.
 
 `cassette_key` names a thread for ScriptedModel cassettes (`agents.keys.thread_key`):
 the seed slug for a seeded thread, else `<requester>.<responder>[.<k>]`, where k counts
@@ -30,7 +34,7 @@ from functools import cache
 from typing import Final
 from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select, tuple_
@@ -38,7 +42,7 @@ from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents.keys import thread_key
-from harmony.agents.models import BRIEF_TITLE_CHARS, brief_title, first_line
+from harmony.agents.models import BRIEF_TITLE_CHARS, OutreachRecipient, brief_title, first_line
 from harmony.db import repo
 from harmony.db.models import (
     Base,
@@ -52,6 +56,7 @@ from harmony.db.models import (
 )
 from harmony.db.models.choices import (
     AccessReason,
+    FailureReason,
     Provenance,
     Side,
     ThreadMessageKind,
@@ -78,6 +83,7 @@ MESSAGE_SNAPSHOT_COLUMNS: Final = (
     "provenance",
     "created_at",
 )
+_RECIPIENTS: TypeAdapter[list[OutreachRecipient]] = TypeAdapter(list[OutreachRecipient])
 
 
 async def open(
@@ -88,10 +94,10 @@ async def open(
     responder_org_id: UUID,
     deadline_at: datetime | None,
 ) -> Thread:
-    """Open the thread `active` with the requester to move, and give the request's
-    creator `routed` access on the requester side. Idempotent on `thread_id`. The
-    responder side's access is routed when its first escalation is (§10); its admins
-    see it regardless."""
+    """Open the thread `active` with the requester to move, titled with the request's
+    title for this recipient, and give the request's creator `routed` access on the
+    requester side. Idempotent on `thread_id`. The responder side's access is routed
+    when its first escalation is (§10); its admins see it regardless."""
     session = uow.session
     existing = await repo.get(session, Thread, uow.world_id, thread_id)
     if existing is not None:
@@ -106,6 +112,7 @@ async def open(
         side_to_move="requester",
         turn_count=0,
         deadline_at=deadline_at,
+        title=_recipient_title(request, responder_org_id),
     )
     session.add(thread)
     await session.flush()
@@ -239,8 +246,12 @@ async def set_state(
     state: ThreadState,
     *,
     side_to_move: Side | None = None,
+    stop_reason: FailureReason | None = None,
 ) -> Thread:
-    """Move the thread to `state`. A terminal thread never leaves its state."""
+    """Move the thread to `state`. A terminal thread never leaves its state.
+
+    `stop_reason` says why the system ended it (a refused reservation, a model error, a
+    refusal); it is stored only on the move into a terminal state."""
     thread = await locked(uow, thread_id)
     if thread.state in TERMINAL_STATES or (
         thread.state == state and thread.side_to_move == side_to_move
@@ -248,6 +259,8 @@ async def set_state(
         return thread
     thread.state = state
     thread.side_to_move = None if state in TERMINAL_STATES else side_to_move
+    if state in TERMINAL_STATES:
+        thread.stop_reason = stop_reason
     thread.last_activity_at = datetime.now(UTC)
     snapshot(uow, thread)
     return thread
@@ -324,15 +337,34 @@ def _is_greeting(sentence: str) -> bool:
     return 0 < words <= 2 or (words > 0 and _NAMES_CLAUDE.search(sentence) is not None)
 
 
-def request_title(
-    org_id: UUID, request: NetworkRequest, *, requester: str, opening: str | None
+def thread_title(
+    thread: Thread, request: NetworkRequest, org_id: UUID, *, requester: str, opening: str | None
 ) -> str:
-    """How `org_id`'s members name `request`: the requester by its brief's first line;
-    a responder by the requester's first message on its thread (`opening`), else as a
-    request from `requester` (the org's name), since the brief is the requester's own."""
+    """How `org_id`'s members name `thread` (module docstring): its own title; else the
+    requester's side by `requester_title`, and a responder by the requester's first
+    message on it (`opening`), else as a request from `requester` (the org's name)."""
+    if thread.title:
+        return thread.title
     if org_id == request.requester_org_id:
-        return brief_title(request.brief)
+        return requester_title(request)
+    return responder_title(requester=requester, opening=opening)
+
+
+def requester_title(request: NetworkRequest) -> str:
+    """The request's name on the requester's side and the network lens: its title, else
+    its brief's first line (`brief_title`)."""
+    return request.title or brief_title(request.brief)
+
+
+def responder_title(*, requester: str, opening: str | None) -> str:
+    """A responder's name for an untitled thread: the requester's first message on it,
+    else a request from `requester` (the org's name)."""
     return opening or f"Request from {requester}"
+
+
+def _recipient_title(request: NetworkRequest, org_id: UUID) -> str | None:
+    recipients = _RECIPIENTS.validate_python(request.recipients)
+    return next((row.title for row in recipients if row.org_id == org_id), None)
 
 
 def parties(thread: Thread) -> tuple[UUID, UUID]:
@@ -431,11 +463,13 @@ __all__ = [
     "org_of",
     "other",
     "parties",
-    "request_title",
+    "requester_title",
+    "responder_title",
     "row_data",
     "seeded_threads",
     "set_state",
     "side_of",
     "snapshot",
     "store_close_summary",
+    "thread_title",
 ]

@@ -19,6 +19,8 @@ from harmony.config import Settings
 from harmony.seeds.ids import SeedKind, seed_id
 
 ADMIN_SECRET = "test-admin-secret"
+# The passcode of `gated_app`.
+PASSCODE = "integration passcode"
 
 type Json = dict[str, Any]
 
@@ -40,6 +42,13 @@ def build_app(settings: Settings, engine: AsyncEngine, **overrides: Any) -> Fast
     )
 
 
+def gated_app(settings: Settings, engine: AsyncEngine, **overrides: Any) -> FastAPI:
+    """`build_app` with the passcode gate on, keyed on `X-Forwarded-For`: a fresh app,
+    so fresh limits."""
+    gate = {"access_code": SecretStr(PASSCODE), "client_ip_header": "x-forwarded-for"}
+    return build_app(settings, engine, **(gate | overrides))
+
+
 @dataclass
 class Visitor:
     """One browser: its own cookie jar against one app."""
@@ -55,6 +64,9 @@ class Visitor:
 
     async def json(self, method: str, path: str, *, expect: int = 200, **kwargs: Any) -> Any:
         return (await self.request(method, path, expect=expect, **kwargs)).json()
+
+    async def unlock(self, passcode: str = PASSCODE) -> None:
+        await self.request("POST", "/gate", json={"passcode": passcode})
 
     async def start(self, **body: Any) -> Json:
         return cast(Json, await self.json("POST", "/session/start", json=body or None))
@@ -86,10 +98,13 @@ def cursor_of(response: httpx.Response) -> int:
 
 
 @asynccontextmanager
-async def visitor(app: FastAPI, cookies: httpx.Cookies | None = None) -> AsyncIterator[Visitor]:
+async def visitor(
+    app: FastAPI, cookies: httpx.Cookies | None = None, *, headers: dict[str, str] | None = None
+) -> AsyncIterator[Visitor]:
+    """`headers` go on every request: `X-Forwarded-For` makes a known client key."""
     # https, so the session cookie is sent whether or not the settings make it Secure.
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="https://harmony.test", cookies=cookies
+        transport=transport, base_url="https://harmony.test", cookies=cookies, headers=headers
     ) as client:
         yield Visitor(client)

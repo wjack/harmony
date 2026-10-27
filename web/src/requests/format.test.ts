@@ -78,4 +78,15 @@ describe("labels", () => {
     const closed = inboxFor(world, members.helen).done.find((item) => item.thread_id === THREAD.survey);
     expect(closed && rowStatus(closed, false)).toBe("Closed");
   });
+
+  it("says a shared thread stopped or ended before saying who shared it", () => {
+    const world = requestsWorld(NOW);
+    const shared = inboxFor(world, members.raj).shared_with_you.find((item) => item.thread_id === THREAD.henderson);
+    if (shared === undefined) throw new Error("Raj has Helen's shared thread");
+    const settled = { ...shared, escalation: null };
+    expect(rowStatus({ ...settled, thread_state: "closed", side_to_move: null }, false)).toBe("Closed");
+    expect(rowStatus({ ...settled, thread_state: "expired", side_to_move: null }, false)).toBe("Expired");
+    expect(rowStatus({ ...settled, stop_reason: "paused" }, false)).toBe("Stopped");
+    expect(rowStatus(settled, false)).toBe("Shared by Helen");
+  });
 });

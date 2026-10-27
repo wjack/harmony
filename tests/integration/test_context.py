@@ -23,6 +23,7 @@ from temporalio.testing import ActivityEnvironment
 
 from harmony.agents import context, release
 from harmony.agents.consult import (
+    HELD_DECLINED,
     DraftReady,
     Escalated,
     answer,
@@ -31,7 +32,14 @@ from harmony.agents.consult import (
     settled_result,
 )
 from harmony.agents.context import RELEASED_CLOSE, RELEASED_OPEN
-from harmony.agents.models import ContextPart, EscalationResolution
+from harmony.agents.models import (
+    CardResolution,
+    ContextPart,
+    EscalationResolution,
+    OutreachCardPayload,
+    OutreachEdits,
+    OutreachRecipient,
+)
 from harmony.agents.runtime import (
     ConsultOpened,
     MessageHeld,
@@ -51,11 +59,12 @@ from harmony.db.models import (
     RepPolicy,
     RepSettings,
     Thread,
+    ThreadMessage,
     TrustedOrganization,
 )
 from harmony.db.models.choices import Autonomy, Side
 from harmony.db.uow import unit_of_work
-from harmony.domain import consults, threads
+from harmony.domain import cards, consults, conversations, requests, threads
 from harmony.domain import settings as org_settings
 from harmony.domain.settings import SETTINGS_NOTICE, SettingsEdit, TrustedEdit
 from harmony.events.bus import StreamMessage
@@ -254,6 +263,7 @@ async def test_the_requester_prompt_holds_the_brief_its_member_approved(
         "public_summary",
         "sharing",
         "brief",
+        "ask",
         "instructions",
     ]
     assert parts[0].text.startswith(
@@ -263,7 +273,16 @@ async def test_the_requester_prompt_holds_the_brief_its_member_approved(
     assert parts[3] == ContextPart(
         kind="brief", label="Brief approved by Alex Chen", text=request.brief
     )
-    assert "Alex Chen approved this brief, and it is your mandate" in built.system
+    # A request from before per-recipient asks: the ask is the brief's own request.
+    assert parts[4] == ContextPart(
+        kind="ask",
+        label="What it asks Northlake Characterization Core",
+        text="What the brief needs from Northlake Characterization Core.",
+    )
+    assert (
+        "Alex Chen approved this brief and this ask for Northlake Characterization Core, and "
+        "they are your mandate:" in built.system
+    )
     # What Northlake needs from the brief is Henderson's to pass on, so the sharing
     # section mustn't keep it back.
     assert (
@@ -271,6 +290,92 @@ async def test_the_requester_prompt_holds_the_brief_its_member_approved(
         "Characterization Core needs from your brief to answer it." in built.system
     )
     assert not [b for b in await record_bodies(db_sessionmaker, world) if b in built.system]
+
+
+NORTHLAKE_ASK: Final = "Quote the XRD on 12 powders by Nov 6. Up to $1,600; keep it to yourself."
+RIDGELINE_ASK: Final = "Quote an airtight holder by Nov 3. Up to $400; keep it to yourself."
+
+
+async def sent_request(
+    sm: Sessionmaker, world_id: UUID, *, auto: bool, edited_ask: str | None = None
+) -> Opened:
+    """Alex's chat proposes a request to Northlake and Ridgeline, each with its own ask;
+    it goes out (Alex approving, maybe editing Northlake's ask, or without review), and
+    Northlake's thread opens."""
+    opened = await open_thread(sm, world_id)
+    payload = OutreachCardPayload(
+        title="Cathode characterization and holder",
+        brief="Powder XRD on 12 air-sensitive powders by Nov 6, and a holder by Nov 3.",
+        recipients=[
+            OutreachRecipient(
+                org_id=org_id, fit="strong", reason="Fits.", ask=ask, title=title, suggested=True
+            )
+            for org_id, ask, title in (
+                (NORTHLAKE, NORTHLAKE_ASK, "XRD quote"),
+                (RIDGELINE, RIDGELINE_ASK, "Holder quote"),
+            )
+        ],
+        auto_send_recipients=[NORTHLAKE, RIDGELINE] if auto else None,
+    )
+    card_id = uuid4()
+    edits = OutreachEdits(asks={NORTHLAKE: edited_ask}) if edited_ask else None
+    async with unit_of_work(sm, world_id) as uow:
+        card = await cards.create(
+            uow,
+            card_id=card_id,
+            conversation_id=opened.conversation_id,
+            turn_id=uuid4(),
+            tool_use_id="toolu_request",
+            payload=payload,
+            auto=auto,
+        )
+        resolution = CardResolution(
+            card_id=card.id, decision="approve", member_id=ALEX, edits=edits, auto=auto
+        )
+        card = await cards.resolve(uow, resolution)
+        request = await requests.create_from_card(uow, card, resolution, request_id=uuid4())
+        thread = await threads.open(
+            uow, thread_id=uuid4(), request=request, responder_org_id=NORTHLAKE, deadline_at=None
+        )
+        await uow.commit()
+    return Opened(world_id, thread.id, request.id, opened.conversation_id)
+
+
+async def test_the_requester_prompt_asks_this_recipient_only_for_its_own_part(
+    db_sessionmaker: Sessionmaker, world: UUID
+) -> None:
+    """3.13 E2: the ask as Alex edited it, and nothing of Ridgeline's."""
+    edited = "Quote the XRD on 12 powders by Nov 6. Up to $1,500; keep it to yourself."
+    opened = await sent_request(db_sessionmaker, world, auto=False, edited_ask=edited)
+
+    built = await build(db_sessionmaker, opened, "requester")
+
+    asks = [part for part in context.context_parts(built.system) if part.kind == "ask"]
+    assert asks == [
+        ContextPart(kind="ask", label="What it asks Northlake Characterization Core", text=edited)
+    ]
+    assert NORTHLAKE_ASK not in built.system
+    assert RIDGELINE_ASK not in built.system
+    assert "$400" not in built.system
+    assert "Ask Northlake Characterization Core only for what the ask covers." in built.system
+    assert "Brief approved by Alex Chen" in [p.label for p in context.context_parts(built.system)]
+
+
+async def test_a_request_sent_without_review_says_so_in_the_requester_prompt(
+    db_sessionmaker: Sessionmaker, world: UUID
+) -> None:
+    """3.10: the brief is still the mandate, but nobody reviewed it."""
+    opened = await sent_request(db_sessionmaker, world, auto=True)
+
+    built = await build(db_sessionmaker, opened, "requester")
+
+    (brief,) = [part for part in context.context_parts(built.system) if part.kind == "brief"]
+    assert brief.label == (
+        "Brief written by Claude for Alex Chen, sent without their review (this chat's setting)"
+    )
+    assert "approved" not in brief.label
+    assert "consult before committing to a price, a date or other terms" in built.system
+    assert "Alex Chen approved" not in built.system
 
 
 async def test_a_trusted_organization_also_gets_its_own_sharing_description(
@@ -442,6 +547,28 @@ async def test_internal_claude_knows_the_org_and_the_member(
     assert "You're talking with Alex Chen, PhD student." in built.system
     assert built.tools == [dict(tool) for tool in INTERNAL_TOOLS]
     assert (built.org_id, built.member_id) == (HENDERSON, ALEX)
+
+
+async def test_internal_claudes_prompt_and_tools_are_the_same_in_either_send_mode(
+    db_sessionmaker: Sessionmaker, world: UUID
+) -> None:
+    """3.10: the bytes stay the same across a chat's calls, whatever its setting."""
+    sm = db_sessionmaker
+    opened = await open_thread(sm, world)
+
+    async def built() -> context.InternalContext:
+        async with sm() as session:
+            return await context.build_internal_context(
+                session, world_id=world, conversation_id=opened.conversation_id
+            )
+
+    reviewed = await built()
+    async with unit_of_work(sm, world) as uow:
+        await conversations.set_send_mode(uow, opened.conversation_id, True)
+        await uow.commit()
+    unreviewed = await built()
+
+    assert (unreviewed.system, unreviewed.tools) == (reviewed.system, reviewed.tools)
 
 
 # --- §11 firewall: no record reaches a representative but in a released answer ------------
@@ -642,17 +769,25 @@ def last_turns() -> list[Step]:
     ]
 
 
-def expected_effect(turn: Turn, mode: Autonomy) -> type[ConsultOpened | MessageSent | MessageHeld]:
+def expected_effects(
+    turn: Turn, mode: Autonomy, *, answers: bool
+) -> list[type[ConsultOpened | MessageSent | MessageHeld]]:
+    """What the turn's one call does; `answers` is whether the turn brought something
+    to answer."""
     if turn.action == "consult":
-        return ConsultOpened
+        return [ConsultOpened]
+    if turn.action == "text" and not answers:
+        # Bare text after nothing new answers nobody: it stays private (3.13 E3).
+        return []
     # In *Ask* a teammate approves every message first; a close sends no words.
-    return MessageHeld if mode == "ask" and turn.action != "close" else MessageSent
+    return [MessageHeld if mode == "ask" and turn.action != "close" else MessageSent]
 
 
-def expected_stop(turn: Turn, mode: Autonomy) -> str:
+def expected_stop(turn: Turn, mode: Autonomy, *, answers: bool) -> str:
     if turn.refused:
         return "refusal"
-    if turn.action in ("consult", "close") or expected_effect(turn, mode) is MessageHeld:
+    held = MessageHeld in expected_effects(turn, mode, answers=answers)
+    if turn.action in ("consult", "close") or held:
         return "performative"
     return "end_turn"
 
@@ -761,6 +896,31 @@ class NoStream:
         return None
 
 
+async def has_written(
+    sm: Sessionmaker, opened: Opened, org_id: UUID, *, after_seq: int = 0
+) -> bool:
+    """Whether `org_id` has sent a message on the thread after `after_seq`."""
+    async with sm() as session:
+        found = await session.scalar(
+            select(ThreadMessage.id)
+            .where(
+                ThreadMessage.world_id == opened.world_id,
+                ThreadMessage.thread_id == opened.thread_id,
+                ThreadMessage.from_org_id == org_id,
+                ThreadMessage.seq > after_seq,
+                ThreadMessage.kind == "message",
+            )
+            .limit(1)
+        )
+    return found is not None
+
+
+def only_held_declines(owed: Sequence[OwedResult]) -> bool:
+    """Whether every result owed is a held message declined without a reason: that
+    leaves nothing to answer (3.13 E3)."""
+    return bool(owed) and all(result.content == HELD_DECLINED for result in owed)
+
+
 async def run_rep_turn(sm: Sessionmaker, model: ScriptedModel, turn: RepTurnInput) -> RepTurnResult:
     """One turn through the `rep_turn` activity itself: its prompt freeze, notices,
     opening and executor."""
@@ -806,6 +966,41 @@ async def change(sm: Sessionmaker, world_id: UUID, step: PolicyChange | TrustCha
                         version=row.version,
                         edit=TrustedEdit(autonomy=autonomy, sharing_description=sharing),
                     )
+        await uow.commit()
+
+
+@pytest.fixture
+async def seeded(db_sessionmaker: Sessionmaker, world: UUID) -> SettingsEdit:
+    """Northlake's seeded settings, as the edit that puts them back."""
+    async with db_sessionmaker() as session:
+        policy = await session.get(RepPolicy, (world, NORTHLAKE))
+        org = await session.get(Org, (world, NORTHLAKE))
+        assert policy is not None
+        assert org is not None
+        prose = await session.get(RepSettings, (world, NORTHLAKE, org.current_settings_version))
+        assert prose is not None
+    return SettingsEdit(
+        sharing_description=policy.sharing_description,
+        autonomy=policy.autonomy,
+        instructions=prose.instructions,
+        public_summary=prose.public_summary,
+    )
+
+
+async def restore(sm: Sessionmaker, world_id: UUID, seeded: SettingsEdit) -> None:
+    """Put Northlake's settings back as seeded, Henderson untrusted."""
+    await change(sm, world_id, PolicyChange(seeded))
+    async with unit_of_work(sm, world_id) as uow:
+        row = await uow.session.get(TrustedOrganization, (world_id, NORTHLAKE, HENDERSON))
+        if row is None:
+            return
+        await org_settings.remove_trusted(
+            uow,
+            org_id=NORTHLAKE,
+            member_id=HELEN,
+            counterparty_org_id=HENDERSON,
+            version=row.version,
+        )
         await uow.commit()
 
 
@@ -945,6 +1140,15 @@ class SeatState:
         Turn(Seat(0, "responder"), "text", False, replace(PLAIN, quotes=1)),
     ]
 )
+# A held message declined without a reason leaves nothing to answer: bare text after it
+# stays private (3.13 E3).
+@example(
+    steps=[
+        PolicyChange(SettingsEdit(autonomy="ask")),
+        Turn(Seat(1, "responder"), "send", False, replace(PLAIN, person="decline")),
+        Turn(Seat(1, "responder"), "text", False, PLAIN),
+    ]
+)
 # Alex takes over Henderson's consult quoting its own record: Northlake's representative
 # on that thread reads it as Henderson's words, and on the other thread never.
 @example(
@@ -968,7 +1172,7 @@ class SeatState:
     ]
 )
 async def test_no_record_reaches_a_representative_but_inside_a_released_answer(
-    db_sessionmaker: Sessionmaker, records: Records, steps: Sequence[Step]
+    db_sessionmaker: Sessionmaker, records: Records, seeded: SettingsEdit, steps: Sequence[Step]
 ) -> None:
     """Two threads to Northlake (from Henderson and from Ridgeline), both sides of each
     taking random turns through the `rep_turn` activity (messages, bare text,
@@ -984,6 +1188,9 @@ async def test_no_record_reaches_a_representative_but_inside_a_released_answer(
     the side's later requests. A sharing check's request holds none outside the draft
     it judges."""
     sm, world_id = db_sessionmaker, records.world_id
+    # The fixtures are shared across examples: each starts from the seeded settings, so
+    # a failure replays the same way on its own.
+    await restore(sm, world_id, seeded)
     model = Unfolding({})
     checkpointed = Checkpointed(model)
     opened = [
@@ -1046,17 +1253,26 @@ async def test_no_record_reaches_a_representative_but_inside_a_released_answer(
         seat, thread = step.seat, opened[step.seat.thread]
         if seat.thread in ended:
             continue
+        if step.action == "close" and not await has_written(sm, thread, seat.counterparty_id):
+            # A close before any reply is refused (3.13 E1, test_e2_consult_tools): the
+            # seat sends instead.
+            step = replace(step, action="send")
         state = seats[seat]
         state.turns += 1
         n = state.turns
         mode = await mode_of(sm, world_id, seat)
+        answers = (bool(state.owed) and not only_held_declines(state.owed)) or await has_written(
+            sm, thread, seat.counterparty_id, after_seq=state.seen_seq
+        )
         await to_move(sm, thread, seat.side)
         result = await play(seat, rep_script(seat, n, step))
 
-        assert result.stop == expected_stop(step, mode)
+        assert result.stop == expected_stop(step, mode, answers=answers)
         if not step.refused:
             # The executor took the call: nothing was refused for the wrong reason.
-            assert [type(e) for e in result.effects] == [expected_effect(step, mode)]
+            assert [type(e) for e in result.effects] == expected_effects(
+                step, mode, answers=answers
+            )
         last = model.requests[-1]
         if step.refused and objects(last.body.get("messages"))[-1].get("role") == "system":
             # Its notices aren't stored (nothing may follow a system message but a

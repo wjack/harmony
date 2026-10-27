@@ -38,6 +38,14 @@ export default defineConfig([
     },
   },
   {
+    // Shared test helpers export renderers and fakes, not components, and never take
+    // part in Fast Refresh.
+    files: ["src/test/**/*.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
+  {
     files: ["**/*.test.{ts,tsx}"],
     rules: {
       // Test doubles implement browser interfaces with deliberately empty methods.

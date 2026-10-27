@@ -5,8 +5,15 @@ database), Temporal (a local dev server) with both task queues served by the wor
 `harmony worker` builds, and the cassettes in tests/fixtures/cassettes. `harmony run`'s
 player (`storyrun`) acts where people would: it sends the suggested message, approves
 the outreach card and resolves escalations by the story's rules. The adversary's
-request, which the world opens when it is created, plays alongside; Helen settles its
+request plays alongside: nothing starts it when the world is created, and it starts
+when the story first acts as Helen at Northlake (LIVE_DEMO_PLAN 3.3). Helen settles its
 escalation here, as she would from her inbox.
+
+It plays twice: on today's cassettes, and with the answerers' conversations as P0–P2
+recorded them (tests/fixtures/cassettes_p0_p2/), whose drafts route member slugs with
+one shared reason and ask no short question, the shapes stored before the live phase
+(LIVE_DEMO_PLAN §4, L0's compatibility check). The chat's send is today's either way:
+the live phase requires its titles and asks (L8).
 
 The run passes when every beat the story expects was seen and Claude has summed up the
 closed request. The assertions then read what happened from the database and the event
@@ -18,20 +25,28 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Final
+from pathlib import Path
+from typing import Final, Literal
 from uuid import UUID
 
+import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from temporalio.testing import WorkflowEnvironment
 
-from harmony.agents.models import AssistantTextItem, EscalationResolution, InlineQuestionItem
+from harmony.agents.models import (
+    AssistantTextItem,
+    EscalationResolution,
+    InlineQuestionItem,
+    Route,
+)
 from harmony.api.routes.conversations import ConversationDetail
 from harmony.api.routes.escalations import ResolveEscalation
 from harmony.config import Settings
@@ -42,6 +57,7 @@ from harmony.db.models import (
     Consult,
     Document,
     Escalation,
+    EscalationDraft,
     Event,
     KnowledgeItem,
     ModelCall,
@@ -65,10 +81,16 @@ from harmony.worlds.retirer_temporal import TemporalRetirer
 
 type Sessionmaker = async_sessionmaker[AsyncSession]
 
+type Answers = Literal["today", "p0_p2"]
+
 SCENARIO: Final = "harmony-demo"
+# The answerers' cassettes as P0–P2 recorded them, played in place of today's.
+P0_P2_CASSETTES: Final = Path(__file__).parents[1] / "fixtures" / "cassettes_p0_p2"
 STORY_TIMEOUT_S: Final = 240.0
 # How long the adversary's conversation may take to reach Helen, and then to close.
 ADVERSARY_TIMEOUT_S: Final = 120.0
+# The seeded request's title for Northlake's side (threads.yaml).
+ADVERSARY_TITLE: Final = "Rush SEM slot enquiry"
 
 
 def _sid(kind: SeedKind, slug: str) -> UUID:
@@ -91,15 +113,22 @@ CLIENT_DETAILS: Final = ("confidentiality agreement", "standing SEM booking", "N
 CLIENT: Final = "Voltaic"
 
 
+@pytest.mark.parametrize("answers", ["today", "p0_p2"])
 async def test_the_suggested_story_plays_and_every_firewall_holds(
+    answers: Answers,
     app_settings: Settings,
     db_engine: AsyncEngine,
     db_sessionmaker: Sessionmaker,
     temporal_env: WorkflowEnvironment,
+    tmp_path: Path,
 ) -> None:
     # Scripted always: this test never calls the model API.
     settings = app_settings.model_copy(
-        update={"model_mode": "scripted", "admin_secret": SecretStr("e2e-admin-secret")}
+        update={
+            "model_mode": "scripted",
+            "admin_secret": SecretStr("e2e-admin-secret"),
+            "cassette_dir": _cassettes(answers, app_settings.cassette_dir, tmp_path),
+        }
     )
     scenario = load_scenario(SCENARIO)
     story = scenario.story
@@ -143,6 +172,7 @@ async def test_the_suggested_story_plays_and_every_firewall_holds(
     assert isinstance(summary, AssistantTextItem), summary
     assert "$1,735" in summary.markdown
     _assert_the_outreach(world)
+    _assert_no_one_was_needed_before_the_approval(world)
     _assert_ridgelines_question(world, chat)
     _assert_northlakes_consult(world)
     _assert_the_go_aheads(world, chat)
@@ -150,7 +180,21 @@ async def test_the_suggested_story_plays_and_every_firewall_holds(
     _assert_raj_never_got_access(world)
     _assert_the_firewall(world)
     _assert_the_adversary(world, adversary)
+    _assert_the_drafts(world, answers)
     _assert_agent_turns(world)
+
+
+def _cassettes(answers: Answers, today: Path, tmp_path: Path) -> Path:
+    """Today's cassette directory, or a copy with the answerers' cassettes swapped for
+    P0–P2's."""
+    if answers == "today":
+        return today
+    played = tmp_path / "cassettes"
+    shutil.copytree(today, played)
+    for recorded in P0_P2_CASSETTES.glob("*.yaml"):
+        assert (played / recorded.name).is_file(), recorded.name
+        shutil.copy(recorded, played / recorded.name)
+    return played
 
 
 # --- The adversary ----------------------------------------------------------------------
@@ -175,6 +219,16 @@ async def _play_the_adversary(sm: Sessionmaker, api: HarmonyApi, world_id: UUID)
     thread_id = escalation.thread_id
     assert thread_id is not None
     await api.act_as(HELEN)
+    inbox = await api.inbox()
+    buckets = (
+        inbox.needs_you,
+        inbox.with_your_team,
+        inbox.claude_handling,
+        inbox.shared_with_you,
+        inbox.done,
+    )
+    titles = {item.title for bucket in buckets for item in bucket if item.thread_id == thread_id}
+    assert titles == {ADVERSARY_TITLE}
     await api.resolve(
         escalation.id,
         ResolveEscalation(
@@ -221,6 +275,7 @@ class World:
     messages: dict[UUID, list[ThreadMessage]]  # by thread
     consults: list[Consult]
     escalations: list[Escalation]
+    drafts: list[EscalationDraft]
     summaries: dict[tuple[UUID, str], str]  # (thread, side) -> close summary
     access: list[ThreadAccess]
     events: list[Event]
@@ -255,6 +310,7 @@ async def _read_world(sm: Sessionmaker, world_id: UUID, request_id: UUID) -> Wor
             messages[message.thread_id].append(message)
         consults = sorted(await rows(Consult), key=lambda c: c.created_at)
         escalations = sorted(await rows(Escalation), key=lambda e: e.created_at)
+        drafts = await rows(EscalationDraft)
         summaries = {
             (rep.thread_id, rep.side): rep.close_summary
             for rep in await rows(RepSession)
@@ -291,6 +347,7 @@ async def _read_world(sm: Sessionmaker, world_id: UUID, request_id: UUID) -> Wor
         messages=messages,
         consults=consults,
         escalations=escalations,
+        drafts=drafts,
         summaries=summaries,
         access=access,
         events=events,
@@ -359,6 +416,23 @@ def _assert_the_outreach(world: World) -> None:
         if e.entity_type == "card" and '"status": "approved"' in json.dumps(e.payload)
     ]
     assert [(e.scope_kind, e.member_id) for e in approved] == [("member", ALEX)]
+
+
+def _assert_no_one_was_needed_before_the_approval(world: World) -> None:
+    """Nothing model-driven runs when the world is created: the Vantage probe starts
+    once the story acts as Helen, after Alex approves the outreach, so the demo bar
+    asks for nobody before then."""
+    [approved] = [
+        e.seq
+        for e in world.events
+        if e.entity_type == "card" and '"status": "approved"' in json.dumps(e.payload)
+    ]
+    needs_human = [e.seq for e in world.events if e.type == "demo.needs_human"]
+    assert needs_human
+    assert min(needs_human) > approved
+    adversary = [e.seq for e in world.events if e.thread_id == world.adversary.id]
+    assert adversary
+    assert min(adversary) > approved
 
 
 def _assert_ridgelines_question(world: World, chat: ConversationDetail) -> None:
@@ -512,6 +586,21 @@ def _assert_the_adversary(world: World, thread_id: UUID) -> None:
     assert "can't confirm" in reply.body
     assert world.summaries.get((thread.id, "requester"))
     assert world.summaries.get((thread.id, "responder"))
+
+
+def _assert_the_drafts(world: World, answers: Answers) -> None:
+    """Each consult's drafts came in the cassettes' shape and were stored in today's:
+    every assignee has a why (a P0–P2 route's one reason, else its own), and only
+    today's drafts ask a short question."""
+    consults = {e.id for e in world.escalations if e.kind == "consult"}
+    drafts = [d for d in world.drafts if d.escalation_id in consults]
+    assert drafts
+    for draft in drafts:
+        assert (draft.short_question is None) == (answers == "p0_p2"), draft.escalation_id
+        assert draft.route is not None
+        route = Route.model_validate(draft.route)
+        assert route.model_dump(mode="json") == draft.route
+        assert all(assignee.why for assignee in route.assignees)
 
 
 def _assert_agent_turns(world: World) -> None:

@@ -8,6 +8,10 @@ failed=0
 
 row() { printf '  %-12s %s\n' "$1" "$2"; }
 
+# GNU stat first: BSD stat rejects -c without printing, while GNU's -f would print the
+# file system's details before failing.
+file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
+
 check() {
   local name=$1
   shift
@@ -33,13 +37,24 @@ check gh gh --version
 
 echo "Project"
 if [[ -f .env.local ]]; then
-  mode=$(stat -f '%Lp' .env.local 2>/dev/null || stat -c '%a' .env.local)
+  mode=$(file_mode .env.local)
   row ".env.local" "present, mode $mode"
   [[ $mode == 600 ]] || { row "" "expected mode 600: chmod 600 .env.local"; failed=1; }
 else
   row ".env.local" "MISSING: copy .env.local.example, then run make env-local"
   failed=1
 fi
+# Terraform state and tfvars hold production secrets in plaintext: owner-only, always.
+for file in infra/terraform/terraform.tfvars infra/terraform/terraform.tfstate*; do
+  [[ -f $file ]] || continue
+  mode=$(file_mode "$file")
+  if ((8#$mode & 8#077)); then
+    row "${file##*/}" "mode $mode, open to group or others: chmod 600 $file"
+    failed=1
+  else
+    row "${file##*/}" "mode $mode"
+  fi
+done
 uv run --quiet python - <<'EOF' || failed=1
 from harmony.config import get_settings
 

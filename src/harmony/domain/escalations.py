@@ -208,6 +208,7 @@ async def add_draft(
         answer=draft.answer,
         route=draft.route.model_dump(mode="json") if draft.route else None,
         rationale=draft.rationale,
+        short_question=draft.short_question,
         turn_id=turn_id,
     )
     session.add(row)

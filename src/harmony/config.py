@@ -40,12 +40,15 @@ ENV_FILE = REPO_ROOT / ".env.local"
 AppEnv = Literal["local", "ci", "prod"]
 ModelMode = Literal["scripted", "live"]
 ObjectStoreKind = Literal["localfs", "s3"]
+# Where the gate reads a visitor's address (`api/gate.client_key`).
+ClientIpHeader = Literal["x-forwarded-for", "true-client-ip", "cf-connecting-ip"]
 
 LOCAL_DATABASE_URL = "postgresql://harmony:harmony@localhost:5432/harmony"
 LOCAL_MODEL_OVERRIDE = "claude-haiku-5-5"
 # Used only when APP_ENV is local or ci and SESSION_SECRET is unset; prod refuses it.
 _INSECURE_DEV_SESSION_SECRET = "harmony-insecure-dev-session-secret"
 _MIN_PROD_SECRET_LEN = 32
+_MIN_ACCESS_CODE_LEN = 16
 
 
 def _git_head() -> str:
@@ -77,6 +80,9 @@ class Settings(BaseSettings):
         protected_namespaces=(),
         validate_by_name=True,
         validate_by_alias=True,
+        # A refusal would otherwise print the raw inputs, secrets included, into the
+        # deploy logs; each message already names the setting at fault.
+        hide_input_in_errors=True,
     )
 
     # --- Database -------------------------------------------------------------------
@@ -118,16 +124,27 @@ class Settings(BaseSettings):
         Decimal(200),
     )
     # Hosted demo caps (§14), in the `budgets` table; they apply only to live calls
-    # with APP_ENV=prod (`budget_pg.HostedCaps`). Per session lineage, so Reset never
-    # refills it; the daily cap is still open, and unset means none.
-    lineage_budget_usd: Decimal = Field(default=Decimal(6), gt=0)
+    # with APP_ENV=prod, or locally with HOSTED_CAPS_IN_DEV (`budget_pg.HostedCaps`).
+    # The lineage cap is per browser session, so Reset never refills it. Prod refuses
+    # to boot without the other three; elsewhere unset means none.
+    lineage_budget_usd: Decimal = Field(default=Decimal(10), gt=0)
     daily_budget_usd: Decimal | None = Field(default=None, gt=0)
+    global_budget_usd: Decimal | None = Field(default=None, gt=0)
+    client_daily_budget_usd: Decimal | None = Field(default=None, gt=0)
+    hosted_caps_in_dev: bool = False
+
+    # --- Worker capacity (`WorkerConfig.from_settings`) ------------------------------
+    worker_model_concurrency: int = Field(default=4, ge=1)
+    # Model-activity starts per second.
+    worker_model_rate: float = Field(default=2.0, gt=0)
+    worker_chat_concurrency: int = Field(default=2, ge=1)
 
     # --- App ------------------------------------------------------------------------
     app_env: AppEnv = "local"
     session_secret: SecretStr | None = None
-    # Unlocks live (paid) runs in the hosted demo; unset means live runs are off.
+    # The master passcode for the whole app: the gate is on whenever it is set.
     access_code: SecretStr | None = None
+    client_ip_header: ClientIpHeader = "x-forwarded-for"
     # Guards POST /api/admin/wipe; unset means the endpoint always refuses.
     admin_secret: SecretStr | None = None
     build_sha: str = Field(
@@ -152,6 +169,8 @@ class Settings(BaseSettings):
         "anthropic_api_key",
         "spend_ledger_path",
         "daily_budget_usd",
+        "global_budget_usd",
+        "client_daily_budget_usd",
         "session_secret",
         "access_code",
         "admin_secret",
@@ -188,15 +207,32 @@ class Settings(BaseSettings):
         if "model_override" not in self.model_fields_set and self.app_env == "local":
             self.model_override = LOCAL_MODEL_OVERRIDE
         if self.app_env == "prod":
-            secret = self.session_secret.get_secret_value() if self.session_secret else ""
-            if len(secret) < _MIN_PROD_SECRET_LEN:
-                raise ValueError(
-                    f"SESSION_SECRET must be set to at least {_MIN_PROD_SECRET_LEN} "
-                    "characters when APP_ENV=prod"
-                )
+            self._check_prod()
         if self.spend_ledger_path is not None and not self.spend_ledger_path.is_absolute():
             raise ValueError("SPEND_LEDGER_PATH must be an absolute path")
         return self
+
+    def _check_prod(self) -> None:
+        """Prod fails closed: live models, the gate on, and every hosted cap set."""
+        secret = self.session_secret.get_secret_value() if self.session_secret else ""
+        if len(secret) < _MIN_PROD_SECRET_LEN:
+            raise ValueError(
+                f"SESSION_SECRET must be set to at least {_MIN_PROD_SECRET_LEN} "
+                "characters when APP_ENV=prod"
+            )
+        if self.model_mode != "live":
+            raise ValueError("MODEL_MODE must be live when APP_ENV=prod")
+        if self.model_override is not None:
+            raise ValueError("MODEL_OVERRIDE must be unset when APP_ENV=prod")
+        _check_access_code(self.access_code.get_secret_value() if self.access_code else "")
+        caps = {
+            "DAILY_BUDGET_USD": self.daily_budget_usd,
+            "GLOBAL_BUDGET_USD": self.global_budget_usd,
+            "CLIENT_DAILY_BUDGET_USD": self.client_daily_budget_usd,
+        }
+        missing = [name for name, cap in caps.items() if cap is None]
+        if missing:
+            raise ValueError(f"{', '.join(missing)} must be set when APP_ENV=prod")
 
     # --- Derived values -------------------------------------------------------------
 
@@ -220,6 +256,19 @@ class Settings(BaseSettings):
         if direct and self.database_direct_url is not None:
             return self.database_direct_url.get_secret_value()
         return self.database_url.get_secret_value()
+
+
+def _check_access_code(code: str) -> None:
+    # The same rules as Terraform's `access_code` variable.
+    if len(code) < _MIN_ACCESS_CODE_LEN:
+        raise ValueError(
+            f"ACCESS_CODE must be set to at least {_MIN_ACCESS_CODE_LEN} characters "
+            "when APP_ENV=prod"
+        )
+    if not all(" " <= char <= "~" for char in code):
+        raise ValueError("ACCESS_CODE must be printable ASCII")
+    if code != code.strip():
+        raise ValueError("ACCESS_CODE must not start or end with whitespace")
 
 
 @lru_cache(maxsize=1)

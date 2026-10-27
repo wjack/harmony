@@ -58,8 +58,22 @@ export default [
   ),
   page(
     "Harmony settings: autonomy",
-    "The default mode with what each one means, and the trusted organizations that have their own.",
+    "The default mode with what each one means, the trusted organizations that have their own, and whether requests wait for a member's review.",
     "autonomy",
+  ),
+  page(
+    "Harmony settings: send without review",
+    "Northlake sends requests as soon as Claude writes them: the pane warns while that's the default.",
+    "autonomy",
+    members.helen,
+    { patch: { send_without_confirmation: true } },
+  ),
+  page(
+    "Harmony settings: send without review, view only",
+    "Raj isn't an admin of Northlake: he sees the default and that he can change it for one chat, but not the setting itself.",
+    "autonomy",
+    members.raj,
+    { patch: { send_without_confirmation: true } },
   ),
   page(
     "Harmony settings: skip",

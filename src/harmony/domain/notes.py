@@ -5,7 +5,8 @@ Notes are never visible to the counterparty or in a representative's context.
 note as the question.
 
 `add` queues an `internal_note` snapshot (append-only, version 1, through
-`UnitOfWork.add_event`) to the owning org's thread scope only.
+`UnitOfWork.add_event`) to the owning org's thread scope only. `add_unsummarized` is the
+one note Claude writes itself: why a side has no closing summary.
 
 Owner: E4.
 """
@@ -13,16 +14,16 @@ Owner: E4.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.db import repo
 from harmony.db.models import InternalNote, Member
-from harmony.db.models.choices import NoteAuthor
+from harmony.db.models.choices import FailureReason, NoteAuthor
 from harmony.db.uow import UnitOfWork
 from harmony.domain import threads
 from harmony.events.schemas import EntitySnapshot, EventScope
@@ -117,6 +118,38 @@ async def add(
     return note
 
 
+_UNSUMMARIZED_BECAUSE: Final[Mapping[FailureReason, str]] = {
+    "session_budget": "this session's live-model budget had too little left",
+    "daily_budget": "the daily live-model budget had too little left",
+    "demo_budget": "the demo's live-model budget had too little left",
+    "paused": "live models were paused",
+    "model_error": "the model service returned an error",
+    "refused": "the model declined to go on",
+}
+
+
+async def add_unsummarized(
+    uow: UnitOfWork, *, thread_id: UUID, org_id: UUID, turn_id: UUID, reason: FailureReason
+) -> InternalNote:
+    """Claude's note to `org_id` that its last turn (`turn_id`), after the other side
+    closed, failed and wrote no summary. Nothing else says why the summary is missing:
+    after a real close the thread's `stop_reason` stays empty, and after the other
+    side's refusal (which closes it for that side) the Stopped banner says only why the
+    thread ended. Idempotent on the turn."""
+    return await add(
+        uow,
+        note_id=uuid5(turn_id, "unsummarized"),
+        thread_id=thread_id,
+        org_id=org_id,
+        author_kind="claude",
+        body=(
+            f"Claude couldn't write a closing summary for our side: "
+            f"{_UNSUMMARIZED_BECAUSE[reason]} when its last turn ran. The other side "
+            "had already closed the conversation."
+        ),
+    )
+
+
 async def list_for(
     session: AsyncSession, *, world_id: UUID, thread_id: UUID, org_id: UUID
 ) -> list[InternalNote]:
@@ -130,4 +163,11 @@ async def list_for(
     )
 
 
-__all__ = ["BODY_MAX_CHARS", "INTERNAL_NOTE_ENTITY", "add", "list_for", "parse_mentions"]
+__all__ = [
+    "BODY_MAX_CHARS",
+    "INTERNAL_NOTE_ENTITY",
+    "add",
+    "add_unsummarized",
+    "list_for",
+    "parse_mentions",
+]

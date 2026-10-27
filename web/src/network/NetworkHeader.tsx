@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Eye, UserRound } from "lucide-react";
 
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuTrigger, OrgAvatar, Tooltip, cx } from "../shell/ui";
+import { useUnavailable } from "../shell/unavailable";
 import { formatAgo } from "./format";
 import type { ParticipantCounts } from "./status";
 import { countsLine } from "./status";
@@ -12,8 +13,8 @@ const REQUEST_STATUS: Record<RequestStatus, string> = {
 };
 
 // The big run (one request fanned out to the whole network) is a later phase
-// (ARCHITECTURE.md §15, P3); until then its option says so instead of opening a world
-// that has nothing of its own to show.
+// (ARCHITECTURE.md §15, P3); until then its option opens the not-available dialog
+// instead of a world that has nothing of its own to show.
 const WORLDS: readonly { value: WorldLens; label: string; hint: string; available: boolean }[] = [
   { value: "desk", label: "Your desk", hint: "Your own requests and the orgs they reached", available: true },
   {
@@ -44,12 +45,12 @@ function RequestPicker({ requests, requestId, onChange, now }: RequestPickerProp
           type="button"
           className="-ml-2 flex h-8 max-w-[320px] min-w-[160px] shrink-0 items-center gap-1.5 rounded-control px-2 text-sm font-medium text-ink transition-colors hover:bg-hover data-[state=open]:bg-hover"
         >
-          <span className="truncate">{current?.title ?? "Choose a request"}</span>
+          <span className="truncate">{current?.title ?? "Choose a Harmony Network Request"}</span>
           <ChevronDown size={15} strokeWidth={1.75} className="shrink-0 text-muted" aria-hidden />
         </button>
       </MenuTrigger>
       <MenuContent align="start" className="w-[380px]">
-        <MenuLabel>Network requests</MenuLabel>
+        <MenuLabel>Harmony Network Requests</MenuLabel>
         {requests.map((request) => (
           <MenuItem
             key={request.id}
@@ -82,28 +83,30 @@ interface WorldSwitchProps {
 
 /** Desk world or the big run (ARCHITECTURE.md §11.6), as a two-way segmented control. */
 export function WorldSwitch({ world, onChange }: WorldSwitchProps) {
+  const unavailable = useUnavailable();
   return (
     <div role="radiogroup" aria-label="World" className="inline-flex h-8 items-center rounded-control bg-hover p-0.5">
       {WORLDS.map((option) => {
         const selected = option.value === world;
-        const disabled = !option.available && !selected;
+        // Clickable, like every out-of-scope control: it says so rather than doing nothing.
+        const later = !option.available && !selected;
         return (
           <Tooltip key={option.value} content={option.hint} side="bottom">
             <button
               type="button"
               role="radio"
               aria-checked={selected}
-              aria-disabled={disabled}
-              aria-description={disabled ? option.hint : undefined}
+              aria-description={later ? option.hint : undefined}
               onClick={() => {
-                if (!disabled) onChange(option.value);
+                if (later) unavailable(`The ${option.label.toLowerCase()}`);
+                else onChange(option.value);
               }}
               className={cx(
                 "h-7 rounded-[6px] px-3 text-[13px] font-medium transition-colors duration-100",
                 selected
                   ? "bg-surface text-ink shadow-card"
-                  : disabled
-                    ? "cursor-default text-faint"
+                  : later
+                    ? "text-faint hover:text-muted"
                     : "text-muted hover:text-ink",
               )}
             >

@@ -37,7 +37,9 @@ EXPECTED: dict[str, frozenset[str]] = {
             "instructions",
         }
     ),
-    "side_requester": frozenset({"counterparty_name", "org_name", "member_name", "brief"}),
+    "side_requester": frozenset(
+        {"counterparty_name", "org_name", "member_name", "approval", "brief", "ask"}
+    ),
     "side_responder": frozenset({"counterparty_name", "org_name"}),
     "internal": frozenset({"org_name", "member_name", "member_title"}),
     "consult": frozenset(
@@ -136,6 +138,32 @@ def test_internal_claude_may_suggest_a_near_miss_for_the_member_to_choose() -> N
     text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
     assert "A near miss x might still reasonably want can go on the card too" in text
     assert "it starts unticked, so they decide" in text
+    assert "`suggested` false" in text
+
+
+def test_internal_claude_calls_them_harmony_network_requests() -> None:
+    text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
+    assert 'call them Harmony Network Requests (just "requests" once that\'s clear)' in text
+
+
+def test_internal_claude_writes_one_brief_and_an_ask_per_organization() -> None:
+    """Each representative sees only its own conversation (3.13 E2): parts and limits
+    go in each organization's ask, and a combined budget can't be split by anyone."""
+    text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
+    assert "write only what holds for all of them" in text
+    assert "Don't name the recipients in it." in text
+    # Only our representative reads the brief: a recipient's own never sees it.
+    assert "recipient's representative" not in text
+    assert "give every limit per organization, in its ask, never as a combined figure" in text
+
+
+def test_internal_claude_knows_either_send_mode_from_the_same_prompt() -> None:
+    """Mode-neutral (3.10): the prompt's bytes never depend on the chat's setting."""
+    text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
+    assert "Usually x approves first" in text
+    assert "In a chat set to send without review it goes out at once" in text
+    assert "The result says which." in text
+    assert "Send one request per call." in text
 
 
 def test_the_representative_sends_freely_and_consults_for_facts() -> None:
@@ -145,13 +173,25 @@ def test_the_representative_sends_freely_and_consults_for_facts() -> None:
     assert "never reaches" in text  # the close summary stays with the org
 
 
-def test_the_representative_knows_a_bare_text_reply_is_sent() -> None:
+def test_the_representative_waits_by_ending_its_turn_never_by_closing() -> None:
+    """3.13 E1, E3: `close` is for good, and a message is read exactly as written."""
+    text = render("representative", dict.fromkeys(placeholders("representative"), "x"))
+    assert "You never need `close` to wait." in text
+    assert "ends the conversation for good" in text
+    assert "They read the text exactly as written" in text
+    assert "never send notes about the conversation" in text
+
+
+def test_the_representative_knows_bare_text_is_only_a_fallback() -> None:
+    """Sent only before any message, and only when the turn brought something to
+    answer (`TurnContext.bare_text_sends`)."""
     values = dict.fromkeys(placeholders("representative"), "x")
     values["counterparty_name"] = "Henderson Lab"
     text = render("representative", values)
+    assert "Plain text is only a fallback" in text
     assert (
-        "If you end a turn with plain text before sending anything in it, that text is sent "
-        "to Henderson Lab as your message" in text
+        "when you answer what the turn brought with plain text alone, before calling any "
+        "tool, that text is sent to Henderson Lab as your message" in text
     )
 
 
@@ -159,6 +199,11 @@ def test_the_answerer_proposes_a_route_for_every_draft() -> None:
     text = render("consult", dict.fromkeys(placeholders("consult"), "x"))
     assert "Give it whether or not you set `needs_human`" in text
     assert "Otherwise null" not in text
+    # 3.13 E12: a why per assignee, addressed to them, and the one-line question.
+    assert "why it's them in one short clause addressed to that person" in text
+    assert "- `short_question`:" in text
+    redraft = render("consult_redraft", dict.fromkeys(placeholders("consult_redraft"), "x"))
+    assert "with its own `route` and `short_question`" in redraft
 
 
 def test_the_answerer_says_where_an_answer_beyond_the_description_comes_from() -> None:
@@ -188,6 +233,16 @@ def test_the_answerer_asks_for_a_person_only_where_r4_6_says() -> None:
 
 def test_the_responder_side_never_sees_a_brief() -> None:
     assert "brief" not in placeholders("side_responder")
+    assert "ask" not in placeholders("side_responder")
+
+
+def test_the_requester_asks_only_for_its_own_part() -> None:
+    """3.13 E2: the brief may cover other organizations; the ask is this one's."""
+    values = dict.fromkeys(placeholders("side_requester"), "x")
+    values["counterparty_name"] = "Northlake"
+    text = render("side_requester", values)
+    assert "Ask Northlake only for what the ask covers." in text
+    assert "The brief may cover other organizations; never mention them or their parts." in text
 
 
 def test_the_requester_waits_for_the_counterparty_to_confirm_before_it_closes() -> None:

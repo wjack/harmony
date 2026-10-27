@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router";
 
 import type { MemberView } from "../api/types";
 import { useDemoStory } from "../app/queries";
+import { useBudgetState } from "../chat/failureCopy";
 import { useSwitchAccount } from "../demo/accounts";
 import { Button, Spark } from "../shell/ui";
 import {
@@ -80,6 +81,7 @@ export function NetworkScreen({
   const lensSession = useLensSession(world);
   const story = useDemoStory();
   const now = useNow();
+  const budget = useBudgetState();
   const [selected, setSelected] = useState<string | null>(initialSelectedOrgId ?? null);
   const { switchTo, pending: switching } = useSwitchAccount();
 
@@ -169,6 +171,7 @@ export function NetworkScreen({
             selectedOrgId={selectedNode === null ? null : selected}
             onSelectOrg={setSelected}
             now={now}
+            budget={budget}
           />
         </div>
       </div>
@@ -251,6 +254,7 @@ export function NetworkScreen({
               setSelected(null);
             }}
             now={now}
+            budget={budget}
           />
         )}
       </div>

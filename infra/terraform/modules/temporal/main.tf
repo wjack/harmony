@@ -46,6 +46,6 @@ resource "temporalcloud_apikey" "app" {
   owner_type   = "service-account"
   owner_id     = temporalcloud_service_account.app.id
   # A literal date after the interview window (ARCHITECTURE.md §13). To rotate, change
-  # it and apply: Terraform replaces the key and the env group picks up the new token.
+  # it and apply: Terraform replaces the key and both services' env gets the new token.
   expiry_time = "2027-01-31T00:00:00Z"
 }

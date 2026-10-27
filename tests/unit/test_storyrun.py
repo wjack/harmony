@@ -6,22 +6,27 @@ check, and the command's setup errors."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from google.protobuf.timestamp_pb2 import Timestamp
+from pydantic import JsonValue
 from temporalio.api.taskqueue.v1 import PollerInfo
 from temporalio.api.workflowservice.v1 import DescribeTaskQueueResponse
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from typer.testing import CliRunner
 
+from harmony.agents.consult import HELD_DECLINED
 from harmony.agents.models import (
     AssistantTextItem,
     CardRecipient,
@@ -37,27 +42,71 @@ from harmony.api.routes.escalations import ResolveEscalation
 from harmony.api.routes.inbox import Inbox, InboxEscalation, InboxItem
 from harmony.api.routes.threads import ThreadDetail, ThreadMessageView
 from harmony.api.routes.workspace import EscalationDraftView, EscalationView, ThreadWorkspace
-from harmony.auth.views import MemberDirectory, MemberView, OrgRef, SessionView, WorldView
+from harmony.auth.views import (
+    InternalModelView,
+    MemberDirectory,
+    MemberView,
+    OrgRef,
+    SessionView,
+    WorldView,
+)
 from harmony.cli import app as cli
-from harmony.db.models.choices import EscalationKind, Fit, ThreadMessageKind, ThreadState
+from harmony.cli_run import RunOptions, load_story
+from harmony.db.models.choices import (
+    EscalationKind,
+    Fit,
+    ModelRole,
+    ThreadMessageKind,
+    ThreadState,
+)
+from harmony.domain.conversations import SendMode
 from harmony.domain.requests import RecipientStatus, RequestStatusView, WaitingOn
 from harmony.errors import WorldRetired
 from harmony.llm.errors import BadRequest
+from harmony.llm.pricing import HAIKU_5_5, OPUS_5_5, call_cost, worst_case_cost
+from harmony.llm.requests import ROLE_PROFILES, Tier, production_body
+from harmony.llm.scripted import ToolUseBlock, load_cassettes
 from harmony.seeds.loader import load_scenario
 from harmony.seeds.schema import InlineQuestion, Resolved, Routed, StorySpec
 from harmony.storyrun.api import ApiError, HarmonyApi
-from harmony.storyrun.beats import recast
+from harmony.storyrun.beats import free_form, recast
+from harmony.storyrun.checks import (
+    EmptyEndTurn,
+    SentRequest,
+    duplicate_auto_recipients,
+    empty_end_turn_failed,
+    ended_at,
+    opener_leak,
+    silent_turn_pairs,
+)
 from harmony.storyrun.decide import (
     NO_DRAFT_TEXT,
+    ApproveAll,
     PendingEscalation,
     PromptDecisions,
     StoryDecisions,
 )
 from harmony.storyrun.play import StoryPlayer
-from harmony.storyrun.report import beat_lines, chat_lines, thread_lines
-from harmony.storyrun.worker import ActivityLog, active_pollers, exited
-from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
+from harmony.storyrun.report import (
+    beat_lines,
+    chat_lines,
+    failure_lines,
+    latency_lines,
+    model_lines,
+    thread_lines,
+)
+from harmony.storyrun.spend import (
+    CallRow,
+    TurnCalls,
+    as_measured,
+    at_production_prices,
+    peak_usd,
+    percentile_ms,
+)
+from harmony.storyrun.worker import MODEL_ATTEMPTS, ActivityLog, active_pollers, exited
+from harmony.temporal.policies import CHAT_TASK_QUEUE, MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
 from harmony.temporal.workflows.payloads import (
+    BUDGET_EXHAUSTED_ERROR,
     CardResolved,
     EscalationResolved,
     conversation_workflow_id,
@@ -70,6 +119,7 @@ NOW = datetime(2026, 10, 26, 9, tzinfo=UTC)
 WORLD = uuid4()
 BRIEF = "XRD and SEM/EDS on 12 powders by Nov 6, and a holder\n\nWhat is needed, in prose."
 CARD_FITS: dict[str, Fit] = {"northlake": "strong", "ridgeline": "strong", "calder": "no"}
+CASSETTES = Path(__file__).parents[1] / "fixtures" / "cassettes"
 
 
 def org_ref(slug: str) -> OrgRef:
@@ -153,6 +203,8 @@ class FakeStory:
     northlake_expires: bool = False
     # How long the world has been live when the story starts.
     world_age: timedelta = timedelta(days=4)
+    # The chat's send-mode override, as the player started it.
+    send_without_confirmation: bool | None = None
 
     # --- HarmonyApi ---------------------------------------------------------------
 
@@ -168,7 +220,10 @@ class FakeStory:
     async def members(self) -> MemberDirectory:
         return MemberDirectory(featured=self._members(), all=[])
 
-    async def start_conversation(self, text: str) -> ConversationCreated:
+    async def start_conversation(
+        self, text: str, *, send_without_confirmation: bool | None = None
+    ) -> ConversationCreated:
+        self.send_without_confirmation = send_without_confirmation
         self.items.append(UserTextItem(id="msg:1", at=NOW, text=text, member_id=None))
         return ConversationCreated(id=self.conversation_id, message_id=uuid4())
 
@@ -183,7 +238,8 @@ class FakeStory:
             pending_card_id=self.card if self.card_status == "pending" else None,
             queued_message_ids=[],
             turn_in_flight=False,
-            turn_failed=False,
+            turn_failure=None,
+            send_mode=SendMode(override=None, org_default=False, effective=False),
             version=self.polls,
         )
 
@@ -401,6 +457,7 @@ class FakeStory:
                 org=org_ref(slug),
                 fit=CARD_FITS[slug],
                 reason="Fits.",
+                sent=slug in self._recipients(),
                 participant="screened",
                 thread_id=None,
                 thread_state=None,
@@ -419,6 +476,7 @@ class FakeStory:
             org=org_ref(slug),
             fit=CARD_FITS[slug],
             reason="Fits.",
+            sent=True,
             participant=participant,
             thread_id=thread,
             thread_state=state,
@@ -446,6 +504,9 @@ class FakeStory:
                 ff_offset_s=0,
             ),
             member=member_view(self.acting),
+            internal_model=InternalModelView(
+                id="claude-opus-5-5", label="Scripted", adaptive=False
+            ),
         )
 
 
@@ -625,6 +686,161 @@ async def test_a_stopped_worker_fails_the_run() -> None:
     assert (run.outcome, run.detail) == ("failed", "the worker stopped")
 
 
+@dataclass
+class FakeChat(FakeStory):
+    """A free-form chat whose one message yields two requests, to Northlake and then to
+    Ridgeline, each thread closing three polls after its request starts. Claude raises
+    the second card once the first went out, and sums up once both requests closed.
+    With `auto` the chat sends without review: each card goes out as it is raised;
+    otherwise each waits for the player's approval."""
+
+    auto: bool = False
+    # Card → its request, None while it waits.
+    raised: dict[UUID, UUID | None] = field(default_factory=dict[UUID, UUID | None])
+    # Request → its org and the poll it started at.
+    started: dict[UUID, tuple[str, int]] = field(default_factory=dict[UUID, tuple[str, int]])
+    approvals: list[ApproveCard] = field(default_factory=list[ApproveCard])
+    seen_closed: set[UUID] = field(default_factory=set[UUID])
+
+    async def conversation(self, conversation_id: UUID) -> ConversationDetail:
+        assert self.acting == "alex"
+        self.polls += 1
+        if len(self.raised) < 2 and None not in self.raised.values():
+            card_id = uuid4()
+            self.raised[card_id] = None
+            if self.auto:
+                self._start(card_id)
+        elif len(self.started) == 2 and all(map(self._closed, self.started)):
+            if not self._summarized():
+                self.items.append(
+                    AssistantTextItem(
+                        id="msg:2",
+                        at=NOW + timedelta(minutes=10),
+                        markdown="Both booked.",
+                        turn_id=None,
+                    )
+                )
+        pending = next((c for c, r in self.raised.items() if r is None), None)
+        return ConversationDetail(
+            id=conversation_id,
+            title="Characterization",
+            owner=member_ref("alex"),
+            items=[*self.items, *(self._card(c) for c in self.raised)],
+            pending_card_id=pending,
+            queued_message_ids=[],
+            turn_in_flight=len(self.raised) < 2 and pending is None,
+            turn_failure=None,
+            send_mode=SendMode(
+                override=self.send_without_confirmation, org_default=False, effective=self.auto
+            ),
+            version=self.polls,
+        )
+
+    async def approve_card(self, card_id: UUID, body: ApproveCard) -> CardResolved:
+        assert not self.auto, "nobody approves a card sent without review"
+        self.approvals.append(body)
+        request_id = self._start(card_id)
+        return CardResolved(card_id=card_id, status="approved", request_id=request_id)
+
+    async def request(self, request_id: UUID) -> RequestStatusView:
+        org, _ = self.started[request_id]
+        closed = self._closed(request_id)
+        if closed:
+            self.seen_closed.add(request_id)
+        return RequestStatusView(
+            id=request_id,
+            title=f"Work with {org}",
+            status="closed" if closed else "active",
+            brief=BRIEF,
+            conversation_id=self.conversation_id,
+            created_at=NOW,
+            screened=None,
+            recipients=[
+                RecipientStatus(
+                    org=org_ref(org),
+                    fit="strong",
+                    reason="Fits.",
+                    sent=True,
+                    participant="closed" if closed else "replied",
+                    thread_id=self.threads[org],
+                    thread_state="closed" if closed else "active",
+                    waiting_on=None,
+                    latest_line="Booked." if closed else "Checking.",
+                    close_summary="Booked." if closed else None,
+                    last_activity_at=NOW,
+                )
+            ],
+            version=self.polls,
+        )
+
+    def _start(self, card_id: UUID) -> UUID:
+        request_id = uuid4()
+        self.raised[card_id] = request_id
+        self.started[request_id] = (self._org(card_id), self.polls)
+        return request_id
+
+    def _closed(self, request_id: UUID) -> bool:
+        return self.polls - self.started[request_id][1] >= 3
+
+    def _org(self, card_id: UUID) -> str:
+        return ("northlake", "ridgeline")[list(self.raised).index(card_id)]
+
+    def _card(self, card_id: UUID) -> OutreachCardItem:
+        request_id = self.raised[card_id]
+        return OutreachCardItem(
+            id=f"card:{card_id}",
+            at=NOW,
+            card_id=card_id,
+            status="pending" if request_id is None else "approved",
+            auto=self.auto,
+            brief=BRIEF,
+            recipients=[
+                CardRecipient(org=org_ref(self._org(card_id)), fit="strong", reason="Fits.")
+            ],
+            screened=None,
+            feedback=None,
+            request_id=request_id,
+            version=1,
+        )
+
+
+@pytest.mark.parametrize("auto", [False, True])
+async def test_one_chat_yields_two_requests_and_both_are_followed_to_the_end(
+    auto: bool,
+) -> None:
+    world = FakeChat(auto=auto)
+    clock = FakeClock()
+    story = free_form("alex", "Book XRD on {+11d} and a holder.")
+    play = StoryPlayer(
+        cast(HarmonyApi, world),
+        SCENARIO,
+        story,
+        ApproveAll(),
+        log=list[str]().append,
+        clock=clock,
+        sleep=clock.sleep,
+        send_without_review=auto,
+    )
+    run = await play.play()
+    assert (run.outcome, run.detail) == ("done", None)
+    assert run.request_ids == list(world.started)
+    assert len(run.request_ids) == 2
+    assert world.seen_closed == set(world.started), "each request polled until it closed"
+    assert run.threads == {
+        world.threads["northlake"]: "northlake",
+        world.threads["ridgeline"]: "ridgeline",
+    }
+    assert world.send_without_confirmation is (True if auto else None)
+    if auto:
+        assert world.approvals == []
+    else:
+        assert world.approvals == [
+            ApproveCard(recipients=[org_ref("northlake").id]),
+            ApproveCard(recipients=[org_ref("ridgeline").id]),
+        ]
+    assert await play.settle(run)
+
+
 # --- Decisions ------------------------------------------------------------------------
 
 
@@ -673,7 +889,9 @@ async def test_an_escalation_asked_again_keeps_its_rule() -> None:
     assert go_ahead.text == "Yes, go ahead with Ridgeline."
 
 
-def card(fits: dict[str, Fit]) -> OutreachCardItem:
+def card(
+    fits: dict[str, Fit], *, suggested: frozenset[str] | set[str] = frozenset()
+) -> OutreachCardItem:
     return OutreachCardItem(
         id="card:1",
         at=NOW,
@@ -681,7 +899,10 @@ def card(fits: dict[str, Fit]) -> OutreachCardItem:
         status="pending",
         brief=BRIEF,
         recipients=[
-            CardRecipient(org=org_ref(slug), fit=fit, reason="Fits.") for slug, fit in fits.items()
+            CardRecipient(
+                org=org_ref(slug), fit=fit, reason="Fits.", suggested=slug in suggested or None
+            )
+            for slug, fit in fits.items()
         ],
         screened=None,
         feedback=None,
@@ -698,9 +919,31 @@ async def test_the_outreach_goes_to_the_orgs_the_story_expects() -> None:
     unfit: dict[str, Fit] = {"northlake": "no", "ridgeline": "strong", "calder": "no"}
     assert await decide.outreach(card(unfit)) == ApproveCard(recipients=expected)
     assert await decide.outreach(card({"northlake": "strong", "ridgeline": "possible"})) == (
-        ApproveCard()
+        ApproveCard(recipients=expected)
     )
-    assert await decide.outreach(card({"calder": "no"})) == ApproveCard(), "never none"
+    # None the story expects: the rows the card proposes, named, never none.
+    calder = [org_ref("calder").id]
+    assert await decide.outreach(card({"calder": "no"})) == ApproveCard(recipients=calder)
+    calder_suggested = card({"ridgeline": "strong", "calder": "possible"}, suggested={"calder"})
+    assert await decide.outreach(calder_suggested) == ApproveCard(
+        recipients=[org_ref("ridgeline").id]
+    ), "the story's org is kept, not the card's suggestion"
+    assert await decide.outreach(
+        card({"calder": "possible", "vantage": "no"}, suggested={"vantage"})
+    ) == ApproveCard(recipients=[org_ref("vantage").id]), "the card's suggestion"
+    assert await decide.outreach(card({"calder": "possible", "vantage": "no"})) == ApproveCard(
+        recipients=calder
+    ), "without suggestions, the rows that fit"
+
+
+async def test_approving_all_names_every_listed_row_and_takes_drafts_as_written() -> None:
+    decide = ApproveAll()
+    every = [org_ref(slug).id for slug in CARD_FITS]
+    assert await decide.outreach(card(CARD_FITS)) == ApproveCard(recipients=every)
+    drafted = await decide.escalation(pending("northlake", "henderson"))
+    assert (drafted.action, drafted.text, drafted.draft_rev) == ("approve", None, 2)
+    nothing = await decide.escalation(pending("calder", "henderson", with_draft=False))
+    assert (nothing.action, nothing.text) == ("decline", NO_DRAFT_TEXT)
 
 
 async def test_prompting_defaults_to_the_storys_choice() -> None:
@@ -781,10 +1024,254 @@ def test_a_close_shows_as_a_marker_without_its_summary() -> None:
     assert "2. Northlake Characterization Core closed the conversation (close)." in text
 
 
+def test_models_other_than_the_override_are_a_setup_failure() -> None:
+    lines, failed_setup = model_lines([HAIKU_5_5], HAIKU_5_5)
+    assert (lines, failed_setup) == ([f"  models used: {HAIKU_5_5}"], False)
+    lines, failed_setup = model_lines([HAIKU_5_5, OPUS_5_5], HAIKU_5_5)
+    assert failed_setup
+    assert f"SETUP FAILURE: {OPUS_5_5} isn't the override {HAIKU_5_5}" in lines[-1]
+    assert model_lines([OPUS_5_5], None) == ([f"  models used: {OPUS_5_5}"], False)
+
+
+def test_latency_is_reported_at_the_nearest_rank() -> None:
+    assert percentile_ms([400, 100, 300, 200], 50) == 200
+    assert percentile_ms(list(range(1, 101)), 95) == 95
+    assert percentile_ms([], 50) is None
+    assert latency_lines([1000, 3000]) == ["  turn latency: p50 1.0s, p95 3.0s (of 2 turns)"]
+
+
+# --- Re-pricing (3.14) ----------------------------------------------------------------
+
+BODY: dict[str, JsonValue] = {
+    "model": HAIKU_5_5,
+    "max_tokens": 4000,
+    "messages": [{"role": "user", "content": "Find XRD time for 12 powders."}],
+}
+USAGE: dict[str, JsonValue] = {"input_tokens": 1200, "output_tokens": 600}
+
+
+def timed(role: ModelRole, tier: Tier, start_s: int, end_s: int) -> TurnCalls:
+    """A turn of one call, as it ran on the override's Haiku."""
+    call = CallRow(json.dumps(BODY), USAGE, Decimal("0.0030"), NOW + timedelta(seconds=start_s))
+    return TurnCalls(
+        role, tier, NOW + timedelta(seconds=start_s), NOW + timedelta(seconds=end_s), (call,)
+    )
+
+
+def production(role: ModelRole, tier: Tier) -> tuple[Decimal, Decimal]:
+    """The turn's hold and settled cost on its role's production model."""
+    model = ROLE_PROFILES[(role, tier)].model
+    hold = worst_case_cost(production_body(BODY, role, tier))
+    return hold, call_cost(USAGE, requested_model=model, served_model=model)
+
+
+def test_the_re_priced_peak_puts_each_turn_on_its_production_model() -> None:
+    assert ROLE_PROFILES[("internal", "background")].model == HAIKU_5_5
+    assert ROLE_PROFILES[("representative", "featured")].model == OPUS_5_5
+    chat_hold, chat_settled = production("internal", "background")
+    rep_hold, rep_settled = production("representative", "featured")
+    assert chat_hold == worst_case_cost(BODY), "background chat runs on Haiku in production"
+    assert rep_hold > chat_hold
+    assert rep_settled > chat_settled
+    chat = timed("internal", "background", 0, 10)
+    # Overlapping: both turns hold their reservations at once.
+    rep = timed("representative", "featured", 5, 20)
+    assert peak_usd([chat, rep], at_production_prices) == chat_hold + rep_hold
+    # Back to back: the chat turn has settled when the representative's reserves.
+    later = timed("representative", "featured", 10, 20)
+    assert peak_usd([chat, later], at_production_prices) == chat_settled + rep_hold
+    # As measured, both ran on Haiku.
+    assert peak_usd([chat, rep], as_measured) == 2 * worst_case_cost(BODY)
+
+
+# --- Engine checks --------------------------------------------------------------------
+
+
+def openers() -> dict[str, str]:
+    """Henderson's first message to each recipient in the story's cassette."""
+    entries = load_cassettes(CASSETTES / "story_suggested_threads.yaml")
+    found: dict[str, str] = {}
+    for (_, org, role, thread, turn, step), entry in entries.items():
+        if (org, role, turn, step) != ("henderson", "representative", 1, 0) or thread is None:
+            continue
+        for block in entry.content:
+            if isinstance(block, ToolUseBlock) and block.name == "send_message":
+                found[thread.removeprefix("henderson.")] = str(block.input["text"])
+    return found
+
+
+def test_the_opener_patterns_pass_the_cassette_openers() -> None:
+    said = openers()
+    # Henderson Lab's own affiliation and the XRD dome mount are its own business.
+    assert "Northlake University" in said["ridgeline"]
+    assert "dome mount" in said["northlake"]
+    assert opener_leak("harmony-demo", "northlake", said["northlake"]) is None
+    assert opener_leak("harmony-demo", "ridgeline", said["ridgeline"]) is None
+    assert opener_leak("harmony-demo", "calder", said["calder"]) is None
+
+
+@pytest.mark.parametrize(
+    ("recipient", "opener", "leak"),
+    [
+        ("ridgeline", "We also need SEM/EDS on the powders.", "SEM"),
+        (
+            "ridgeline",
+            "Northlake's characterization core will run the XRD.",
+            "characterization core",
+        ),
+        ("ridgeline", "We need XRD on 12 powders and a holder.", "XRD on 12"),
+        ("northlake", "Ridgeline is making the holder.", "Ridgeline"),
+        ("northlake", "We're having a transfer holder machined.", "holder"),
+    ],
+)
+def test_the_opener_patterns_catch_another_recipients_part(
+    recipient: str, opener: str, leak: str
+) -> None:
+    assert opener_leak("harmony-demo", recipient, opener) == leak
+
+
+_TURN = UUID(int=21)
+_CARD_CALL = "toolu_card"
+_NOTHING_NEW_TEXT = "No new message from Henderson Lab since your last turn."
+
+
+def _empty(step_idx: int, *opening: dict[str, JsonValue], notices: bool = False) -> EmptyEndTurn:
+    return EmptyEndTurn(turn_id=_TURN, step_idx=step_idx, opening=list(opening), notices=notices)
+
+
+def _text(text: str) -> dict[str, JsonValue]:
+    return {"type": "text", "text": text}
+
+
+def _result(tool_use_id: str, content: str = "Sent.") -> dict[str, JsonValue]:
+    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": content}
+
+
+@pytest.mark.parametrize(
+    ("call", "approved", "failed"),
+    [
+        # A new turn's first call answers the member, the network or the counterparty.
+        (_empty(0, _text("Find an XRD lab.")), None, True),
+        (_empty(0, _result("toolu_owed"), _text("Can you do Nov 4?")), None, True),
+        # ...unless it is a representative's code-written "nothing new".
+        (_empty(0, _text(_NOTHING_NEW_TEXT)), None, False),
+        (_empty(0, _text(_NOTHING_NEW_TEXT), notices=True), None, False),
+        # ...or only its held messages declined without a reason (a bare-text reply's
+        # decline answers no call, so it is text).
+        (_empty(0, _result("toolu_send", HELD_DECLINED)), None, False),
+        (
+            _empty(0, _result("toolu_a", HELD_DECLINED), _result("toolu_b", HELD_DECLINED)),
+            None,
+            False,
+        ),
+        (_empty(0, _text(HELD_DECLINED), notices=True), None, False),
+        # A decline with a reason, or with the counterparty's message, asks for one.
+        (
+            _empty(0, _result("toolu_send", f"{HELD_DECLINED} What you may say:\nNot yet.")),
+            None,
+            True,
+        ),
+        (_empty(0, _result("toolu_send", HELD_DECLINED), _text("Can you do Nov 4?")), None, True),
+        # A turn resumed at step 3 on its own card: quiet once the request went out.
+        (_empty(3, _result(_CARD_CALL, "approved; request R sent to Northlake")), True, False),
+        (_empty(3, _result(_CARD_CALL, "rejected: ask Ridgeline")), False, True),
+        (_empty(3, _result(_CARD_CALL, "approved; request R sent"), notices=True), True, True),
+        # After the turn's own tool results.
+        (_empty(3, _result("toolu_search", "Two labs fit.")), None, False),
+        (_empty(1, _result("toolu_send")), None, False),
+    ],
+)
+def test_an_empty_end_turn_fails_only_on_a_runs_first_call_that_owed_an_answer(
+    call: EmptyEndTurn, approved: bool | None, failed: bool
+) -> None:
+    """3.13 E1b, as the runtime splits it: a resumed turn's first call comes at step > 0,
+    so the step alone doesn't say which call was a run's first."""
+    cards = {} if approved is None else {(_TURN, _CARD_CALL): approved}
+    assert empty_end_turn_failed(call, cards) is failed
+
+
+def _request(chat: int, minute: int, *recipients: UUID, auto: bool = True) -> SentRequest:
+    return SentRequest(
+        id=UUID(int=1000 + minute),
+        conversation_id=UUID(int=chat),
+        created_at=datetime(2026, 10, 26, 9, minute, tzinfo=UTC),
+        auto=auto,
+        recipients=list(recipients),
+    )
+
+
+def test_a_duplicate_auto_recipient_is_one_still_in_touch_from_the_same_chat() -> None:
+    northlake, ridgeline = UUID(int=1), UUID(int=2)
+    names = {northlake: "Northlake", ridgeline: "Ridgeline"}
+    first = _request(7, 0, northlake)
+    reviewed = _request(7, 1, ridgeline, auto=False)
+    # Northlake's thread ended at 9:05: a follow-up then is no duplicate.
+    follow_up = _request(7, 10, northlake)
+    # Ridgeline's reviewed thread is still open, its thread not even started.
+    overlap = _request(7, 12, ridgeline)
+    elsewhere = _request(8, 13, ridgeline)
+    ended = {(first.id, northlake): datetime(2026, 10, 26, 9, 5, tzinfo=UTC)}
+
+    found = duplicate_auto_recipients(
+        [elsewhere, overlap, follow_up, reviewed, first], ended, names
+    )
+
+    assert found == [
+        f"Ridgeline: request {overlap.id} while request {reviewed.id} was still in touch"
+    ]
+
+
+def test_a_thread_ended_when_it_first_went_terminal_not_at_its_last_summary() -> None:
+    thread, other = UUID(int=31), UUID(int=32)
+    at = "2026-10-26T09:{:02d}:00+00:00".format
+    snapshots: list[tuple[UUID, int, dict[str, JsonValue]]] = [
+        (thread, 3, {"state": "closed", "last_activity_at": at(7)}),
+        (thread, 1, {"state": "active", "last_activity_at": at(1)}),
+        # The same version reaches both parties' scopes.
+        (thread, 2, {"state": "closed", "last_activity_at": at(5)}),
+        (thread, 2, {"state": "closed", "last_activity_at": at(5)}),
+        (other, 1, {"state": "awaiting_principal", "last_activity_at": at(2)}),
+    ]
+
+    assert ended_at(snapshots) == {thread: datetime(2026, 10, 26, 9, 5, tzinfo=UTC)}
+
+
+def test_silent_turn_pairs_count_as_the_thread_does() -> None:
+    """Two quiet turns in a row on one thread are a pair; an acting turn resets the run.
+    A refusal isn't quiet, and once a turn closes or is refused, the last turn after it
+    only summarizes (3.13 E3)."""
+    one, two = UUID(int=41), UUID(int=42)
+    t = [UUID(int=100 + i) for i in range(12)]
+    turns: list[tuple[UUID, UUID | None]] = [
+        (t[0], one),  # sent
+        (t[1], one),  # quiet
+        (t[2], two),  # quiet, another thread
+        (t[3], one),  # quiet: a pair on thread one
+        (t[4], two),  # sent
+        (t[5], two),  # quiet
+        (t[6], two),  # refused: not quiet, and it ends the thread
+        (t[7], two),  # the last turn: only its summary counts
+        (t[8], one),  # quiet
+        (t[9], one),  # closed
+        (t[10], one),  # the last turn, quiet
+    ]
+    acted = {t[0], t[4], t[9]}
+    ends = {t[6], t[9]}
+
+    assert silent_turn_pairs(turns, acted, ends) == 1
+
+
 # --- The worker's activity log --------------------------------------------------------
 
 
-def failed(error: BaseException, *, queue: str = MODEL_TASK_QUEUE, workflow: str = "w:1") -> bool:
+def failed(
+    error: BaseException,
+    *,
+    queue: str = MODEL_TASK_QUEUE,
+    workflow: str = "w:1",
+    attempt: int = 1,
+    log: ActivityLog | None = None,
+) -> bool:
     """Log `error` as temporalio logs a failed activity attempt; whether it was kept."""
     record = logging.LogRecord(
         "temporalio.activity",
@@ -795,8 +1282,8 @@ def failed(error: BaseException, *, queue: str = MODEL_TASK_QUEUE, workflow: str
         None,
         (type(error), error, None),
     )
-    record.temporal_activity = {"workflow_id": workflow, "task_queue": queue, "attempt": 1}
-    return LOG.filter(record)
+    record.temporal_activity = {"workflow_id": workflow, "task_queue": queue, "attempt": attempt}
+    return (log or LOG).filter(record)
 
 
 LOG = ActivityLog()
@@ -813,6 +1300,38 @@ def test_the_activity_log_keeps_model_calls_that_failed_for_good() -> None:
         "w:a": "BadRequest: no cassette entry",
         "w:b": "BudgetExhausted: budget",
     }
+
+
+def test_the_activity_log_counts_failed_attempts_by_kind_and_retries() -> None:
+    log = ActivityLog()
+    failed(RuntimeError("overloaded"), workflow="w:a", log=log)
+    failed(RuntimeError("overloaded"), workflow="w:a", attempt=2, log=log)
+    # The last attempt of a retryable error is a failure, not a retry.
+    failed(RuntimeError("overloaded"), workflow="w:b", attempt=MODEL_ATTEMPTS, log=log)
+    refused = ApplicationError(
+        "session cap", {"kind": "session"}, type=BUDGET_EXHAUSTED_ERROR, non_retryable=True
+    )
+    failed(refused, queue=CHAT_TASK_QUEUE, workflow="w:c", log=log)
+    failed(ApplicationError("cut off", type="TurnIncomplete"), workflow="w:d", log=log)
+    failed(BadRequest("a database activity"), queue=MAIN_TASK_QUEUE, log=log)
+    assert log.errors == {
+        "RuntimeError": 3,
+        "BudgetExhausted (session)": 1,
+        "TurnIncomplete": 1,
+    }
+    assert log.retries == 2
+    assert log.failures == {
+        "w:b": "RuntimeError: overloaded",
+        "w:c": "BudgetExhausted: session cap",
+        "w:d": "TurnIncomplete: cut off",
+    }
+    lines = "\n".join(failure_lines(1, {"demo_budget": 1}, log))
+    assert "refusals: 1" in lines
+    assert "threads stopped short: demo_budget 1" in lines
+    assert "TurnIncomplete: 1" in lines
+    assert "BudgetExhausted: BudgetExhausted (session) 1" in lines
+    assert "model retries: 2" in lines
+    assert "n/a (external worker)" in "\n".join(failure_lines(0, {}, None))
 
 
 def test_the_activity_log_drops_a_retired_worlds_failures() -> None:
@@ -888,6 +1407,10 @@ def test_a_poller_from_an_exited_local_process_is_stale() -> None:
         (["harmony-demo", "--as", "maya"], "the cassettes play alex's chat (chat:alex:1)"),
         (["harmony-demo", "--as", "helen", "--live"], "the story is Henderson Lab's request"),
         (["harmony-demo", "--as", "nobody"], "play it as one of alex, maya"),
+        (["harmony-demo", "--message", "Book it by {someday}"], "--message:"),
+        (["harmony-demo", "--message", "Hi", "--as", "nobody"], "no member 'nobody'"),
+        (["harmony-demo", "--approve", "some"], "--approve is story or all"),
+        (["harmony-demo", "--interactive", "--approve", "all"], "drop --approve all"),
     ],
 )
 def test_setup_errors_exit_2_before_anything_starts(args: list[str], message: str) -> None:
@@ -897,7 +1420,42 @@ def test_setup_errors_exit_2_before_anything_starts(args: list[str], message: st
 
 
 def test_run_help_lists_its_options() -> None:
-    result = CliRunner().invoke(cli, ["run", "--help"])
+    # Wide enough that rich doesn't cut the longest option name short.
+    result = CliRunner().invoke(cli, ["run", "--help"], env={"COLUMNS": "160"})
     assert result.exit_code == 0
-    for option in ("--story", "--live", "--as", "--interactive", "--worker", "--keep"):
+    for option in (
+        "--story",
+        "--live",
+        "--as",
+        "--message",
+        "--approve",
+        "--send-without-confirmation",
+        "--interactive",
+        "--worker",
+        "--keep",
+    ):
         assert option in result.output
+
+
+def test_a_message_plays_as_a_story_with_no_beats() -> None:
+    options = RunOptions(
+        scenario="harmony-demo",
+        story="suggested",
+        live=False,
+        member="helen",
+        interactive=False,
+        worker="in-process",
+        timeout_s=60,
+        keep=False,
+        message="Find SEM time on {+3d}.",
+    )
+    _, story = load_story(options)
+    assert (story.member, story.suggested_message, story.steps, story.humans) == (
+        "helen",
+        "Find SEM time on {+3d}.",
+        [],
+        [],
+    )
+    # Without --as, the scenario story's member sends it; on the cassettes too.
+    _, story = load_story(replace(options, member=None))
+    assert story.member == STORY.member

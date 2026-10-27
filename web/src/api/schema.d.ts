@@ -17,7 +17,8 @@ export interface paths {
         post?: never;
         delete?: never;
         options?: never;
-        head?: never;
+        /** Healthz */
+        head: operations["healthz_api_healthz_head"];
         patch?: never;
         trace?: never;
     };
@@ -113,8 +114,9 @@ export interface paths {
         put?: never;
         /**
          * Wipe
-         * @description Retire every world, one world at a time. Refused unless `X-Admin-Secret` matches
-         *     ADMIN_SECRET; with ADMIN_SECRET unset it is always refused.
+         * @description Retire every world, one world at a time. Refused with 403 `not_admin`, like the
+         *     other operator routes, unless `X-Admin-Secret` matches ADMIN_SECRET; with
+         *     ADMIN_SECRET unset it is always refused.
          */
         post: operations["wipe_api_admin_wipe_post"];
         delete?: never;
@@ -245,7 +247,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Conversation
+         * @description Set the chat's send mode. Only its owner may (404 otherwise).
+         */
+        patch: operations["update_conversation_api_conversations__conversation_id__patch"];
         trace?: never;
     };
     "/api/conversations/{conversation_id}/messages": {
@@ -505,6 +511,136 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/gate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gate Page
+         * @description The passcode page, a constant: nothing from the request is written into it.
+         */
+        get: operations["gate_page_api_gate_get"];
+        put?: never;
+        /**
+         * Unlock
+         * @description Check the passcode; on success set the `harmony_gate` cookie. 401
+         *     `passcode_invalid` for a wrong one, 429 `too_many_attempts` when throttled.
+         */
+        post: operations["unlock_api_gate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lock
+         * @description Clear the `harmony_gate` cookie.
+         */
+        post: operations["lock_api_gate_lock_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Budget */
+        get: operations["get_budget_api_budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Spend */
+        get: operations["get_spend_api_admin_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Live */
+        post: operations["set_live_api_admin_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/worlds/{world_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get World */
+        get: operations["get_world_api_admin_worlds__world_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/client-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Client Key */
+        get: operations["get_client_key_api_admin_client_key_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -538,6 +674,27 @@ export interface components {
             /** Body */
             body: string;
         };
+        /** AdminSpendView */
+        AdminSpendView: {
+            live: components["schemas"]["LiveState"];
+            today: components["schemas"]["BudgetTotals"] | null;
+            /** Lineages Today */
+            lineages_today: number;
+            /** Top Lineages */
+            top_lineages: components["schemas"]["KeySpend"][];
+            /** Top Clients */
+            top_clients: components["schemas"]["KeySpend"][];
+        };
+        /** AdminWorldView */
+        AdminWorldView: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "live" | "retiring" | "retired";
+            /** Retire Workflow */
+            retire_workflow: ("running" | "completed" | "failed" | "terminated") | null;
+        };
         /**
          * ApiProblem
          * @description A P1–P2 route's error body.
@@ -549,7 +706,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "not_found" | "invalid" | "not_admin" | "card_not_pending" | "escalation_not_open" | "not_in_org" | "world_retired";
+            code: "not_found" | "invalid" | "not_admin" | "card_not_pending" | "escalation_not_open" | "not_in_org" | "world_retired" | "passcode_required" | "passcode_invalid" | "too_many_attempts" | "payload_too_large";
             resolved_by?: components["schemas"]["MemberRef"] | null;
         };
         /** ApproveCard */
@@ -558,6 +715,10 @@ export interface components {
             recipients?: string[] | null;
             /** Brief */
             brief?: string | null;
+            /** Asks */
+            asks?: {
+                [key: string]: string;
+            } | null;
         };
         /** AssistantTextItem */
         AssistantTextItem: {
@@ -578,6 +739,28 @@ export interface components {
             /** Turn Id */
             turn_id: string | null;
         };
+        /** BudgetTotals */
+        BudgetTotals: {
+            /** Cap Usd */
+            cap_usd: number;
+            /** Spent Usd */
+            spent_usd: number;
+            /** Reserved Usd */
+            reserved_usd: number;
+        };
+        /** BudgetView */
+        BudgetView: {
+            /** Live */
+            live: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "session_exhausted" | "daily_exhausted" | "demo_exhausted" | "paused";
+            session?: components["schemas"]["SessionBudget"] | null;
+            /** Resets At */
+            resets_at?: string | null;
+        };
         /** CardRecipient */
         CardRecipient: {
             org: components["schemas"]["OrgRef"];
@@ -585,6 +768,12 @@ export interface components {
             fit: ("strong" | "possible" | "no" | "unknown") | null;
             /** Reason */
             reason: string;
+            /** Ask */
+            ask?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Suggested */
+            suggested?: boolean | null;
             /**
              * Selected
              * @default true
@@ -608,6 +797,25 @@ export interface components {
             status: "pending" | "approved" | "rejected" | "superseded";
             /** Request Id */
             request_id?: string | null;
+        };
+        /**
+         * ClientKeyView
+         * @description What the gate derives for the caller (3.2), for the step-10 header check.
+         */
+        ClientKeyView: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "x-forwarded-for" | "true-client-ip" | "cf-connecting-ip";
+            /** Key */
+            key: string | null;
+            /** Forwarded For */
+            forwarded_for: string[];
+            /** True Client Ip */
+            true_client_ip: string | null;
+            /** Cf Connecting Ip */
+            cf_connecting_ip: string | null;
         };
         /** ConsultView */
         ConsultView: {
@@ -655,7 +863,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "public_summary" | "instructions" | "sharing" | "brief" | "counterparty";
+            kind: "public_summary" | "instructions" | "sharing" | "brief" | "ask" | "counterparty";
             /** Label */
             label: string;
             /** Text */
@@ -692,8 +900,9 @@ export interface components {
             queued_message_ids: string[];
             /** Turn In Flight */
             turn_in_flight: boolean;
-            /** Turn Failed */
-            turn_failed: boolean;
+            /** Turn Failure */
+            turn_failure: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            send_mode: components["schemas"]["SendMode"];
             /** Version */
             version: number;
         };
@@ -718,6 +927,14 @@ export interface components {
             has_pending_card: boolean;
             /** Version */
             version: number;
+        };
+        /**
+         * ConversationUpdate
+         * @description The key is required: null means "follow the org's default".
+         */
+        ConversationUpdate: {
+            /** Send Without Confirmation */
+            send_without_confirmation: boolean | null;
         };
         /**
          * DeliveredNotice
@@ -768,7 +985,9 @@ export interface components {
             draft_rev: number;
             /** Answer */
             answer: string;
-            route: components["schemas"]["Route"] | null;
+            /** Short Question */
+            short_question?: string | null;
+            route: components["schemas"]["RouteView"] | null;
             /** Rationale */
             rationale: string;
             /** Activity */
@@ -797,7 +1016,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve" | "decline" | "take_over";
+            action: "approve" | "decline" | "take_over" | "revise";
             /** Text */
             text?: string | null;
             /** Draft Rev */
@@ -827,7 +1046,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve" | "decline" | "take_over";
+            action: "approve" | "decline" | "take_over" | "revise";
             /** Message Id */
             message_id?: string | null;
         };
@@ -870,6 +1089,24 @@ export interface components {
             /** Version */
             version: number;
         };
+        /**
+         * GateUnlock
+         * @description The unlock attempt. `next` is where to go after; the server re-checks it.
+         */
+        GateUnlock: {
+            /** Passcode */
+            passcode: string;
+            /**
+             * Next
+             * @default /
+             */
+            next: string;
+        };
+        /** GateUnlocked */
+        GateUnlocked: {
+            /** Next */
+            next: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -896,6 +1133,8 @@ export interface components {
             routing_prompt?: string | null;
             /** Default Assignee Id */
             default_assignee_id?: string | null;
+            /** Send Without Confirmation */
+            send_without_confirmation?: boolean | null;
             /** Member Profiles */
             member_profiles?: {
                 [key: string]: string;
@@ -927,6 +1166,8 @@ export interface components {
             /** Routing Prompt */
             routing_prompt: string;
             default_assignee: components["schemas"]["MemberRef"] | null;
+            /** Send Without Confirmation */
+            send_without_confirmation: boolean;
             /** Members */
             members: components["schemas"]["MemberProfileView"][];
             /** Policy Version */
@@ -978,6 +1219,8 @@ export interface components {
             status: "open" | "resolved" | "cancelled";
             /** Question */
             question: string;
+            /** Short Question */
+            short_question?: string | null;
             /** Reason */
             reason: string;
             /** Assignees */
@@ -1012,6 +1255,8 @@ export interface components {
              * @enum {string}
              */
             thread_state: "active" | "awaiting_principal" | "closed" | "expired";
+            /** Stop Reason */
+            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             /** Side To Move */
             side_to_move: ("requester" | "responder") | null;
             escalation: components["schemas"]["InboxEscalation"] | null;
@@ -1066,9 +1311,52 @@ export interface components {
              */
             status: "open" | "resolved" | "cancelled";
             /** Action */
-            action: ("approve" | "decline" | "take_over") | null;
+            action: ("approve" | "decline" | "take_over" | "revise") | null;
             /** Answer */
             answer: string | null;
+        };
+        /**
+         * InternalModelView
+         * @description The model internal Claude's chats run on for the acting member's org (3.13 E6):
+         *     the composer shows "{label} · Adaptive" when `adaptive`, else the label.
+         */
+        InternalModelView: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Adaptive */
+            adaptive: boolean;
+        };
+        /**
+         * KeySpend
+         * @description One budget row: a `lineage:` or `client:` key.
+         */
+        KeySpend: {
+            /** Cap Usd */
+            cap_usd: number;
+            /** Spent Usd */
+            spent_usd: number;
+            /** Reserved Usd */
+            reserved_usd: number;
+            /** Key */
+            key: string;
+        };
+        /**
+         * LiveState
+         * @description The live switch, as `POST /api/admin/live` leaves it.
+         */
+        LiveState: {
+            /** Paused */
+            paused: boolean;
+            /** Provider Blocked Until */
+            provider_blocked_until: string | null;
+            global: components["schemas"]["BudgetTotals"] | null;
+        };
+        /** LiveToggle */
+        LiveToggle: {
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * MemberDirectory
@@ -1177,6 +1465,8 @@ export interface components {
              * @enum {string}
              */
             state: "active" | "awaiting_principal" | "closed" | "expired";
+            /** Stop Reason */
+            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             /** Latest Line */
             latest_line: string | null;
             /** Turn Count */
@@ -1311,6 +1601,13 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "approved" | "rejected" | "superseded";
+            /** Title */
+            title?: string | null;
+            /**
+             * Auto
+             * @default false
+             */
+            auto: boolean;
             /** Brief */
             brief: string;
             /** Recipients */
@@ -1353,6 +1650,8 @@ export interface components {
             fit: ("strong" | "possible" | "no" | "unknown") | null;
             /** Reason */
             reason: string;
+            /** Sent */
+            sent: boolean;
             /**
              * Participant
              * @enum {string}
@@ -1367,6 +1666,8 @@ export interface components {
             latest_line: string | null;
             /** Close Summary */
             close_summary: string | null;
+            /** Stop Reason */
+            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             /** Last Activity At */
             last_activity_at: string | null;
         };
@@ -1420,9 +1721,9 @@ export interface components {
         };
         /**
          * RepresentativeContext
-         * @description "What our representative saw": exactly what entered its requests from this
-         *     side (§2): its frozen prompt, the notices sent since (R§12), and the results it
-         *     was given.
+         * @description "What our representative saw": the parts its requests carry and the answers
+         *     released to it (§2): its frozen prompt, the notices sent since (R§12), and the
+         *     released results. A send-back's note isn't a released answer, so it isn't listed.
          */
         RepresentativeContext: {
             /** Parts */
@@ -1514,25 +1815,26 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve" | "decline" | "take_over";
+            action: "approve" | "decline" | "take_over" | "revise";
             /** Text */
             text?: string | null;
             /** Draft Rev */
             draft_rev?: number | null;
         };
+        /** RouteAssigneeView */
+        RouteAssigneeView: {
+            /** Slug */
+            slug: string;
+            /** Why */
+            why: string;
+        };
         /**
-         * Route
-         * @description Who should review, as the answerer proposes it. Code validates the slugs against
-         *     the org's members and falls back to the default assignee (§6).
+         * RouteView
+         * @description A draft's route as it was applied: the members it named, each with why.
          */
-        Route: {
-            /**
-             * Assignees
-             * @description Member slugs.
-             */
-            assignees: string[];
-            /** Reason */
-            reason: string;
+        RouteView: {
+            /** Assignees */
+            assignees: components["schemas"]["RouteAssigneeView"][];
         };
         /**
          * ScreenedCounts
@@ -1549,6 +1851,33 @@ export interface components {
             no: number;
             /** Unknown */
             unknown: number;
+        };
+        /**
+         * SendMode
+         * @description How a chat sends Harmony Network Requests: without review (`True`) or after the
+         *     member approves the card.
+         */
+        SendMode: {
+            /** Override */
+            override: boolean | null;
+            /** Org Default */
+            org_default: boolean;
+            /** Effective */
+            effective: boolean;
+        };
+        /**
+         * SessionBudget
+         * @description The session's lineage cap ("Live · $7.40 left").
+         */
+        SessionBudget: {
+            /** Cap Usd */
+            cap_usd: number;
+            /** Spent Usd */
+            spent_usd: number;
+            /** Reserved Usd */
+            reserved_usd: number;
+            /** Remaining Usd */
+            remaining_usd: number;
         };
         /**
          * SessionView
@@ -1574,6 +1903,7 @@ export interface components {
             world_id: string;
             world: components["schemas"]["WorldView"];
             member: components["schemas"]["MemberView"];
+            internal_model: components["schemas"]["InternalModelView"];
         };
         /** ShareRequest */
         ShareRequest: {
@@ -1621,6 +1951,8 @@ export interface components {
         StartConversation: {
             /** Text */
             text: string;
+            /** Send Without Confirmation */
+            send_without_confirmation?: boolean | null;
         };
         /** StartRequest */
         StartRequest: {
@@ -1699,6 +2031,8 @@ export interface components {
              * @enum {string}
              */
             state: "active" | "awaiting_principal" | "closed" | "expired";
+            /** Stop Reason */
+            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             /**
              * Side
              * @enum {string}
@@ -1783,6 +2117,8 @@ export interface components {
              * @enum {string}
              */
             state: "active" | "awaiting_principal" | "closed" | "expired";
+            /** Stop Reason */
+            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             /**
              * Side
              * @enum {string}
@@ -2402,6 +2738,26 @@ export interface operations {
             };
         };
     };
+    healthz_api_healthz_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+        };
+    };
     get_session_api_session_get: {
         parameters: {
             query?: {
@@ -2479,6 +2835,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
             /** @description Conflict */
             409: {
                 headers: {
@@ -2495,6 +2860,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    /** @description Seconds until another attempt may succeed. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
         };
@@ -2603,6 +2979,17 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    /** @description Seconds until another attempt may succeed. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
         };
     };
     wipe_api_admin_wipe_post: {
@@ -2625,13 +3012,22 @@ export interface operations {
                     "application/json": components["schemas"]["WipeResult"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
             /** @description Forbidden */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorBody"];
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
             /** @description Validation Error */
@@ -3062,6 +3458,70 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_conversation_api_conversations__conversation_id__patch: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SendMode"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4124,6 +4584,375 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gate_page_api_gate_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    unlock_api_gate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GateUnlock"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateUnlocked"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Length Required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    /** @description Seconds until another attempt may succeed. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+        };
+    };
+    lock_api_gate_lock_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+        };
+    };
+    get_budget_api_budget_get: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spend_api_admin_spend_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSpendView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_live_api_admin_live_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiveToggle"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveState"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_world_api_admin_worlds__world_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-secret"?: string | null;
+            };
+            path: {
+                world_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminWorldView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_client_key_api_admin_client_key_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientKeyView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
             /** @description Validation Error */

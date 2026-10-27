@@ -109,10 +109,10 @@ entries:
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
-              "assignees": ["helen"],
-              "reason": "Instrument scheduling goes to Helen."
+              "assignees": [{"member": "helen", "why": "you schedule the instruments"}]
             },
-            "rationale": "From the public calendar only: SEM opens Nov 3 and Thursday afternoons are unavailable through December. Nothing is booked or priced yet."
+            "rationale": "From the public calendar only: SEM opens Nov 3 and Thursday afternoons are unavailable through December. Nothing is booked or priced yet.",
+            "short_question": "Give Vantage's client a rush SEM slot on a weekday from Nov 3?"
           }
   - match: {org: northlake, role: sharing_check, thread: "vantage.northlake", turn: 1, step: 0}
     content:
@@ -173,10 +173,10 @@ entries:
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
-              "assignees": ["helen"],
-              "reason": "Instrument scheduling goes to Helen."
+              "assignees": [{"member": "helen", "why": "you schedule the instruments and their bookings"}]
             },
-            "rationale": "The Thursday afternoon SEM time is Voltaic Motors' standing booking, under NDA. The answer doesn't name the client and commits nothing."
+            "rationale": "The Thursday afternoon SEM time is Voltaic Motors' standing booking, under NDA. The answer doesn't name the client and commits nothing.",
+            "short_question": "May we tell Vantage the Thursday SEM slots are a client's standing booking?"
           }
   - match: {org: northlake, role: sharing_check, thread: "vantage.northlake", turn: 2, step: 0}
     content:

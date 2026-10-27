@@ -86,6 +86,15 @@ export function useOrgMembers(orgId: string | undefined) {
   });
 }
 
+/**
+ * Whether the viewer has lost `threadId`: its last fetch came back not found, as after a
+ * reassign or unshare that took away their only access.
+ */
+export function lostThread(queryClient: QueryClient, threadId: string): boolean {
+  const error = queryClient.getQueryState(queryKeys.thread(threadId))?.error;
+  return error instanceof ApiError && error.status === 404;
+}
+
 // --- Writes ------------------------------------------------------------------------------
 
 function refreshThread(queryClient: QueryClient, threadId: string): Promise<unknown> {

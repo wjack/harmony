@@ -18,6 +18,8 @@ export interface ModalProps {
   width?: number;
   children?: ReactNode;
   className?: string;
+  /** Where focus goes once it closes; preventDefault() keeps it from Radix's trigger. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -35,6 +37,7 @@ export function Modal({
   width = 480,
   children,
   className,
+  onCloseAutoFocus,
 }: ModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   return (
@@ -49,6 +52,7 @@ export function Modal({
             event.preventDefault();
             contentRef.current?.focus({ preventScroll: true });
           }}
+          onCloseAutoFocus={onCloseAutoFocus}
           style={{ width: `min(${width}px, calc(100vw - 32px))` }}
           className={cx(
             "fixed top-1/2 left-1/2 z-50 flex max-h-[min(88vh,820px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-menu bg-surface text-ink shadow-modal outline-none data-[state=open]:animate-pop-in",

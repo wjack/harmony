@@ -1,7 +1,8 @@
 # The containerized app, for CI and `make compose-smoke` (scripts/compose_smoke.sh):
 # the production image as api + worker, against throwaway Postgres and Temporal, with
-# MODEL_MODE=scripted and OBJECT_STORE=localfs. It is its own Compose project, so it
-# runs beside the dev stack (compose.yaml) on host ports offset by 10000.
+# MODEL_MODE=scripted (APP_ENV=ci: prod refuses scripted), OBJECT_STORE=localfs and the
+# passcode gate on. It is its own Compose project, so it runs beside the dev stack
+# (compose.yaml) on host ports offset by 10000.
 #
 #   docker compose -f compose.ci.yaml up -d --build --wait
 #   docker compose -f compose.ci.yaml down -v
@@ -23,6 +24,9 @@ x-app: &app
     BUILD_SHA: ${BUILD_SHA:-ci}
     # A throwaway value so the smoke checks can exercise /api/admin/wipe.
     ADMIN_SECRET: ci-only-admin-secret
+    # The master passcode, so CI exercises the gate as production runs it.
+    # scripts/compose_smoke.sh hands the same value to the checks that unlock.
+    ACCESS_CODE: ci-only-passcode-0001
     # No model key exists here, and any accidental client call fails fast and locally.
     ANTHROPIC_BASE_URL: http://127.0.0.1:9
   # api and worker share localfs objects, as they would share MinIO.

@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from harmony.agents.models import ParticipantStatus, RequestStatus, brief_title
+from harmony.agents.models import ParticipantStatus, RequestStatus
 from harmony.api.deps import SessionmakerDep, read_cursor, set_cursor, snapshot_session
 from harmony.api.routes.demo import scenario_story
 from harmony.api.routes.problems import not_found, problems
@@ -43,7 +43,7 @@ from harmony.auth.session import Actor, ActorDep
 from harmony.auth.views import OrgRef, org_ref
 from harmony.db import repo
 from harmony.db.models import Conversation, NetworkRequest, Org, RepSession, Thread, World
-from harmony.db.models.choices import Fit, ThreadState
+from harmony.db.models.choices import FailureReason, Fit, ThreadState
 from harmony.domain import requests, threads
 from harmony.domain.requests import RecipientStatus, WaitingOn
 
@@ -59,7 +59,8 @@ class _View(BaseModel):
 
 class NetworkRequestRef(_View):
     id: UUID
-    # As the member's side names it (`threads.request_title`); the lens reads every brief.
+    # The requester's side and the lens: the request's title (`threads.requester_title`);
+    # a recipient: its own thread's (`threads.thread_title`).
     title: str
     requester: OrgRef
     status: RequestStatus
@@ -90,6 +91,8 @@ class NetworkEdge(_View):
     from_org_id: UUID
     to_org_id: UUID
     state: ThreadState
+    # Why it stopped early (a cap, the pause, a model error): status, like `state`.
+    stop_reason: FailureReason | None = None
     # Detailed only when the acting member can see the thread.
     latest_line: str | None
     turn_count: int | None
@@ -219,29 +222,34 @@ async def _titles(
     listed: Sequence[NetworkRequest],
     refs: Mapping[UUID, OrgRef],
 ) -> dict[UUID, str]:
-    """Each listed request's title as the acting member's side names it. The lens
-    shows both sides of every thread, so it reads the brief's own title."""
+    """Each listed request's title as the acting member's side names it: the
+    requester's own, and a recipient's own thread's, which never shows the request's
+    title. The lens shows both sides of every thread, so it reads the request's."""
     if actor.lens == "network":
-        return {row.id: brief_title(row.brief) for row in listed}
+        return {row.id: threads.requester_title(row) for row in listed}
     received = [row.id for row in listed if row.requester_org_id != actor.org_id]
     own = {
-        thread.request_id: thread.id
+        thread.request_id: thread
         for thread in await db.scalars(
             repo.in_world(Thread, actor.world_id).where(
                 Thread.request_id.in_(received), Thread.responder_org_id == actor.org_id
             )
         )
     }
-    openings = await threads.opening_lines(db, actor.world_id, list(own.values()))
-    return {
-        row.id: threads.request_title(
-            actor.org_id,
-            row,
-            requester=refs[row.requester_org_id].name if row.requester_org_id in refs else "",
-            opening=openings.get(own[row.id]) if row.id in own else None,
-        )
-        for row in listed
-    }
+    openings = await threads.opening_lines(db, actor.world_id, [t.id for t in own.values()])
+    titles: dict[UUID, str] = {}
+    for row in listed:
+        requester = refs[row.requester_org_id].name if row.requester_org_id in refs else ""
+        thread = own.get(row.id)
+        if row.requester_org_id == actor.org_id:
+            titles[row.id] = threads.requester_title(row)
+        elif thread is not None:
+            titles[row.id] = threads.thread_title(
+                thread, row, actor.org_id, requester=requester, opening=openings.get(thread.id)
+            )
+        else:
+            titles[row.id] = threads.responder_title(requester=requester, opening=None)
+    return titles
 
 
 def _sees_all_recipients(actor: Actor, request: NetworkRequest) -> bool:
@@ -358,6 +366,7 @@ def _edge(
         from_org_id=thread.requester_org_id,
         to_org_id=thread.responder_org_id,
         state=thread.state,
+        stop_reason=thread.stop_reason,
         latest_line=lines.get(thread.id) if detailed else None,
         turn_count=thread.turn_count if detailed else None,
         close_summary=summaries.get(thread.id) if detailed else None,

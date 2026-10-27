@@ -8,6 +8,8 @@ one Postgres, so their template names never collide.
 Temporal: `temporal_env` is a local dev server with the WorldId/OrgId search
 attributes (list queries work); `temporal_env_time_skipping` is the
 time-skipping test server, which has no List API. Neither touches Compose's Temporal.
+Both record the workflows their client starts, and save their histories when
+HARMONY_SAVE_HISTORIES is set (`tests/_histories.py`).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import tempfile
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -47,11 +50,27 @@ from temporalio.testing import WorkflowEnvironment
 from harmony.config import REPO_ROOT, Settings, get_settings
 from harmony.db.engine import create_engine, create_sessionmaker
 from harmony.temporal import search_attributes
+from tests._histories import StartedWorkflows
 
 
 def settings_without_dotenv(**values: Any) -> Settings:
     """Settings from the process environment and `values` only, ignoring .env.local."""
     return Settings(_env_file=None, **values)  # pyright: ignore[reportCallIssue]
+
+
+def prod_settings(**overrides: Any) -> Settings:
+    """APP_ENV=prod settings with every field prod requires (`Settings._check_prod`)."""
+    values: dict[str, Any] = {
+        "app_env": "prod",
+        "model_mode": "live",
+        "model_override": None,
+        "session_secret": SecretStr("s" * 40),
+        "access_code": SecretStr("correct horse battery"),
+        "daily_budget_usd": Decimal(60),
+        "global_budget_usd": Decimal(250),
+        "client_daily_budget_usd": Decimal(25),
+    }
+    return settings_without_dotenv(**(values | overrides))
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,11 +170,15 @@ def db_sessionmaker(db_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
 @pytest.fixture
 def app_settings(database: ClonedDatabase) -> Settings:
-    """Settings pointed at this test's database, for `create_app(settings, engine=...)`."""
+    """Settings pointed at this test's database, for `create_app(settings, engine=...)`.
+
+    The gate stays off (no `ACCESS_CODE`, whatever .env.local says); a test that
+    exercises it sets one on its own copy."""
     return get_settings().model_copy(
         update={
             "database_url": SecretStr(database.dsn),
             "database_direct_url": SecretStr(database.dsn),
+            "access_code": None,
         }
     )
 
@@ -165,21 +188,30 @@ def _temporal_cli() -> str:
 
 
 @pytest.fixture
-async def temporal_env() -> AsyncIterator[WorkflowEnvironment]:
+async def temporal_env(request: pytest.FixtureRequest) -> AsyncIterator[WorkflowEnvironment]:
     """A local Temporal dev server (the installed CLI) with WorldId and OrgId."""
+    started = StartedWorkflows()
     env = await WorkflowEnvironment.start_local(
         data_converter=pydantic_data_converter,
+        interceptors=[started],
         search_attributes=search_attributes.ALL,
         dev_server_existing_path=_temporal_cli(),
         dev_server_log_level="error",
     )
     async with env:
         yield env
+        await started.save(env.client, request.node.name)
 
 
 @pytest.fixture
-async def temporal_env_time_skipping() -> AsyncIterator[WorkflowEnvironment]:
+async def temporal_env_time_skipping(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[WorkflowEnvironment]:
     """The time-skipping test server. The SDK downloads its binary on first use."""
-    env = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
+    started = StartedWorkflows()
+    env = await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter, interceptors=[started]
+    )
     async with env:
         yield env
+        await started.save(env.client, request.node.name)

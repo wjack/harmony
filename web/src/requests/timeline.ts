@@ -5,7 +5,6 @@
  */
 import type {
   ConsultView,
-  EscalationDraft,
   EscalationView,
   MemberRef,
   NoteView,
@@ -188,46 +187,4 @@ export function openEscalation(
   const mine = open.filter((escalation) => escalation.assignees.some((assignee) => assignee.id === memberId));
   const pool = mine.length > 0 ? mine : open;
   return [...pool].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))[0] ?? null;
-}
-
-/** The draft the item shows by default: its current rev, else the newest. */
-export function currentDraft(escalation: EscalationView): EscalationDraft | null {
-  const drafts = [...escalation.drafts].sort((a, b) => b.draft_rev - a.draft_rev);
-  return drafts.find((draft) => draft.draft_rev === escalation.current_draft_rev) ?? drafts[0] ?? null;
-}
-
-/**
- * The draft the item opened with, whose route routing applied. A redraft never routes
- * again, and an item opened without a draft (the answerer failed) has no rev 1.
- */
-function openingDraft(escalation: EscalationView): EscalationDraft | null {
-  return escalation.drafts.find((draft) => draft.draft_rev === 1) ?? null;
-}
-
-/**
- * "Routed to you by Claude: <reason>" while the item is with the assignees routing gave
- * it from Claude's opening draft; for a question that named no one on the team, that it
- * first went to the default assignee (still true once moved: a move records nothing);
- * otherwise "Assigned to Raj" (a teammate moved it, or a held message). The API gives
- * the route as code applied it (`routing.named_slugs`): its own members' slugs,
- * unknown names dropped.
- */
-export function routedSentence(
-  escalation: EscalationView,
-  memberId: string | undefined,
-  firstNameOf: (name: string) => string,
-): string {
-  const mine = escalation.assignees.some((assignee) => assignee.id === memberId);
-  const to = mine ? "you" : escalation.assignees.map((assignee) => firstNameOf(assignee.name)).join(", ") || "the team";
-  const route = openingDraft(escalation)?.route ?? null;
-  const named = new Set(route?.assignees ?? []);
-  if (escalation.kind === "consult" && named.size === 0) {
-    return `Assigned to ${to}. Claude named no one on the team, so it first went to the default assignee`;
-  }
-  const asRouted =
-    route !== null &&
-    escalation.assignees.length > 0 &&
-    escalation.assignees.every((assignee) => named.has(assignee.slug));
-  if (!asRouted) return `Assigned to ${to}`;
-  return route.reason === "" ? `Routed to ${to} by Claude` : `Routed to ${to} by Claude: ${route.reason}`;
 }

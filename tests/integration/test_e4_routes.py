@@ -8,7 +8,7 @@ they answer when a thread, request or chat has already ended."""
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, Final, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,16 +23,35 @@ from temporalio.testing import WorkflowEnvironment
 from harmony.agents import consult as answerer
 from harmony.agents import context, transcript
 from harmony.agents.consult import ConsultDraft
-from harmony.agents.models import EscalationResolution, Route
+from harmony.agents.models import (
+    CardResolution,
+    EscalationResolution,
+    OutreachCardPayload,
+    OutreachEdits,
+    OutreachRecipient,
+    Route,
+    RouteAssignee,
+)
 from harmony.agents.runtime import OwedResult, text_block
 from harmony.agents.transcript import RepSideTranscript, WireMessage
 from harmony.api.app import create_app
+from harmony.auth.session import current_actor, resolve_actor
 from harmony.config import Settings
 from harmony.db import repo
-from harmony.db.models import Conversation, Escalation, Event, RepNotice, RepSession, Thread
+from harmony.db.models import (
+    Conversation,
+    Escalation,
+    Event,
+    NetworkRequest,
+    RepNotice,
+    RepSession,
+    Thread,
+    World,
+)
 from harmony.db.uow import unit_of_work
-from harmony.domain import escalations, routing, threads
+from harmony.domain import cards, escalations, requests, routing, threads
 from harmony.domain import settings as settings_domain
+from harmony.domain.errors import CardNotPending
 from harmony.temporal.activities.agents import rep_opening
 from harmony.temporal.activities.network import (
     ApplyResolutionInput,
@@ -43,6 +62,7 @@ from tests.integration._e2_world import DANA
 from tests.integration._e2_world import open_thread as e2_open_thread
 from tests.integration._e4_world import (
     ALEX,
+    BRIEF,
     CALDER,
     HELEN,
     HENDERSON,
@@ -53,7 +73,9 @@ from tests.integration._e4_world import (
     Outreach,
     approved_outreach,
     open_thread,
+    propose,
     routed_consult,
+    start_chat,
 )
 from tests.integration._visitors import ADMIN_SECRET, HISTORY, Visitor, cursor_of, visitor
 
@@ -265,8 +287,19 @@ async def test_each_side_sees_only_its_own_workspace(
         assert [m["slug"] for m in escalation["assignees"]] == ["helen"]
         (draft,) = escalation["drafts"]
         assert draft["answer"].startswith("Yes: Nov 4")
-        assert draft["route"] == {"assignees": ["helen"], "reason": "Helen owns the XRD schedule."}
-        assert set(draft) == {"draft_rev", "answer", "route", "rationale", "activity", "created_at"}
+        assert draft["route"] == {
+            "assignees": [{"slug": "helen", "why": "Helen owns the XRD schedule."}]
+        }
+        assert draft["short_question"] is None
+        assert set(draft) == {
+            "draft_rev",
+            "answer",
+            "short_question",
+            "route",
+            "rationale",
+            "activity",
+            "created_at",
+        }
         assert [n["body"] for n in workspace["notes"]] == ["Checking the block."]
         # Northlake's representative hasn't taken a turn yet.
         assert (workspace["representative"], workspace["close_summary"]) == (None, None)
@@ -295,7 +328,13 @@ async def test_a_drafts_route_is_served_as_the_members_it_named(
             answer="Nov 4 works.",
             needs_human=True,
             needs_human_reason="A reserve slot.",
-            route=Route(assignees=["@Helen", "nobody", " helen "], reason="Helen's schedule."),
+            route=Route(
+                assignees=[
+                    RouteAssignee(member="@Helen", why="Helen's schedule."),
+                    RouteAssignee(member="nobody", why="Nobody's."),
+                    RouteAssignee(member=" helen ", why="Said twice."),
+                ]
+            ),
             rationale="r",
         )
         async with unit_of_work(db_sessionmaker, outreach.world_id) as uow:
@@ -307,9 +346,9 @@ async def test_a_drafts_route_is_served_as_the_members_it_named(
         (escalation,) = workspace["escalations"]
         # As routing read it, so "Routed to you by Claude: …" still holds.
         assert [m["slug"] for m in escalation["assignees"]] == ["helen"]
+        # Each named member once, with the first why given for them.
         assert escalation["drafts"][-1]["route"] == {
-            "assignees": ["helen"],
-            "reason": "Helen's schedule.",
+            "assignees": [{"slug": "helen", "why": "Helen's schedule."}]
         }
 
 
@@ -1147,3 +1186,378 @@ async def test_requests_and_chats_are_their_owners(
         await v.request("GET", f"/requests/{outreach.request_id}", expect=404)
         await v.request("GET", f"/conversations/{outreach.conversation_id}", expect=404)
         assert await v.json("GET", "/conversations") == []
+
+
+# --- Send mode, auto cards, asks and titles (LIVE_DEMO_PLAN 3.9–3.14) ----------------
+
+TITLE: Final = "Powder XRD on 14 powders, up to $2,000"
+NORTHLAKE_TITLE: Final = "Air-free powder XRD on 14 samples"
+NORTHLAKE_ASK: Final = "Can you run 14 air-free powders by Nov 6?"
+
+
+def _suggesting(*, auto_send: list[UUID] | None = None) -> OutreachCardPayload:
+    """Northlake and Ridgeline suggested; Calder listed for the member to decide."""
+    return OutreachCardPayload(
+        brief=BRIEF,
+        title=TITLE,
+        recipients=[
+            OutreachRecipient(
+                org_id=NORTHLAKE,
+                fit="strong",
+                reason="Air-free XRD.",
+                ask=NORTHLAKE_ASK,
+                title=NORTHLAKE_TITLE,
+                suggested=True,
+            ),
+            OutreachRecipient(
+                org_id=RIDGELINE, fit="strong", reason="Glovebox XRD.", suggested=True
+            ),
+            OutreachRecipient(org_id=CALDER, fit="possible", reason="SEM only.", suggested=False),
+        ],
+        auto_send_recipients=auto_send,
+    )
+
+
+async def _sent_to(sm: Sessionmaker, world_id: UUID, request_id: UUID) -> list[Json]:
+    async with sm() as session:
+        request = await repo.get_required(session, NetworkRequest, world_id, request_id)
+        return cast(list[Json], request.recipients)
+
+
+def _selected(card: Json) -> dict[str, bool]:
+    return {row["org"]["slug"]: row["selected"] for row in card["recipients"]}
+
+
+async def test_an_approval_without_edits_sends_the_suggested_rows(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        outreach = await approved_outreach(db_sessionmaker, world_id, payload=_suggesting())
+        sent = await _sent_to(db_sessionmaker, world_id, outreach.request_id)
+        assert [row["org_id"] for row in sent] == [str(NORTHLAKE), str(RIDGELINE)]
+        assert (sent[0]["ask"], sent[0]["title"], sent[0]["suggested"]) == (
+            NORTHLAKE_ASK,
+            NORTHLAKE_TITLE,
+            True,
+        )
+        # A card from before suggestions goes to the rows whose fit isn't "no".
+        legacy = OutreachCardPayload(
+            brief=BRIEF,
+            recipients=[
+                OutreachRecipient(org_id=NORTHLAKE, fit="strong", reason="Air-free XRD."),
+                OutreachRecipient(org_id=CALDER, fit="no", reason="SEM only."),
+            ],
+        )
+        old = await approved_outreach(db_sessionmaker, world_id, payload=legacy)
+        old_sent = await _sent_to(db_sessionmaker, world_id, old.request_id)
+        assert [row["org_id"] for row in old_sent] == [str(NORTHLAKE)]
+
+        await v.act_as("alex")
+        chat = await v.json("GET", f"/conversations/{outreach.conversation_id}")
+        card, _ = chat["items"]
+        assert (card["status"], card["title"], card["auto"]) == ("approved", TITLE, False)
+        assert _selected(card) == {"northlake": True, "ridgeline": True, "calder": False}
+        rows = {row["org"]["slug"]: row for row in card["recipients"]}
+        assert (rows["northlake"]["ask"], rows["northlake"]["title"]) == (
+            NORTHLAKE_ASK,
+            NORTHLAKE_TITLE,
+        )
+        assert (rows["calder"]["ask"], rows["calder"]["suggested"]) == (None, False)
+
+        status = await v.json("GET", f"/requests/{outreach.request_id}")
+        assert status["title"] == TITLE
+        # Calder was only proposed: its row says so, apart from a recipient still waiting.
+        assert {row["org"]["slug"]: row["sent"] for row in status["recipients"]} == {
+            "northlake": True,
+            "ridgeline": True,
+            "calder": False,
+        }
+
+
+async def test_edited_asks_and_recipients_reach_the_request(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    calder_ask = "Could you image the powders by SEM after the XRD?"
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        edits = OutreachEdits(recipients=[NORTHLAKE, CALDER], asks={CALDER: calder_ask})
+        outreach = await approved_outreach(
+            db_sessionmaker, world_id, payload=_suggesting(), edits=edits
+        )
+        sent = await _sent_to(db_sessionmaker, world_id, outreach.request_id)
+        assert [(row["org_id"], row["ask"]) for row in sent] == [
+            (str(NORTHLAKE), NORTHLAKE_ASK),
+            (str(CALDER), calder_ask),
+        ]
+
+        await v.act_as("alex")
+        chat = await v.json("GET", f"/conversations/{outreach.conversation_id}")
+        card, _ = chat["items"]
+        assert _selected(card) == {"northlake": True, "ridgeline": False, "calder": True}
+        assert {row["org"]["slug"]: row["ask"] for row in card["recipients"]}["calder"] == (
+            calder_ask
+        )
+
+        # The API takes asks only for proposed recipients.
+        conversation_id = await start_chat(db_sessionmaker, world_id)
+        card_id = await propose(db_sessionmaker, world_id, conversation_id, payload=_suggesting())
+        problem = await v.json(
+            "POST",
+            f"/cards/{card_id}/approve",
+            json={"asks": {str(HENDERSON): "Anything?"}},
+            expect=422,
+        )
+        assert problem["code"] == "invalid"
+
+
+async def test_a_card_sent_without_review_is_never_the_members_to_settle(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(temporal_app) as v:
+        world_id = await _world(v)
+        auto_chat = await start_chat(db_sessionmaker, world_id)
+        auto_card = await propose(
+            db_sessionmaker,
+            world_id,
+            auto_chat,
+            payload=_suggesting(auto_send=[NORTHLAKE]),
+            auto=True,
+        )
+        review_chat = await start_chat(db_sessionmaker, world_id)
+        review_card = await propose(db_sessionmaker, world_id, review_chat, payload=_suggesting())
+
+        await v.act_as("alex")
+        for action, body in (("approve", {}), ("reject", {"feedback": "Not yet."})):
+            problem = await v.json("POST", f"/cards/{auto_card}/{action}", json=body, expect=409)
+            assert problem["code"] == "card_not_pending"
+
+        chat = await v.json("GET", f"/conversations/{auto_chat}")
+        assert chat["pending_card_id"] is None
+        (card,) = chat["items"]
+        assert (card["status"], card["auto"]) == ("pending", True)
+        assert _selected(card) == {"northlake": True, "ridgeline": False, "calder": False}
+        # A card awaiting the member lists every row as in the request until they choose.
+        chat = await v.json("GET", f"/conversations/{review_chat}")
+        assert chat["pending_card_id"] == str(review_card)
+        (card,) = chat["items"]
+        assert (card["status"], card["auto"]) == ("pending", False)
+        assert _selected(card) == {"northlake": True, "ridgeline": True, "calder": True}
+        recents = {
+            row["id"]: row["has_pending_card"] for row in await v.json("GET", "/conversations")
+        }
+        assert recents == {str(auto_chat): False, str(review_chat): True}
+
+        # A message is the chat's next one; it rejects nothing.
+        posted = await v.json(
+            "POST", f"/conversations/{auto_chat}/messages", json={"text": "Ask about SEM too."}
+        )
+        assert posted["outcome"] == "queued"
+
+        # Only the workflow settles it, approving as the chat's owner.
+        member = CardResolution(card_id=auto_card, decision="approve", member_id=ALEX)
+        with pytest.raises(CardNotPending):
+            async with unit_of_work(db_sessionmaker, world_id) as uow:
+                await cards.resolve(uow, member)
+        workflow = member.model_copy(update={"auto": True})
+        request_id = uuid4()
+        async with unit_of_work(db_sessionmaker, world_id) as uow:
+            card_row = await cards.resolve(uow, workflow)
+            await requests.create_from_card(uow, card_row, workflow, request_id=request_id)
+            await uow.commit()
+        sent = await _sent_to(db_sessionmaker, world_id, request_id)
+        assert [row["org_id"] for row in sent] == [str(NORTHLAKE)]
+        chat = await v.json("GET", f"/conversations/{auto_chat}")
+        card, _ = chat["items"]
+        assert (card["status"], card["auto"]) == ("approved", True)
+        assert _selected(card) == {"northlake": True, "ridgeline": False, "calder": False}
+
+
+async def test_an_auto_card_the_workflow_rejects_stays_auto_and_shows_its_proposal(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        chat_id = await start_chat(db_sessionmaker, world_id)
+        payload = _suggesting(auto_send=[NORTHLAKE])
+        card_id = await propose(db_sessionmaker, world_id, chat_id, payload=payload, auto=True)
+        # As the workflow does when the send fails: rejected, with nothing sent.
+        rejected = CardResolution(card_id=card_id, decision="reject", member_id=ALEX, auto=True)
+        async with unit_of_work(db_sessionmaker, world_id) as uow:
+            await cards.resolve(uow, rejected)
+            await uow.commit()
+
+        await v.act_as("alex")
+        (card,) = (await v.json("GET", f"/conversations/{chat_id}"))["items"]
+        assert (card["status"], card["auto"]) == ("rejected", True)
+        assert _selected(card) == {"northlake": True, "ridgeline": True, "calder": True}
+
+
+async def _conversation(sm: Sessionmaker, world_id: UUID, conversation_id: UUID) -> Conversation:
+    async with sm() as session:
+        return await repo.get_required(session, Conversation, world_id, conversation_id)
+
+
+async def test_a_chats_owner_overrides_its_send_mode(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        conversation_id = await start_chat(db_sessionmaker, world_id)
+        path = f"/conversations/{conversation_id}"
+        before = await _conversation(db_sessionmaker, world_id, conversation_id)
+
+        await v.act_as("alex")
+        chat = await v.json("GET", path)
+        assert chat["send_mode"] == {"override": None, "org_default": False, "effective": False}
+        for override, effective in ((True, True), (False, False), (None, False)):
+            mode = await v.json("PATCH", path, json={"send_without_confirmation": override})
+            assert mode == {"override": override, "org_default": False, "effective": effective}
+        # The key is required: null, never a missing key, means the org's default.
+        await v.request("PATCH", path, json={}, expect=422)
+        after = await _conversation(db_sessionmaker, world_id, conversation_id)
+        assert after.version == before.version + 3
+        # Not something that happened in the chat: Recents keep their order.
+        assert after.last_activity_at == before.last_activity_at
+
+        await v.act_as("maya")
+        await v.request("PATCH", path, json={"send_without_confirmation": True}, expect=404)
+        version = (await v.json("GET", "/orgs/henderson/harmony"))["policy_version"]
+        await v.json(
+            "PUT",
+            "/orgs/henderson/harmony",
+            json={"policy_version": version, "send_without_confirmation": True},
+        )
+
+        # With no override, the chat follows its org's default, read live.
+        await v.act_as("alex")
+        chat = await v.json("GET", path)
+        assert chat["send_mode"] == {"override": None, "org_default": True, "effective": True}
+        mode = await v.json("PATCH", path, json={"send_without_confirmation": False})
+        assert mode == {"override": False, "org_default": True, "effective": False}
+
+
+async def test_a_send_mode_change_in_a_retired_world_conflicts(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        conversation_id = await start_chat(db_sessionmaker, world_id)
+        await v.act_as("alex")
+        session_id = UUID((await v.session())["session_id"])
+        actor = await resolve_actor(db_sessionmaker, session_id, "desk")
+        assert actor is not None
+        # Retired after the request resolved its actor, as when a Reset lands mid-request.
+        async with db_sessionmaker() as session:
+            await session.execute(
+                update(World).where(World.id == world_id).values(status="retired")
+            )
+            await session.commit()
+        app.dependency_overrides[current_actor] = lambda: actor
+        problem = await v.json(
+            "PATCH",
+            f"/conversations/{conversation_id}",
+            json={"send_without_confirmation": True},
+            expect=409,
+        )
+        assert problem["code"] == "world_retired"
+
+
+async def test_a_new_chat_stores_its_send_mode(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(temporal_app) as v:
+        world_id = await _world(v)
+        await v.act_as("alex")
+        created = await v.json(
+            "POST",
+            "/conversations",
+            json={"text": "Find a lab for XRD.", "send_without_confirmation": True},
+        )
+    conversation = await _conversation(db_sessionmaker, world_id, UUID(created["id"]))
+    assert conversation.send_without_confirmation is True
+
+
+async def test_admins_set_whether_chats_send_without_confirmation(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        outreach, thread_id, _ = await _story(v, db_sessionmaker)
+
+        await v.act_as("raj")
+        settings = await v.json("GET", "/orgs/northlake/harmony")
+        assert settings["send_without_confirmation"] is False
+        version = settings["policy_version"]
+        change = {"policy_version": version, "send_without_confirmation": True}
+        problem = await v.json("PUT", "/orgs/northlake/harmony", json=change, expect=403)
+        assert problem["code"] == "not_admin"
+
+        await v.act_as("helen")
+        updated = await v.json("PUT", "/orgs/northlake/harmony", json=change)
+        assert updated["send_without_confirmation"] is True
+        assert updated["policy_version"] == version + 1
+
+    # How chats send is nothing a representative is told about.
+    assert await _notices(db_sessionmaker, outreach.world_id, thread_id) == []
+
+
+async def test_a_responder_never_sees_the_requests_own_title(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        payload = OutreachCardPayload(
+            brief=BRIEF,
+            title=TITLE,
+            recipients=[
+                OutreachRecipient(org_id=NORTHLAKE, fit="strong", reason="Air-free XRD."),
+                OutreachRecipient(
+                    org_id=RIDGELINE, fit="strong", reason="Glovebox.", title=NORTHLAKE_TITLE
+                ),
+            ],
+        )
+        outreach = await approved_outreach(db_sessionmaker, world_id, payload=payload)
+        untitled = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
+        titled = await open_thread(db_sessionmaker, outreach, RIDGELINE)
+        await routed_consult(db_sessionmaker, world_id, untitled)
+
+        await v.act_as("helen")
+        inbox = await v.json("GET", "/inbox")
+        bodies = [
+            inbox,
+            await v.json("GET", "/threads"),
+            await v.json("GET", "/network", params={"request": str(outreach.request_id)}),
+            await v.json("GET", f"/threads/{untitled}/workspace"),
+        ]
+        for body in bodies:
+            assert "$2,000" not in str(body)
+        assert [item["title"] for item in inbox["needs_you"]] == ["Request from Henderson Lab"]
+
+        await v.act_as("alex")
+        listed = {row["id"]: row["title"] for row in await v.json("GET", "/threads")}
+        # The requester's own name for the request, unless the thread has its own.
+        assert (listed[str(untitled)], listed[str(titled)]) == (TITLE, NORTHLAKE_TITLE)
+
+        await v.act_as("dana")
+        listed = {row["id"]: row["title"] for row in await v.json("GET", "/threads")}
+        # Ridgeline's members see the subject written for them, which both sides share.
+        assert listed[str(titled)] == NORTHLAKE_TITLE
+
+
+def test_a_threads_title_wins_and_the_fallbacks_stay() -> None:
+    request = NetworkRequest(
+        requester_org_id=HENDERSON, title=None, brief="Powder XRD by Nov 6.\nUp to $2,000."
+    )
+    thread = Thread(title=None)
+    name = "Henderson Lab"
+
+    def title(org_id: UUID, opening: str | None = None) -> str:
+        return threads.thread_title(thread, request, org_id, requester=name, opening=opening)
+
+    assert title(HENDERSON) == "Powder XRD by Nov 6."
+    assert title(NORTHLAKE) == "Request from Henderson Lab"
+    assert title(NORTHLAKE, "Could you run XRD?") == "Could you run XRD?"
+    request.title = TITLE
+    assert (title(HENDERSON), title(NORTHLAKE)) == (TITLE, "Request from Henderson Lab")
+    thread.title = NORTHLAKE_TITLE
+    assert (title(HENDERSON), title(NORTHLAKE, "Hi")) == (NORTHLAKE_TITLE, NORTHLAKE_TITLE)

@@ -19,9 +19,20 @@ interface ShareDialogProps {
   members: readonly MemberView[];
   access: readonly ThreadAccess[];
   memberId: string | undefined;
+  /** Focuses what opened it: it has no Radix trigger, so focus would fall to the page. */
+  returnFocus: () => void;
 }
 
-export function ShareDialog({ open, onOpenChange, threadId, us, members, access, memberId }: ShareDialogProps) {
+export function ShareDialog({
+  open,
+  onOpenChange,
+  threadId,
+  us,
+  members,
+  access,
+  memberId,
+  returnFocus,
+}: ShareDialogProps) {
   const share = useShareThread(threadId);
   const [picked, setPicked] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
@@ -42,6 +53,10 @@ export function ShareDialog({ open, onOpenChange, threadId, us, members, access,
     <Modal
       open={open}
       onOpenChange={close}
+      onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        returnFocus();
+      }}
       title="Share with a teammate"
       description={`They'll see this thread, Claude's drafts and the internal notes. Only people at ${us.name} can be added.`}
       footer={

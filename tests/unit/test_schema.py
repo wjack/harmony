@@ -20,7 +20,8 @@ TABLES = Base.metadata.tables
 
 # Every table §4 names, as REVISION_UNSTRUCTURED.md §8 revises it (the tables of the
 # removed concepts dropped, trusted organizations added), plus world_workflows and the
-# P1 additions (cards, rep_transcript). The set is exact, so nothing removed is left.
+# P1 additions (cards, rep_transcript) and the live switch (live_controls). The set is
+# exact, so nothing removed is left.
 EXPECTED_TABLES = {
     "sessions",
     "worlds",
@@ -53,6 +54,7 @@ EXPECTED_TABLES = {
     "world_event_seq",
     "budgets",
     "budget_reservations",
+    "live_controls",
     "world_workflows",
     "cards",
     "rep_transcript",
@@ -61,7 +63,7 @@ EXPECTED_TABLES = {
 # model_calls is keyed by the globally unique turn: `call_model_checkpointed` looks
 # a call up by (turn_id, step_idx) alone. It still carries world_id for cleanup.
 KEYED_BY_TURN = {"model_calls"}
-NOT_WORLD_SCOPED = {"worlds", "sessions", "budgets", "budget_reservations"}
+NOT_WORLD_SCOPED = {"worlds", "sessions", "budgets", "budget_reservations", "live_controls"}
 WORLD_SCOPED = {name for name, table in TABLES.items() if "world_id" in table.c} - KEYED_BY_TURN
 
 

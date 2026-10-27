@@ -16,7 +16,11 @@ activities). One activity runs one turn's whole loop.
    `llm.requests.build_request` from the frozen system prompt and tools plus the stored
    transcript, and calls `model.call(request)`, checkpointed on `(turn_id, step_idx)`.
    A refusal is handled before any content is read; a response that didn't end on its
-   own (`max_tokens`, `pause_turn`, ...) raises `TurnIncomplete`.
+   own (`max_tokens`, `pause_turn`, ...) raises `TurnIncomplete`, and so does an empty
+   one, or a first call's `end_turn` that says nothing (thinking alone: `says_nothing`).
+   The exceptions are an `end_turn` answering this turn's own tool results, and a first
+   call whose opening asks for no answer (`TurnContext.quiet_opening`): that ends the
+   turn (the model had nothing to add after "Sent.").
 3. Nothing is written ahead of a call (§2.2). Once a call is stored, its new input
    messages and the response are appended to the transcript together, in one
    transaction, taken from the checkpointed request's own bytes: a retried attempt
@@ -29,26 +33,35 @@ activities). One activity runs one turn's whole loop.
    `user` message of `tool_result` blocks and the loop continues. A performative
    (`ToolExecution.ends_turn`) stops the turn: its `tool_result` is owed to the side's
    next turn (`TurnOutcome.owed`), and calls after it in the same response are not
-   run (they get an error result). A card (`CardRaised`) stops the turn as
-   `awaiting_card`; the workflow resumes it with the same turn_id at `next_step`.
+   run (they get an error result; after a request sent without review, a further
+   `send_network_request` is told to call again now, `NOT_RUN_YET`). A card
+   (`CardRaised`) stops the turn as `awaiting_card`; the workflow resumes it with the
+   same turn_id at `next_step`.
    Results already known when a turn stops (other calls of the stopping step, or the
    last step's results at `max_steps`) are stored right away, so the next opening
    only has to carry the owed one.
 5. Representatives: `disable_parallel_tool_use` is set by the request builder. A turn
    may send several messages (`send_message` doesn't stop it) and ends when the model
-   stops calling tools (R§5). A bare text reply goes to `executor.text_reply`, which
-   maps it to `send_message` only while the turn has sent nothing; later text is the
-   model's own. So text is shown live only when it may be sent: a `send_message` text
-   streams as it is written, and text blocks only once the response has ended without
-   a tool call, in a turn that hasn't called `send_message`. Text in the same response
-   as a tool call is never sent or shown live (it stays in the stored transcript).
+   stops calling tools (R§5). A bare text reply to the turn's opening (its first call)
+   goes to `executor.text_reply`, which maps it to `send_message` only while the turn
+   has sent nothing and had something to answer (`TurnContext.bare_text_sends`); other
+   text is the model's own, text after the turn's own tool results included (it
+   answers them: a refused `close`, say, not the counterparty). So text is shown live
+   only when it may be sent: a `send_message` text streams as it is written, and text
+   blocks only once the first call's response has ended without a tool call, in a turn
+   that may send bare text. Text in the same response as a tool call is never sent or
+   shown live (it stays in the stored transcript).
 
 Retries. A turn's stored messages are the transcript's tail, tagged with its turn_id
 (`agents.transcript`). A rerun of the same turn picks up where the stored messages
 end: the last stored response is processed again (executors are idempotent), and the
-next call reuses its checkpoint. Only the run's first call carries the notices; when
-that call is consumed without a response (refusal, incomplete, failed) the notices are
-not stored, and `context.flush_notices` delivers them again at the side's next turn.
+next call reuses its checkpoint. A call whose error result is already stored keeps it
+and isn't run again: an error stores no decision to find again, and a guard that reads
+live state (the chat's send mode, its open conversations) could now decide otherwise,
+acting on a call the model was already told failed. Only the run's first call carries
+the notices; when that call is consumed without a response (refusal, incomplete, failed,
+or an empty answer that ends the turn) the notices are not stored, and
+`context.flush_notices` delivers them again at the side's next turn.
 
 Callers write nothing for the turn themselves: `run_turn` stores the opening (with
 `ctx.opening_author_member_id` on a typed chat message).
@@ -60,7 +73,7 @@ contract's).
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Annotated, Final, Literal, Protocol
 from uuid import UUID
@@ -97,12 +110,17 @@ MAX_STEPS: Final = 8
 # holds the message for a teammate. Otherwise a turn ends when the model stops calling
 # tools.
 PerformativeName = Literal["send_message", "consult", "close"]
-_SEND_MESSAGE: Final = "send_message"
+_SEND_NETWORK_REQUEST: Final = "send_network_request"
 # A response is processed only if it ended on its own: `max_tokens` cuts a tool input
 # mid-string, and `pause_turn` is unfinished.
 COMPLETE_STOP_REASONS: Final = frozenset({"tool_use", "end_turn"})
 # The result of a call that came after the call that ended the turn.
 NOT_RUN: Final = "Not run: {name} ended your turn. Call it again in a later turn if needed."
+# The result of a `send_network_request` after one sent without review in the same
+# response: the turn resumes as soon as that one is sent, so it may be called again now.
+NOT_RUN_YET: Final = (
+    "Not run yet: requests go out one at a time. Call it again now if you still want to send it."
+)
 # The result a new turn supplies for a call whose turn failed before storing its result.
 INTERRUPTED: Final = (
     "No result was recorded: the turn that made this call was interrupted. It may have "
@@ -118,9 +136,9 @@ class _Model(BaseModel):
 
 
 class TurnIncomplete(HarmonyError):
-    """The model's response didn't end on its own (or was empty): the call's input is
-    stored, the response isn't. Retrying replays the same checkpointed response, so
-    callers treat it as final."""
+    """The model's response didn't end on its own, or was empty where the turn still
+    owed an answer: the call's input is stored, the response isn't. Retrying replays
+    the same checkpointed response, so callers treat it as final."""
 
     def __init__(self, message: str, *, stop_reason: str | None) -> None:
         super().__init__(message)
@@ -172,6 +190,8 @@ class CardRaised(_Model):
     card_id: UUID
     card_kind: CardKind
     tool_use_id: str
+    # The member's chat sends without confirmation: the workflow approves it itself.
+    auto: bool = False
 
 
 class SearchRan(_Model):
@@ -262,6 +282,15 @@ class TurnContext(_Model):
     max_steps: int = Field(default=MAX_STEPS, ge=1)
     max_tokens: int = Field(default=8192, ge=1)
     stream_to_ui: bool = False
+    # False when nothing a bare reply says can be sent (a code-written fallback or a
+    # declined held message opens the turn, or the thread has ended): then a text-only
+    # response stays private and isn't streamed.
+    bare_text_sends: bool = True
+    # True when the opening asks for no answer: a representative's code-written "nothing
+    # new" or its held message declined without a reason, or a resumed turn's own card
+    # result once its request went out. An empty `end_turn` on the first call then ends
+    # the turn, as one after its own tool results does (3.13 E1b).
+    quiet_opening: bool = False
     effort: Effort | None = None
     model_override: str | None = None
     prefix_mismatch: PrefixMismatch | None = None
@@ -314,16 +343,24 @@ class CheckpointedModel(Protocol):
     ) -> CheckpointedCall: ...
 
 
+# The hosted budget keys a call reserves against (`budget_pg.hosted_budget_keys`).
+BudgetKeys = Callable[[], Awaitable[Sequence[str]]]
+
+
 @dataclass(frozen=True, slots=True)
 class CheckpointedClient:
     """`CheckpointedModel` over `call_model_checkpointed` (activities build one per turn
-    with `heartbeat=activity.heartbeat`)."""
+    with `heartbeat=activity.heartbeat`).
+
+    `budget_keys` is asked again for every call: the day caps are keyed on the UTC
+    date, and a turn or answerer running past midnight must charge its later calls to
+    the new day."""
 
     sessionmaker: async_sessionmaker[AsyncSession]
     client: ModelClient
     guard: SpendGuard
     heartbeat: HeartbeatCallback | None = None
-    budget_keys: tuple[str, ...] = ()
+    budget_keys: BudgetKeys | None = None
 
     async def call(
         self,
@@ -338,7 +375,7 @@ class CheckpointedClient:
             request,
             on_stream_event=on_stream_event,
             heartbeat=self.heartbeat,
-            budget_keys=self.budget_keys,
+            budget_keys=await self.budget_keys() if self.budget_keys is not None else (),
         )
 
 
@@ -390,6 +427,15 @@ def echo_content(message: Mapping[str, JsonValue]) -> list[JsonObject]:
     return blocks[last:]
 
 
+def says_nothing(content: Sequence[JsonObject]) -> bool:
+    """Whether response content holds no tool call and no text that isn't blank.
+    Thinking alone says nothing: its text is omitted unless the call streams it."""
+    return (
+        not any(block.get("type") == "tool_use" for block in content)
+        and not _text_in(content).strip()
+    )
+
+
 def tool_calls(message: Mapping[str, JsonValue]) -> list[ToolCall]:
     """The `tool_use` blocks of a final message, in order."""
     return _calls_in(echo_content(message))
@@ -434,6 +480,16 @@ def _answering(history: Sequence[WireMessage], opening: Sequence[JsonObject]) ->
         if call.id not in answered
     ]
     return [*missing, *opening]
+
+
+def _error_results(messages: Sequence[WireMessage]) -> dict[str, JsonObject]:
+    """The error `tool_result` blocks in `messages`, by the call they answer."""
+    return {
+        as_str(block.get("tool_use_id")) or "": block
+        for message in messages
+        for block in objects(message.content())
+        if block.get("type") == "tool_result" and block.get("is_error") is True
+    }
 
 
 def _user(content: list[JsonValue]) -> WireMessage:
@@ -497,10 +553,12 @@ class _TurnRun:
         step = done
         content: list[JsonObject] | None = None
         results: list[JsonValue] = []
+        refused: dict[str, JsonObject] = {}
         if done > ctx.first_step:
             # An earlier attempt of this run stored step `done - 1`; process it again.
             step = done - 1
             content = objects(own[responses[-1]].content())
+            refused = _error_results(own[after_last:])
         while True:
             if content is None:
                 # Only the turn's first call can come at `max_steps` or later: a resumed
@@ -509,12 +567,13 @@ class _TurnRun:
                 if isinstance(answer, TurnOutcome):
                     return answer
                 content = answer
-            stopped = await self._process(step, content)
+            stopped = await self._process(step, content, refused)
             if isinstance(stopped, TurnOutcome):
                 return stopped
             results = stopped
             step += 1
             content = None
+            refused = {}
             if step >= ctx.max_steps:
                 await self._store_known(step, results)
                 return self._outcome("max_steps", next_step=step)
@@ -558,7 +617,7 @@ class _TurnRun:
             prefix_mismatch=ctx.prefix_mismatch,
         )
         try:
-            call = await self.model.call(request, on_stream_event=self._stream_callback())
+            call = await self.model.call(request, on_stream_event=self._stream_callback(first))
         except Exception:
             # Consumed even though the call failed, so the previous step's results (or
             # the member's message) outlive a turn that never completes.
@@ -575,13 +634,19 @@ class _TurnRun:
             )
         complete = call.stop_reason in COMPLETE_STOP_REASONS
         content = echo_content(message) if complete else []
-        if not content:
+        # Nothing to add after this turn's own tool results, or to an opening that asks
+        # for nothing: the turn may end here. Any other first call carries the turn's
+        # input (the member's message, the network's news, the counterparty's message),
+        # which an answer that says nothing, thinking alone included, would drop.
+        may_end = call.stop_reason == "end_turn" and (step > ctx.first_step or ctx.quiet_opening)
+        if not content or (not may_end and says_nothing(content)):
             await self._consume(sent, author)
-            reason = (
-                "has no content"
-                if complete
-                else f"stopped at {call.stop_reason!r} before it was complete"
-            )
+            if may_end:
+                return self._outcome("end_turn", next_step=step + 1)
+            if not complete:
+                reason = f"stopped at {call.stop_reason!r} before it was complete"
+            else:
+                reason = "has no text or tool call" if content else "has no content"
             raise TurnIncomplete(f"the response {reason}", stop_reason=call.stop_reason)
         await self._append([*sent, WireMessage.of("assistant", list[JsonValue](content))], author)
         self.stored_input_step = None
@@ -617,12 +682,18 @@ class _TurnRun:
             for m in sent[known:]
         ]
 
-    def _stream_callback(self) -> StreamEventCallback | None:
+    def _stream_callback(self, first: bool) -> StreamEventCallback | None:
+        """Streams the call's outgoing text; `first`: the call is the run's first, the
+        only one whose bare text may be sent (`_reply`)."""
         sink = self.on_text
         if sink is None:
             return None
         outgoing = OutgoingText()
-        held = _BareReply(silent=self._messaged()) if self.ctx.role == "representative" else None
+        held = (
+            _BareReply(silent=not first or not self.ctx.bare_text_sends)
+            if self.ctx.role == "representative"
+            else None
+        )
         separate = self.streamed
 
         async def on_event(event: Mapping[str, JsonValue]) -> None:
@@ -640,22 +711,14 @@ class _TurnRun:
 
         return on_event
 
-    def _messaged(self) -> bool:
-        """Whether this turn called `send_message` in a stored response: text it writes
-        after that is never sent (`ToolExecutor.text_reply`)."""
-        own = _own_tail(self.history, self.ctx.turn_id)
-        return any(
-            call.name == _SEND_MESSAGE
-            for message in own
-            if message.role == "assistant"
-            for call in _calls_in(objects(message.content()))
-        )
-
     # --- One response -----------------------------------------------------------------
 
-    async def _process(self, step: int, content: list[JsonObject]) -> list[JsonValue] | TurnOutcome:
+    async def _process(
+        self, step: int, content: list[JsonObject], refused: Mapping[str, JsonObject]
+    ) -> list[JsonValue] | TurnOutcome:
         """Run the response's tool calls. Returns the results to send next, or the
-        outcome when the response ends the turn."""
+        outcome when the response ends the turn. A call in `refused` keeps the error
+        result an earlier attempt stored for it (module docstring, Retries)."""
         calls = _calls_in(content)
         if not calls:
             return await self._reply(step, _text_in(content))
@@ -663,8 +726,11 @@ class _TurnRun:
         ending: tuple[ToolCall, ToolExecution] | None = None
         for call in calls:
             if ending is not None:
-                text = NOT_RUN.format(name=ending[0].name)
-                results.append(tool_result_block(call.id, text, is_error=True))
+                results.append(tool_result_block(call.id, _not_run(call, *ending), is_error=True))
+                continue
+            stored = refused.get(call.id)
+            if stored is not None:
+                results.append(stored)
                 continue
             execution = await self.executor.execute(call, step_idx=step)
             if execution.effect is not None:
@@ -687,7 +753,9 @@ class _TurnRun:
         )
 
     async def _reply(self, step: int, text: str) -> TurnOutcome:
-        if text.strip():
+        # Only an answer to the opening is a reply: text after the turn's own tool
+        # results answers them.
+        if text.strip() and step == self.ctx.first_step:
             execution = await self.executor.text_reply(text, step_idx=step)
             if execution is not None:
                 if execution.effect is not None:
@@ -744,12 +812,21 @@ class _TurnRun:
         )
 
 
+def _not_run(call: ToolCall, ended_by: ToolCall, ending: ToolExecution) -> str:
+    """The result of `call`, made after `ended_by` ended the turn."""
+    effect = ending.effect
+    if isinstance(effect, CardRaised) and effect.auto and call.name == _SEND_NETWORK_REQUEST:
+        return NOT_RUN_YET
+    return NOT_RUN.format(name=ended_by.name)
+
+
 @dataclass(slots=True)
 class _BareReply:
     """A representative's text blocks reach the counterparty only as a bare reply, so
     they are held until the response ends without a tool call and dropped once one
-    starts. `silent`: the turn already sent a message, so no bare reply will be sent and
-    nothing is released. A `send_message` text is not held (`llm.outgoing`)."""
+    starts. `silent`: no bare reply will be sent (the turn already sent a message, or
+    it had nothing to answer), so nothing is released. A `send_message` text is not
+    held (`llm.outgoing`)."""
 
     silent: bool = False
     parts: list[str] = field(default_factory=list[str])
@@ -811,6 +888,8 @@ __all__ = [
     "INTERRUPTED",
     "MAX_STEPS",
     "NOT_RUN",
+    "NOT_RUN_YET",
+    "BudgetKeys",
     "CardRaised",
     "CheckpointedClient",
     "CheckpointedModel",
@@ -833,6 +912,7 @@ __all__ = [
     "echo_content",
     "opening_blocks",
     "run_turn",
+    "says_nothing",
     "text_block",
     "tool_calls",
     "tool_result_block",

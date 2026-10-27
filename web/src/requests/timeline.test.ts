@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { ESCALATION, THREAD, requestsWorld } from "../fixtures/requests";
 import { members, orgs } from "../fixtures/shell";
-import { firstName } from "../shell/names";
 import { buildActivity } from "./activity";
-import { buildTimeline, currentDraft, openEscalation, partiesOf, routedSentence } from "./timeline";
+import { buildTimeline, openEscalation, partiesOf } from "./timeline";
 import type { EscalationView, ThreadDetail, ThreadWorkspace } from "./types";
 
 const NOW = Date.parse("2026-10-26T10:30:00Z");
@@ -15,7 +14,6 @@ function thread(threadId: string): { detail: ThreadDetail; workspace: ThreadWork
   return { detail: { ...record.detail, access_reason: "routed", access_reasons: ["routed"] }, workspace: record.workspace };
 }
 
-const helen = { id: members.helen.id, slug: "helen", name: members.helen.name };
 const raj = { id: members.raj.id, slug: "raj", name: members.raj.name };
 
 describe("partiesOf", () => {
@@ -95,54 +93,6 @@ describe("openEscalation", () => {
 
   it("ignores resolved items", () => {
     expect(openEscalation([{ ...base, status: "resolved" }], members.helen.id)).toBeNull();
-  });
-});
-
-describe("routedSentence", () => {
-  const [base] = thread(THREAD.henderson).workspace.escalations;
-  if (base === undefined) throw new Error("no Henderson escalation");
-  const routedTo = (assignees: string[]): EscalationView => ({
-    ...base,
-    drafts: base.drafts.map((draft) => ({ ...draft, route: { assignees, reason: "Helen owns the schedule." } })),
-  });
-
-  it("gives Claude's reason while the item is with the assignees it proposed", () => {
-    expect(currentDraft(base)?.draft_rev).toBe(1);
-    expect(routedSentence(base, members.helen.id, firstName)).toBe(
-      `Routed to you by Claude: ${currentDraft(base)?.route?.reason ?? ""}`,
-    );
-    expect(routedSentence(base, members.raj.id, firstName)).toMatch(/^Routed to Helen by Claude: /);
-    expect(routedSentence(routedTo(["helen", "raj"]), members.helen.id, firstName)).toMatch(/^Routed to you by Claude/);
-  });
-
-  it("says a question whose draft named no one on the team went to the default assignee", () => {
-    // The API drops names that aren't the org's members, as routing did.
-    const fellBack = "Claude named no one on the team, so it first went to the default assignee";
-    expect(routedSentence(routedTo([]), members.helen.id, firstName)).toBe(`Assigned to you. ${fellBack}`);
-    // Still true once a teammate moved it: nothing records the move.
-    expect(routedSentence({ ...routedTo([]), assignees: [raj] }, members.helen.id, firstName)).toBe(
-      `Assigned to Raj. ${fellBack}`,
-    );
-    // Opened without a draft (the answerer failed): routing had no route to read.
-    expect(routedSentence({ ...base, drafts: [] }, members.helen.id, firstName)).toBe(`Assigned to you. ${fellBack}`);
-  });
-
-  it("reads the route the item opened with, never a redraft's", () => {
-    const [opening] = base.drafts;
-    if (opening === undefined) throw new Error("no opening draft");
-    const redraft = { ...opening, draft_rev: 2, route: { assignees: ["raj"], reason: "Raj runs the XRD." } };
-    const redrafted: EscalationView = { ...base, drafts: [opening, redraft], current_draft_rev: 2 };
-    expect(routedSentence(redrafted, members.helen.id, firstName)).toBe(
-      `Routed to you by Claude: ${opening.route?.reason ?? ""}`,
-    );
-    expect(routedSentence({ ...redrafted, assignees: [raj] }, members.helen.id, firstName)).toBe("Assigned to Raj");
-  });
-
-  it("says only who has it once a teammate moved it, or for a held message", () => {
-    expect(routedSentence({ ...base, assignees: [raj] }, members.helen.id, firstName)).toBe("Assigned to Raj");
-    const [held] = thread(THREAD.vantage).workspace.escalations;
-    expect(held && routedSentence(held, members.raj.id, firstName)).toBe("Assigned to Helen");
-    expect(routedSentence({ ...base, assignees: [helen] }, members.helen.id, firstName)).toMatch(/^Routed to you/);
   });
 });
 

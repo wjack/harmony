@@ -12,13 +12,22 @@ in turn order, so a member message never lands between a request and its respons
   `tool_activity` (status from its `tool_result`), except `send_network_request`, which
   renders as its card;
 - `cards` (by `tool_use_id`) → `outreach_card`, followed by a `request_status` item
-  once it is approved;
+  once it is approved. A recipient row is `selected` when it is in the request: every
+  listed row while the card awaits the member or once it was rejected; the rows the
+  request went to once approved; and, for an `auto` card still sending, its
+  `auto_send_recipients`;
 - requester-side consult escalations on this chat's requests that were routed to its
   owner → `inline_question` (R§7), kept once settled or cancelled.
 Items are ordered by when they happened, ties by transcript seq.
 
 Every write bumps `conversations.version` and `last_activity_at` and queues a
 `conversation` snapshot to the owner, which tells the client to refetch the items.
+Changing the chat's send mode (`set_send_mode`) bumps the version but not the
+activity time: it isn't something that happened in the chat.
+
+Send mode (3.10): a chat sends Harmony Network Requests without the member's review
+when its own `send_without_confirmation` says so, else when its org's
+`rep_policy.send_without_confirmation` does (`send_mode`, read live).
 
 Owner: E4.
 """
@@ -32,17 +41,20 @@ from datetime import UTC, datetime
 from typing import Final, Literal
 from uuid import UUID, uuid5
 
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents.models import (
     AssistantTextItem,
+    CardPayload,
     CardRecipient,
+    CardResolution,
     ChatItem,
     EscalationResolution,
     InlineQuestionItem,
     OutreachCardItem,
+    OutreachRecipient,
     RequestStatusItem,
     ScreenedCounts,
     ThinkingSummaryItem,
@@ -60,11 +72,12 @@ from harmony.db.models import (
     Escalation,
     NetworkRequest,
     Org,
+    RepPolicy,
     Thread,
 )
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards as cards_domain
-from harmony.domain import escalations, records
+from harmony.domain import escalations, records, requests
 from harmony.events.schemas import EntitySnapshot, EventScope
 from harmony.llm.wire import canonical_json
 
@@ -80,6 +93,18 @@ _TOOL_LABELS: Final[Mapping[str, tuple[str, str | None]]] = {
 }
 
 
+class SendMode(BaseModel):
+    """How a chat sends Harmony Network Requests: without review (`True`) or after the
+    member approves the card."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # The chat's own choice; None follows the org's default.
+    override: bool | None
+    org_default: bool
+    effective: bool
+
+
 async def start(
     uow: UnitOfWork,
     *,
@@ -87,9 +112,10 @@ async def start(
     org_id: UUID,
     owner_member_id: UUID,
     first_message: str,
+    send_without_confirmation: bool | None = None,
 ) -> Conversation:
-    """Create a conversation titled from its first message (truncated). Idempotent on
-    `conversation_id`."""
+    """Create a conversation titled from its first message (truncated), with the send
+    mode its member chose (None follows the org's). Idempotent on `conversation_id`."""
     existing = await repo.get(uow.session, Conversation, uow.world_id, conversation_id)
     if existing is not None:
         return existing
@@ -99,6 +125,7 @@ async def start(
         org_id=org_id,
         owner_member_id=owner_member_id,
         title=title_from(first_message),
+        send_without_confirmation=send_without_confirmation,
     )
     uow.session.add(conversation)
     await uow.session.flush()
@@ -210,6 +237,36 @@ async def touch(uow: UnitOfWork, conversation_id: UUID) -> Conversation:
     await uow.session.flush()
     _queue(uow, conversation)
     return conversation
+
+
+async def set_send_mode(
+    uow: UnitOfWork, conversation_id: UUID, override: bool | None
+) -> Conversation:
+    """Set the chat's send-mode override (None follows the org's default). Bumps the
+    version and tells the owner, but leaves `last_activity_at`, so Recents keep their
+    order."""
+    conversation = await locked(uow, conversation_id)
+    conversation.send_without_confirmation = override
+    await uow.session.flush()
+    _queue(uow, conversation)
+    return conversation
+
+
+async def send_mode(session: AsyncSession, conversation: Conversation) -> SendMode:
+    """The chat's send mode, its org's default read live."""
+    policy = await session.get(RepPolicy, (conversation.world_id, conversation.org_id))
+    org_default = policy.send_without_confirmation if policy is not None else False
+    override = conversation.send_without_confirmation
+    return SendMode(
+        override=override,
+        org_default=org_default,
+        effective=org_default if override is None else override,
+    )
+
+
+async def effective_send_mode(session: AsyncSession, conversation: Conversation) -> bool:
+    """Whether the chat sends Harmony Network Requests without the member's review."""
+    return (await send_mode(session, conversation)).effective
 
 
 async def locked(uow: UnitOfWork, conversation_id: UUID) -> Conversation:
@@ -491,12 +548,14 @@ def _card_item(
     payload = cards_domain.payload_of(card)
     resolution = cards_domain.resolution_of(card)
     request = request_by_card.get(card.id)
-    chosen = resolution.edits.recipients if resolution and resolution.edits else None
+    in_request = _in_request(card, payload, resolution, request)
     return OutreachCardItem(
         id=f"card:{card.id}",
         at=at,
         card_id=card.id,
         status=card.status,
+        title=payload.title,
+        auto=card.auto,
         # Once approved, the brief as the member sent it.
         brief=request.brief if request is not None else payload.brief,
         recipients=[
@@ -504,7 +563,15 @@ def _card_item(
                 org=orgs[recipient.org_id],
                 fit=recipient.fit,
                 reason=recipient.reason,
-                selected=chosen is None or recipient.org_id in chosen,
+                # Once sent, the ask as the member edited it.
+                ask=(
+                    in_request[recipient.org_id].ask
+                    if in_request is not None and recipient.org_id in in_request
+                    else recipient.ask
+                ),
+                title=recipient.title,
+                suggested=recipient.suggested,
+                selected=in_request is None or recipient.org_id in in_request,
             )
             for recipient in payload.recipients
             if recipient.org_id in orgs
@@ -514,6 +581,26 @@ def _card_item(
         request_id=request.id if request is not None else None,
         version=card.version,
     )
+
+
+def _in_request(
+    card: Card,
+    payload: CardPayload,
+    resolution: CardResolution | None,
+    request: NetworkRequest | None,
+) -> dict[UUID, OutreachRecipient] | None:
+    """The card's rows that are in the request (module docstring), by org; None when
+    every listed row is."""
+    if request is not None:
+        rows = requests.recipients_of(request)
+    elif card.status == "approved" and resolution is not None:
+        rows = requests.chosen_recipients(payload, resolution)
+    elif card.status == "pending" and card.auto and payload.auto_send_recipients is not None:
+        sending = set(payload.auto_send_recipients)
+        rows = [row for row in payload.recipients if row.org_id in sending]
+    else:
+        return None
+    return {row.org_id: row for row in rows}
 
 
 async def _inline_questions(
@@ -638,15 +725,19 @@ __all__ = [
     "CARD_TOOLS",
     "NO_MEMBER_MESSAGE",
     "TITLE_MAX_CHARS",
+    "SendMode",
     "append_assistant_content",
     "append_member_message",
     "append_turn_input",
     "chat_items",
     "discard",
+    "effective_send_mode",
     "locked",
     "ordinal",
     "recents",
     "requests_of",
+    "send_mode",
+    "set_send_mode",
     "start",
     "title_from",
     "tool_label",

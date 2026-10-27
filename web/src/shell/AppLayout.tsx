@@ -9,6 +9,7 @@ import { DemoControls } from "../demo/DemoControls";
 import { ResetDemoDialog } from "../demo/ResetDemoDialog";
 import { openDemoControls, useDemoState } from "../demo/store";
 import { Landing } from "./Landing";
+import { Locked } from "./Locked";
 import { Sidebar } from "./Sidebar";
 import { cx } from "./ui";
 import { Unreachable } from "./Unreachable";
@@ -45,6 +46,7 @@ export function AppLayout() {
       <DemoControls session={null} />
     </ShellFrame>
   );
+  if (status === "locked") return <Locked />;
   if (status === "no-session") return landing;
   // Before the run's first snapshot there is no member to show: the first load, or a
   // fresh start after the session went away (the cache was cleared with it).

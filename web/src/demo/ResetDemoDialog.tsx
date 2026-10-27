@@ -1,3 +1,4 @@
+import { useBudget } from "../app/budget";
 import { Button, Modal } from "../shell/ui";
 import { useResetDemo } from "./accounts";
 import { closeResetConfirm, useDemoState } from "./store";
@@ -6,6 +7,7 @@ import { closeResetConfirm, useDemoState } from "./store";
 export function ResetDemoDialog() {
   const open = useDemoState((state) => state.resetConfirmOpen);
   const reset = useResetDemo();
+  const live = useBudget().data?.live === true;
 
   return (
     <Modal
@@ -36,6 +38,11 @@ export function ResetDemoDialog() {
         </>
       }
     >
+      {live && (
+        <p className="text-[13px] leading-5 text-muted">
+          Reset doesn&apos;t refill the live-model budget: it belongs to this session, not to a copy of the network.
+        </p>
+      )}
       {reset.error !== null && (
         <p role="alert" className="text-[13px] text-danger">
           {reset.error.message}

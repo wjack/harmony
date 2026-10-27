@@ -1,21 +1,33 @@
 import { useId, useState, type ReactNode } from "react";
 
-import { ScriptedNote } from "../../demo/ScriptedNote";
 import { Button } from "../../shell/ui/Button";
-import { BRIEF_MAX_CHARS, briefGist, editedBrief } from "../brief";
+import { ClampedText } from "../../shell/ui/ClampedText";
+import { BRIEF_MAX_CHARS, briefGist, editedText } from "../brief";
+import { budgetLine, useBudgetState } from "../failureCopy";
 import { plural } from "../format";
+import { approveBody, askText, hasEdits, outreachTitle, type OutreachDraft } from "../outreachDraft";
 import { FitBadge, OrgAvatar } from "../parts";
 import { outreachRecipients } from "../recipients";
-import type { ApproveCard, OutreachCardItem } from "../types";
+import type { ApproveCard, CardRecipient, OutreachCardItem } from "../types";
 import { AskUserCard, type AskOption } from "./AskUserCard";
+import { ExpandingTextarea } from "./ExpandingTextarea";
+import { RecipientAsk } from "./RecipientAsk";
 
 type Mode = "choose" | "subset" | "edit";
+
+/** Collapsed, each of the edit view's boxes shows at most this many lines. */
+const EDIT_ROWS = 7;
+
+export type DraftUpdate = (update: (current: OutreachDraft) => OutreachDraft) => void;
 
 export interface OutreachApprovalProps {
   item: OutreachCardItem;
   busy: boolean;
   error: string | null;
   onApprove: (body: ApproveCard) => void;
+  /** Who is ticked and what was reworded, kept by the caller so putting the card away keeps it. */
+  draft: OutreachDraft;
+  onDraftChange: DraftUpdate;
   /** The "Something else" text: Claude gets it as the reason the card was rejected. */
   feedback: string;
   onFeedbackChange: (text: string) => void;
@@ -36,55 +48,102 @@ function PanelFooter({ onBack, children }: { onBack: () => void; children: React
   );
 }
 
+/**
+ * A panel's own content: as tall as it needs, up to what leaves the transcript above
+ * readable, after which the panel (never a field inside it) scrolls.
+ */
+function PanelBody({ children }: { children: ReactNode }) {
+  return <div className="scrollbar-quiet max-h-[min(56vh,560px)] overflow-y-auto">{children}</div>;
+}
+
 function SubsetPanel({
   item,
   busy,
-  chosen,
-  onChosenChange,
+  draft,
+  onDraftChange,
   onBack,
   onSend,
 }: {
   item: OutreachCardItem;
+  /** A call is in flight, or a spend cap holds the send. */
   busy: boolean;
-  chosen: ReadonlySet<string>;
-  onChosenChange: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void;
+  draft: OutreachDraft;
+  onDraftChange: DraftUpdate;
   onBack: () => void;
   onSend: () => void;
 }) {
   const toggle = (orgId: string) => {
-    onChosenChange((current) => {
-      const next = new Set(current);
-      if (next.has(orgId)) next.delete(orgId);
-      else next.add(orgId);
-      return next;
+    onDraftChange((current) => {
+      const chosen = new Set(current.chosen);
+      if (chosen.has(orgId)) chosen.delete(orgId);
+      else chosen.add(orgId);
+      return { ...current, chosen };
     });
   };
   return (
     <div className="px-2 pb-2">
-      <p className="px-3 pb-1.5 text-[13px] text-muted">Choose who receives the request.</p>
-      {item.recipients.map((recipient) => (
-        <label
-          key={recipient.org.id}
-          className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-hover/70"
-        >
-          <input
-            type="checkbox"
-            checked={chosen.has(recipient.org.id)}
-            onChange={() => {
-              toggle(recipient.org.id);
-            }}
-            className="size-4 shrink-0 accent-accent-strong"
-          />
-          <OrgAvatar org={recipient.org} size={22} />
-          <span className="min-w-0 flex-1 truncate text-[15px] text-ink">{recipient.org.name}</span>
-          <FitBadge fit={recipient.fit} />
-        </label>
-      ))}
+      <PanelBody>
+        <p className="px-3 pb-1.5 text-[13px] text-muted">Choose who receives the request.</p>
+        {item.recipients.map((recipient) => (
+          <div key={recipient.org.id} className="rounded-xl px-3 py-2.5 transition-colors hover:bg-hover/70">
+            <label className="flex cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                checked={draft.chosen.has(recipient.org.id)}
+                onChange={() => {
+                  toggle(recipient.org.id);
+                }}
+                className="size-4 shrink-0 accent-accent-strong"
+              />
+              <OrgAvatar org={recipient.org} size={22} />
+              <span className="min-w-0 flex-1 truncate text-[15px] text-ink">{recipient.org.name}</span>
+              <FitBadge fit={recipient.fit} />
+            </label>
+            <RecipientAsk title={recipient.title} ask={askText(draft, recipient)} className="mt-2 ml-[62px]" />
+          </div>
+        ))}
+      </PanelBody>
       <PanelFooter onBack={onBack}>
-        <Button variant="primary" disabled={busy || chosen.size === 0} onClick={onSend}>
-          Send to {plural(chosen.size, "organization")}
+        <Button variant="primary" disabled={busy || draft.chosen.size === 0} onClick={onSend}>
+          Send to {plural(draft.chosen.size, "organization")}
         </Button>
       </PanelFooter>
+    </div>
+  );
+}
+
+function AskField({
+  recipient,
+  draft,
+  onDraftChange,
+}: {
+  recipient: CardRecipient;
+  draft: OutreachDraft;
+  onDraftChange: DraftUpdate;
+}) {
+  const orgId = recipient.org.id;
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <OrgAvatar org={recipient.org} size={20} />
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-ink">{recipient.org.name}</span>
+      </div>
+      {recipient.title && (
+        <p className="mt-1 text-[13px] leading-5 text-muted">
+          Subject: <span className="text-secondary">{recipient.title}</span>
+        </p>
+      )}
+      <ExpandingTextarea
+        aria-label={`Ask for ${recipient.org.name}`}
+        className="mt-1.5"
+        maxRows={EDIT_ROWS}
+        maxLength={BRIEF_MAX_CHARS}
+        placeholder="What to ask this organization only"
+        value={askText(draft, recipient)}
+        onChange={(text) => {
+          onDraftChange((current) => ({ ...current, asks: { ...current.asks, [orgId]: text } }));
+        }}
+      />
     </div>
   );
 }
@@ -98,39 +157,46 @@ function EditPanel({
   onSend,
 }: {
   item: OutreachCardItem;
+  /** As `SubsetPanel`'s. */
   busy: boolean;
-  draft: string;
-  onDraftChange: (text: string) => void;
+  draft: OutreachDraft;
+  onDraftChange: DraftUpdate;
   onBack: () => void;
   onSend: () => void;
 }) {
+  const briefId = useId();
   const hintId = useId();
+  const ticked = item.recipients.filter((recipient) => draft.chosen.has(recipient.org.id));
   return (
     <div className="px-2 pb-2">
-      <div className="px-3 pt-1 pb-3">
-        <textarea
-          aria-label="Brief"
-          aria-describedby={hintId}
-          rows={7}
-          maxLength={BRIEF_MAX_CHARS}
-          value={draft}
-          onChange={(event) => {
-            onDraftChange(event.target.value);
-          }}
-          className="scrollbar-quiet block max-h-[min(42vh,360px)] w-full resize-none rounded-control border border-border-strong bg-surface px-3 py-2 text-[14px] leading-[1.55] text-ink outline-none transition-colors placeholder:text-faint focus:border-accent"
-        />
-        <p id={hintId} className="mt-1.5 text-[12.5px] leading-5 text-muted">
-          Your representative works from this brief. It tells the recipients what they need to answer, and it is
-          asked to keep the rest, such as a budget, to itself unless the brief says otherwise.
-        </p>
-        <ScriptedNote className="mt-1" />
-      </div>
+      <PanelBody>
+        <div className="flex flex-col gap-4 px-3 pt-1 pb-3">
+          <div>
+            <label htmlFor={briefId} className="mb-1.5 block text-[13px] font-medium text-secondary">
+              Brief
+            </label>
+            <ExpandingTextarea
+              id={briefId}
+              aria-describedby={hintId}
+              maxRows={EDIT_ROWS}
+              maxLength={BRIEF_MAX_CHARS}
+              value={draft.brief}
+              onChange={(brief) => {
+                onDraftChange((current) => ({ ...current, brief }));
+              }}
+            />
+            <p id={hintId} className="mt-1.5 text-[12.5px] leading-5 text-muted">
+              Every organization&apos;s conversation starts from this brief. A budget or other limit goes in each
+              organization&apos;s ask, which only your representative in that conversation sees.
+            </p>
+          </div>
+          {ticked.map((recipient) => (
+            <AskField key={recipient.org.id} recipient={recipient} draft={draft} onDraftChange={onDraftChange} />
+          ))}
+        </div>
+      </PanelBody>
       <PanelFooter onBack={onBack}>
-        <Button
-          variant="primary"
-          disabled={busy || editedBrief(item.brief, draft) === null}
-          onClick={onSend}
-        >
+        <Button variant="primary" disabled={busy || draft.chosen.size === 0 || !hasEdits(item, draft)} onClick={onSend}>
           Send with changes
         </Button>
       </PanelFooter>
@@ -138,21 +204,28 @@ function EditPanel({
   );
 }
 
-function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  return a.size === b.size && [...a].every((value) => b.has(value));
+function sendLabel(chosen: number, listed: number): string {
+  if (chosen < listed) return `Send to ${plural(chosen, "organization")}`;
+  return chosen === 1 ? "Send" : `Send to all ${chosen}`;
 }
 
 /**
- * The `send_network_request` approval as Claude's ask-user card: send as Claude
- * proposed, to a subset, or with the member's own wording of the brief. Typing in
- * "Something else" (or the composer) rejects the card with that text as feedback, as
- * in Claude Code.
+ * The `send_network_request` approval as Claude's ask-user card: send to the ticked
+ * organizations (at first, those Claude suggested), to a subset, or with the member's
+ * own wording of the brief and the asks. Typing in "Something else" (or the composer)
+ * rejects the card with that text as feedback, as in Claude Code.
+ *
+ * Sending starts the request's threads, whose first turns a spent cap or a pause would
+ * refuse, ending them for good: while the budget isn't `ok`, every send holds, with the
+ * composer's line on the card (LIVE_DEMO_PLAN 3.4). Choosing and rewording still work.
  */
 export function OutreachApproval({
   item,
   busy,
   error,
   onApprove,
+  draft,
+  onDraftChange,
   feedback,
   onFeedbackChange,
   onReject,
@@ -160,41 +233,36 @@ export function OutreachApproval({
   arriving = false,
 }: OutreachApprovalProps) {
   const [mode, setMode] = useState<Mode>("choose");
-  const { listed: everyone, proposed } = outreachRecipients(item);
-  // Kept here, so Back (or Esc) and coming back to a panel doesn't lose the choices.
-  const [chosen, setChosen] = useState<ReadonlySet<string>>(proposed);
-  const [draft, setDraft] = useState(item.brief);
   const titleId = useId();
+  const blocked = budgetLine(useBudgetState());
+  const { listed } = outreachRecipients(item);
   const names = item.recipients
-    .filter((recipient) => proposed.has(recipient.org.id))
+    .filter((recipient) => draft.chosen.has(recipient.org.id))
     .map((recipient) => recipient.org.name)
     .join(", ");
 
   // Whichever way it's sent, the member's other choices go with it.
-  const approve = (recipients: ReadonlySet<string>) => {
-    const brief = editedBrief(item.brief, draft);
-    onApprove({
-      ...(sameSet(recipients, everyone)
-        ? {}
-        : { recipients: item.recipients.map((r) => r.org.id).filter((orgId) => recipients.has(orgId)) }),
-      ...(brief === null ? {} : { brief }),
-    });
+  const approve = () => {
+    if (blocked === null) onApprove(approveBody(item, draft));
   };
 
   const options: AskOption[] = [
-    {
-      id: "all",
-      label:
-        proposed.size < everyone.size
-          ? `Send to ${plural(proposed.size, "organization")}`
-          : proposed.size === 1
-            ? "Send"
-            : `Send to all ${proposed.size}`,
-      hint: names,
-      onSelect: () => {
-        approve(proposed);
-      },
-    },
+    draft.chosen.size === 0
+      ? {
+          id: "all",
+          label: "Choose who receives it…",
+          hint: "No organization is ticked",
+          onSelect: () => {
+            setMode("subset");
+          },
+        }
+      : {
+          id: "all",
+          label: sendLabel(draft.chosen.size, listed.size),
+          hint: names,
+          onSelect: approve,
+          startsTurn: true,
+        },
   ];
   if (item.recipients.length > 1) {
     options.push({
@@ -209,7 +277,7 @@ export function OutreachApproval({
   options.push({
     id: "edit",
     label: "Edit brief…",
-    hint: "Change what your representative asks for",
+    hint: "Change what your representative asks each organization",
     onSelect: () => {
       setMode("edit");
     },
@@ -222,31 +290,28 @@ export function OutreachApproval({
     mode === "subset" ? (
       <SubsetPanel
         item={item}
-        busy={busy}
-        chosen={chosen}
-        onChosenChange={setChosen}
+        busy={busy || blocked !== null}
+        draft={draft}
+        onDraftChange={onDraftChange}
         onBack={back}
-        onSend={() => {
-          approve(chosen);
-        }}
+        onSend={approve}
       />
     ) : mode === "edit" ? (
       <EditPanel
         item={item}
-        busy={busy}
-        draft={draft}
-        onDraftChange={setDraft}
+        busy={busy || blocked !== null}
+        draft={draft}         onDraftChange={onDraftChange}
         onBack={back}
-        onSend={() => {
-          approve(chosen);
-        }}
+        onSend={approve}
       />
     ) : undefined;
 
+  // The whole brief is in the transcript card right above; this is its opening.
+  const gist = briefGist(editedText(item.brief, draft.brief) ?? item.brief);
   return (
     <AskUserCard
       labelledBy={titleId}
-      title={mode === "edit" ? "Edit the brief before it goes out" : `Send this request to ${plural(proposed.size, "organization")}?`}
+      title={mode === "edit" ? "Edit the request before it goes out" : outreachTitle(draft)}
       options={options}
       other={feedback}
       onOtherChange={onFeedbackChange}
@@ -254,17 +319,18 @@ export function OutreachApproval({
       otherPlaceholder="Something else"
       onDismiss={onDismiss}
       busy={busy}
+      blocked={blocked}
       error={error}
       panel={panel}
       onBack={back}
       arriving={arriving}
     >
-      {mode === "choose" ? (
-        // The whole brief is in the transcript card right above; this is its opening.
-        <p className="-mt-1 line-clamp-2 text-[13.5px] leading-5 text-muted">
-          {briefGist(editedBrief(item.brief, draft) ?? item.brief)}
-        </p>
-      ) : undefined}
+      {mode === "edit" ? undefined : (
+        // Keyed on the text: the clamp measures on resize, and new text may not resize it.
+        <ClampedText key={gist} lines={3} className="-mt-1 text-[13.5px] leading-5 text-muted">
+          {gist}
+        </ClampedText>
+      )}
     </AskUserCard>
   );
 }

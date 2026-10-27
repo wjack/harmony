@@ -1,8 +1,10 @@
-"""The production `RequestStarter`: starts a new world's seeded open requests (§11.6).
+"""The production `RequestStarter`: starts a world's seeded open requests (§11.6).
 
 A scenario may seed requests that are open when the world is created, as if their
 outreach had just been approved (threads.yaml's `requests`, such as the adversary's).
-Each gets its `NetworkRequestWorkflow`, the same start an approved outreach card makes.
+Nothing starts them at world creation: each starts the first time the visitor acts as a
+member of one of its party orgs (`WorldService`), with its `NetworkRequestWorkflow`, the
+same start an approved outreach card makes.
 """
 
 from __future__ import annotations

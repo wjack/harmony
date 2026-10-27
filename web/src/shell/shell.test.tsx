@@ -1,233 +1,33 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider, useLocation, type RouteObject } from "react-router";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { createApiClient } from "../api/client";
-import { createQueryClient } from "../api/queryClient";
 import { queryKeys } from "../api/queryKeys";
-import type { Inbox, MemberView, SessionView } from "../api/types";
-import { AppProviders } from "../app/AppProviders";
-import { fetchStreamSnapshot } from "../app/snapshot";
+import type { InboxItem, SessionView } from "../api/types";
 import { clearAllAlerts } from "../demo/alerts";
 import { demoStore } from "../demo/store";
-import { fixtureFetch, json, problem, type FixtureRoutes } from "../fixtures";
+import { problem } from "../fixtures";
+import { alexInbox, conversations, FIXTURE_NOW, members, sessionAs } from "../fixtures/shell";
+import { needsHuman } from "../realtime/testing";
+import { MAX_RECENT_REQUESTS } from "../requests/sections";
 import {
-  alexInbox,
-  conversations,
-  inbox,
-  memberDirectory,
-  members,
-  sessionAs,
-  shellRoutes,
-  WORLD_ID,
-} from "../fixtures/shell";
-import { RealtimeDispatcher } from "../realtime/dispatcher";
-import { EventSources, needsHuman } from "../realtime/testing";
-import { AppLayout, RECONNECT_GRACE_MS } from "./AppLayout";
-import { OpenEscalation } from "./OpenEscalation";
-import { RootLayout } from "./RootLayout";
+  demoBar,
+  FakeServer,
+  Gate,
+  NEW_WORLD_ID,
+  openAccountMenu,
+  renderLive,
+  renderShell,
+  watchFor,
+} from "../test/shellHarness";
+import { RECONNECT_GRACE_MS } from "./AppLayout";
 import { showRail, sidebarStore, toggleSidebar } from "./sidebarStore";
 import { toastStore } from "./toasts";
 
-const NEW_WORLD_ID = "0b1d7a3e-5c2f-4e8a-9a51-000000000002";
 const RECENT = conversations[0]?.title ?? "";
 // Helen's inbox (fixtures/shell.ts): item n is escalation …3e<n> in thread …3b<n>.
 const ESCALATION = (n: number) => `0b1d7a3e-0000-4000-8000-0000000003e${n}`;
 const THREAD = (n: number) => `0b1d7a3e-0000-4000-8000-0000000003b${n}`;
-
-/** The shell's routes with stand-ins for the areas other tasks own. */
-function Page({ name }: { name: string }) {
-  const location = useLocation();
-  return (
-    <p>
-      {name} at {location.pathname}
-      {location.search}
-    </p>
-  );
-}
-
-const testRoutes: RouteObject[] = [
-  {
-    element: <RootLayout />,
-    children: [
-      {
-        element: <AppLayout />,
-        children: [
-          { index: true, element: <Page name="Home" /> },
-          { path: "chat/:id", element: <Page name="Chat" /> },
-          {
-            path: "requests",
-            element: (
-              <OpenEscalation>
-                <Page name="Requests" />
-              </OpenEscalation>
-            ),
-          },
-          { path: "requests/:threadId", element: <Page name="Thread" /> },
-          { path: "network", element: <Page name="Network" /> },
-        ],
-      },
-    ],
-  },
-];
-
-/** Opens when the test says so: holds a response to look at the app mid-request. */
-class Gate {
-  readonly promise: Promise<void>;
-  #open: () => void = () => {};
-
-  constructor() {
-    this.promise = new Promise((resolve) => {
-      this.#open = resolve;
-    });
-  }
-
-  open(): void {
-    this.#open();
-  }
-}
-
-/** The shell fixtures behind a cursor that moves on act-as and reset, as the API's does. */
-class FakeServer {
-  session: SessionView | null;
-  cursor = 7;
-  /** While set, `GET /api/session` waits for it. */
-  sessionGate: Gate | null = null;
-  /** While true, `GET /api/session` answers 503. */
-  down = false;
-  /** While set, act-as answers with it instead of switching. */
-  actAsFailure: (() => Response) | null = null;
-  /** Alex's inbox: empty unless a test gives him a question. */
-  alexInbox: Inbox = { ...inbox, needs_you: [] };
-  readonly calls: string[] = [];
-  readonly #routes: FixtureRoutes;
-
-  constructor(session: SessionView | null) {
-    this.session = session;
-    const everyone = [...memberDirectory.featured, ...memberDirectory.all];
-    this.#routes = {
-      ...shellRoutes(),
-      "GET /api/session": async () => {
-        if (this.down) return problem(503, "unavailable", "Restarting.");
-        await this.sessionGate?.promise;
-        return this.session ?? problem(401, "no_session", "No session.");
-      },
-      "POST /api/session/start": () => {
-        this.session = sessionAs(members.alex, 1);
-        return json(this.session, 200, this.cursor);
-      },
-      "POST /api/session/act-as": ({ body }) => {
-        if (this.actAsFailure !== null) return this.actAsFailure();
-        const target = everyone.find((candidate) => candidate.id === (body as { member_id: string }).member_id);
-        if (this.session === null || target === undefined) return problem(403, "forbidden", "No.");
-        this.cursor += 5; // act-as commits session.member_changed
-        this.session = sessionAs(target, this.session.epoch + 1, this.session.world_id);
-        return json(this.session, 200, this.cursor);
-      },
-      // Recents are Alex's; the Requests items need Helen.
-      "GET /api/conversations": () => (this.acting?.slug === members.alex.slug ? conversations : []),
-      "GET /api/inbox": () =>
-        this.acting?.slug === members.helen.slug
-          ? inbox
-          : this.acting?.slug === members.alex.slug
-            ? this.alexInbox
-            : { ...inbox, needs_you: [] },
-      "POST /api/worlds/reset": () => {
-        if (this.session === null) return problem(401, "no_session", "No session.");
-        this.cursor = 3; // a new world starts its own log
-        // Back at the start of the story, as its member.
-        this.session = sessionAs(members.alex, this.session.epoch + 1, NEW_WORLD_ID);
-        return json(
-          { session: this.session, previous_world_id: WORLD_ID, previous_world_status: "retiring" },
-          200,
-          this.cursor,
-        );
-      },
-    };
-  }
-
-  readonly fetch = (request: Request): Promise<Response> => {
-    this.calls.push(`${request.method} ${new URL(request.url).pathname}`);
-    return fixtureFetch(this.#routes, { cursor: this.cursor })(request);
-  };
-
-  get acting(): MemberView | undefined {
-    return this.session?.member;
-  }
-
-  count(call: string): number {
-    return this.calls.filter((made) => made === call).length;
-  }
-}
-
-function renderShell(server: FakeServer, options: { path?: string; retryDelayMs?: number } = {}) {
-  const api = createApiClient({ baseUrl: "http://harmony.test", fetch: server.fetch });
-  const queryClient = createQueryClient();
-  const sources = new EventSources();
-  const { retryDelayMs } = options;
-  const dispatcher = new RealtimeDispatcher({
-    queryClient,
-    snapshot: () => fetchStreamSnapshot(api, queryClient),
-    openEventSource: sources.open,
-    openChannel: () => null,
-    reload: vi.fn(),
-    ...(retryDelayMs === undefined ? {} : { retryDelayMs: () => retryDelayMs }),
-  });
-  render(
-    <AppProviders api={api} queryClient={queryClient} dispatcher={dispatcher}>
-      <RouterProvider router={createMemoryRouter(testRoutes, { initialEntries: [options.path ?? "/"] })} />
-    </AppProviders>,
-  );
-  return { dispatcher, sources, queryClient };
-}
-
-/** Render as `session`, past the welcome, with the stream open. */
-async function renderLive(session: SessionView, options: { path?: string } = {}) {
-  demoStore.setState({ welcomed: true });
-  const server = new FakeServer(session);
-  const rendered = renderShell(server, options);
-  await act(() => rendered.dispatcher.start());
-  await screen.findByRole("button", { name: `Account: ${session.member.name}` });
-  act(() => {
-    rendered.sources.latest.accept();
-  });
-  return { server, ...rendered };
-}
-
-/** Radix menus open on keyboard as well as pointer; jsdom has no pointer events. */
-async function openAccountMenu(name: string): Promise<HTMLElement> {
-  const trigger = await screen.findByRole("button", { name: `Account: ${name}` });
-  fireEvent.keyDown(trigger, { key: "Enter" });
-  return screen.findByRole("menu");
-}
-
-/** The demo bar. (A banner by role, but hidden from role queries while a modal is up.) */
-function demoBar(): HTMLElement {
-  const bar = document.querySelector<HTMLElement>('header[aria-label="Demo controls"]');
-  if (bar === null) throw new Error("no demo bar");
-  return bar;
-}
-
-/** Records whether `text` is ever in the document, including between React commits. */
-function watchFor(text: string): { seen: () => boolean; stop: () => void } {
-  let seen = document.body.textContent.includes(text);
-  const observer = new MutationObserver((records) => {
-    for (const record of records) {
-      if (record.target.textContent?.includes(text) === true) seen = true;
-      for (const node of record.addedNodes) {
-        if (node.textContent?.includes(text) === true) seen = true;
-      }
-    }
-  });
-  observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-  return {
-    seen: () => seen,
-    stop: () => {
-      observer.disconnect();
-    },
-  };
-}
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -248,6 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it("introduces the demo, starts it as Alex and switches accounts over a fresh stream", async () => {
@@ -545,6 +346,34 @@ it("remembers the collapsed sidebar across a reload", async () => {
   second.dispatcher.stop();
 });
 
+it("on a phone, shows the rail and opens the sidebar over the page until a link or Escape closes it", async () => {
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: media === "(max-width: 767px)",
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }));
+  const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
+
+  // The stored choice is the full sidebar; a phone has no room for it beside the page.
+  expect(screen.getByRole("button", { name: "Open sidebar" })).toBeTruthy();
+  expect(screen.queryByText(RECENT)).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
+  expect(await screen.findByText(RECENT)).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "Network" }));
+  expect(await screen.findByText("Network at /network")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open sidebar" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Close sidebar" }), { key: "Escape" });
+  expect(screen.getByRole("button", { name: "Open sidebar" })).toBeTruthy();
+  // Neither touched the member's stored choice.
+  expect(sidebarStore.getState().collapsed).toBe(false);
+
+  dispatcher.stop();
+});
+
 it("never stores the icon rail a page shows, so closing the tab there keeps the member's choice", () => {
   sidebarStore.setState({ collapsed: false });
   const hide = showRail();
@@ -602,5 +431,79 @@ it("says when live updates drop for longer than a blip, and clears once they're 
   expect(demoBar().textContent).not.toContain(paused);
 
   vi.useRealTimers();
+  dispatcher.stop();
+});
+
+// --- Requests in the sidebar ---------------------------------------------------------------
+
+/** A request of Alex's that Ridgeline's question settled long ago, in his Done. */
+function settled(index: number): InboxItem {
+  const [asked] = alexInbox.needs_you;
+  if (asked === undefined || asked.escalation === null) throw new Error("no question of Alex's");
+  return {
+    ...asked,
+    thread_id: `0b1d7a3e-0000-4000-8000-${String(400 + index).padStart(12, "0")}`,
+    title: `Settled request ${String(index)}`,
+    thread_state: "closed",
+    escalation: { ...asked.escalation, status: "resolved" },
+    last_activity_at: new Date(Date.parse(FIXTURE_NOW) - (60 + index) * 60_000).toISOString(),
+  };
+}
+
+it("lists what needs the member, then ten recent requests and All requests, above Recents in one scroll area", async () => {
+  const { server, dispatcher, queryClient } = await renderLive(sessionAs(members.alex, 1));
+  server.alexInbox = { ...alexInbox, done: Array.from({ length: 12 }, (_, index) => settled(index)) };
+  await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.inbox }));
+
+  const recent = await screen.findByRole("region", { name: "Recent requests" });
+  const needs = screen.getByRole("region", { name: "Needs you" });
+  const chats = screen.getByRole("region", { name: "Recents" });
+  expect(needs.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(recent.compareDocumentPosition(chats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const scroller = needs.closest(".overflow-y-auto");
+  expect(scroller).not.toBeNull();
+  expect(chats.closest(".overflow-y-auto")).toBe(scroller);
+
+  const rows = within(recent).getAllByRole("link");
+  expect(rows).toHaveLength(MAX_RECENT_REQUESTS + 1);
+  expect(rows.at(-1)?.textContent).toBe("All requests");
+  expect(rows.at(-1)?.getAttribute("href")).toBe("/requests");
+  expect(within(recent).queryByText("Settled request 10")).toBeNull();
+
+  // Alex's own side asked this one: he answers it in the chat that sent the request.
+  const asked = within(needs).getByRole("link", { name: /XRD and SEM for 12 Na-ion cathode powders/ });
+  expect(asked.getAttribute("href")).toBe(`/chat/${QUESTION_CHAT}`);
+  // Settled, the same kind of question opens its thread.
+  const done = within(recent).getByRole("link", { name: "Settled request 0, with Ridgeline Fabrication" });
+  expect(done.getAttribute("href")).toBe(`/requests/${settled(0).thread_id}`);
+
+  fireEvent.click(asked);
+  expect(await screen.findByText(`Chat at /chat/${QUESTION_CHAT}`)).toBeTruthy();
+
+  dispatcher.stop();
+});
+
+it("opens Helen's items in Requests, and leaves only the badge on the rail", async () => {
+  const { dispatcher } = await renderLive(sessionAs(members.helen, 1));
+  const needs = await screen.findByRole("region", { name: "Needs you" });
+  // Nothing else of hers to list: All requests sits under what needs her.
+  expect(within(needs).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+    `/requests/${THREAD(1)}`,
+    `/requests/${THREAD(2)}`,
+    "/requests",
+  ]);
+  expect(screen.queryByRole("region", { name: "Recent requests" })).toBeNull();
+  // Neither has been opened in this browser: each link says it's unread, not a bare dot.
+  expect(within(needs).getAllByRole("link", { name: /, unread$/ })).toHaveLength(2);
+  expect(within(needs).queryByLabelText("Unread")).toBeNull();
+  fireEvent.click(within(needs).getByRole("link", { name: /Thursday SEM availability/ }));
+  expect(await screen.findByText(`Thread at /requests/${THREAD(2)}`)).toBeTruthy();
+
+  act(() => {
+    toggleSidebar();
+  });
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull();
+  expect(screen.getByLabelText("2 need you")).toBeTruthy();
+
   dispatcher.stop();
 });

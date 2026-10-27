@@ -44,9 +44,9 @@ from harmony.db.models import (
     Org,
     Thread,
 )
-from harmony.db.models.choices import Side, ThreadState
+from harmony.db.models.choices import FailureReason, Side, ThreadState
 from harmony.db.uow import UnitOfWork, unit_of_work
-from harmony.domain import cards, consults, conversations, escalations, requests, threads
+from harmony.domain import cards, consults, conversations, escalations, notes, requests, threads
 from harmony.domain.errors import (
     CardNotPending,
     ConsultNotOpen,
@@ -166,6 +166,17 @@ class ThreadStateInput(_Payload):
     # The side that ended the thread (a refusal): when this call ends it, the other
     # side is queued the `closed` notice for its last turn. A `close` queues its own.
     closed_by: Side | None = None
+    # Why the system ended it, when it did (3.5): stored with the terminal state.
+    stop_reason: FailureReason | None = None
+
+
+class UnsummarizedInput(_Payload):
+    world_id: UUID
+    thread_id: UUID
+    org_id: UUID
+    # The last turn that failed: it names the note, so a retry writes it once.
+    turn_id: UUID
+    reason: FailureReason
 
 
 class RequestStatusInput(_Payload):
@@ -370,12 +381,30 @@ class NetworkActivities:
                 and state.state in threads.TERMINAL_STATES
             )
             thread = await threads.set_state(
-                uow, state.thread_id, state.state, side_to_move=state.side_to_move
+                uow,
+                state.thread_id,
+                state.state,
+                side_to_move=state.side_to_move,
+                stop_reason=state.stop_reason,
             )
             if thread.state in threads.TERMINAL_STATES:
                 await _cancel_open_items(uow, thread)
             if ending and state.closed_by is not None:
                 await _queue_closed_notice(uow, thread, state.closed_by)
+            await uow.commit()
+
+    @activity.defn
+    async def note_unsummarized(self, failed: UnsummarizedInput) -> None:
+        """`notes.add_unsummarized`: why a side's last turn wrote no closing summary."""
+        await ensure_world_live(self._sessionmaker, failed.world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, failed.world_id) as uow:
+            await notes.add_unsummarized(
+                uow,
+                thread_id=failed.thread_id,
+                org_id=failed.org_id,
+                turn_id=failed.turn_id,
+                reason=failed.reason,
+            )
             await uow.commit()
 
     @activity.defn
@@ -500,9 +529,19 @@ def workflow_missing(error: RPCError) -> bool:
 async def _card_applied(
     session: AsyncSession, card: Card, request_id: UUID | None
 ) -> CardResolutionApplied:
+    """The resolved card as the paused turn's `tool_result`. A card the chat sent
+    without review says so (3.10): Claude learns the send went out unreviewed, or why
+    nothing went out."""
     resolution = cards.resolution_of(card)
     if card.status == "rejected" or resolution is None:
         feedback = resolution.feedback if resolution is not None else None
+        if card.auto:
+            return CardResolutionApplied(
+                resolved=CardResolved(card_id=card.id, status=card.status),
+                tool_use_id=card.tool_use_id,
+                content=f"Couldn't send: {feedback or 'it was refused'}. Nothing went out.",
+                is_error=True,
+            )
         return CardResolutionApplied(
             resolved=CardResolved(card_id=card.id, status=card.status),
             tool_use_id=card.tool_use_id,
@@ -517,10 +556,15 @@ async def _card_applied(
         card.world_id,
         [r.org_id for r in requests.recipients_of(request)] if request else [],
     )
+    content = (
+        f"Sent without review (this chat's setting): request {request_id} to {', '.join(names)}."
+        if card.auto
+        else f"approved; request {request_id} sent to {', '.join(names)}"
+    )
     return CardResolutionApplied(
         resolved=CardResolved(card_id=card.id, status=card.status, request_id=request_id),
         tool_use_id=card.tool_use_id,
-        content=f"approved; request {request_id} sent to {', '.join(names)}",
+        content=content,
     )
 
 
@@ -590,6 +634,8 @@ async def _settle_consult(
                 released_by="member",
                 member_id=resolution.member_id,
             )
+        case "revise":
+            raise ValueError("only a held message can be sent back to be revised")
 
 
 async def _apply_held(
@@ -602,7 +648,7 @@ async def _apply_held(
     """A message the representative wrote in *Ask*, held for a person: approved, it goes
     out as written or as the member edited it, under `escalations.held_message_id`,
     provenance `agent_approved`; `take_over` sends the member's own message instead;
-    `decline` sends nothing."""
+    `decline` and `revise` send nothing."""
     resolution = applied.resolution
     text = (resolution.text or "").strip()
     match resolution.action:
@@ -633,7 +679,7 @@ async def _apply_held(
                 provenance="human",
                 author_member_id=resolution.member_id,
             )
-        case "decline":
+        case "decline" | "revise":
             pass
 
 
@@ -656,7 +702,10 @@ async def _resolution_result(
         sent = resolution.action == "take_over"
     elif escalation.kind == "outbound_review":
         draft = await escalations.current_draft(session, escalation)
-        owed, sent = _held_outcome(resolution, draft)
+        resolver = await repo.get_required(
+            session, Member, escalation.world_id, resolution.member_id
+        )
+        owed, sent = _held_outcome(resolution, draft, resolver_name=resolver.name)
     return ResolutionApplied(
         resolved=EscalationResolved(
             escalation_id=escalation.id,
@@ -670,7 +719,7 @@ async def _resolution_result(
 
 
 def _held_outcome(
-    resolution: EscalationResolution, draft: EscalationDraft | None
+    resolution: EscalationResolution, draft: EscalationDraft | None, *, resolver_name: str
 ) -> tuple[OwedResult, bool]:
     """A resolved hold's result for the representative, and whether a message reached
     the counterparty."""
@@ -678,11 +727,10 @@ def _held_outcome(
         resolution.action,
         text=resolution.text or "",
         drafted=draft.answer if draft is not None else "",
+        member_name=resolver_name,
     )
-    return (
-        OwedResult(tool_use_id="", content=content, is_error=resolution.action == "decline"),
-        resolution.action != "decline",
-    )
+    unsent = resolution.action in ("decline", "revise")
+    return OwedResult(tool_use_id="", content=content, is_error=unsent), not unsent
 
 
 def _sent_message_id(
@@ -790,6 +838,7 @@ __all__ = [
     "SettledCardInput",
     "StartRequestInput",
     "ThreadStateInput",
+    "UnsummarizedInput",
     "conversation_input",
     "domain_errors",
     "run_query",

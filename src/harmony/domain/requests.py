@@ -1,14 +1,18 @@
 """Network requests: an approved brief and its recipients (§4, §7).
 
 `create_from_card` turns an approved outreach card into a `network_requests` row (the
-brief as approved, the approved recipients with fit and reason, `card_id`, the origin
-conversation). The `NetworkRequestWorkflow` (`w:{world}:req:{id}`) then opens one
-thread per recipient.
+title, the brief as approved, the recipients it went to with fit, reason, title, ask
+and suggested, `card_id`, the origin conversation). The `NetworkRequestWorkflow`
+(`w:{world}:req:{id}`) then opens one thread per recipient. Who it goes to
+(`chosen_recipients`): the member's choice; else, for a card its chat sent without
+review, the card's `auto_send_recipients`; else the suggested ones
+(`default_recipients`). The member's edited asks replace the card's.
 
 `status` is the per-recipient view the request status card and `GET /api/requests/{id}`
 show: each recipient's participant status, its thread, who it waits on, its latest
-line, and the requester side's close summary. The orgs the outreach card proposed but
-the member left out follow the approved ones, as `screened` for good (§10).
+line, why its thread stopped, and the requester side's close summary. The orgs the
+outreach card proposed but the request didn't go to follow, as `screened` with
+`sent` false (§10).
 
 Participant status (REVISION_UNSTRUCTURED.md §9), from thread and escalation state:
 - `screened`: its thread hasn't opened yet, or it was screened and left out;
@@ -41,13 +45,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents.models import (
     Brief,
+    CardPayload,
     CardResolution,
     MemberRef,
     OutreachRecipient,
     ParticipantStatus,
     RequestStatus,
     ScreenedCounts,
-    brief_title,
     first_line,
 )
 from harmony.auth.access import Viewer, visible_threads
@@ -64,10 +68,10 @@ from harmony.db.models import (
     Thread,
     ThreadMessage,
 )
-from harmony.db.models.choices import Fit, ThreadState
+from harmony.db.models.choices import FailureReason, Fit, ThreadState
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards
-from harmony.domain.threads import TERMINAL_STATES
+from harmony.domain.threads import TERMINAL_STATES, requester_title
 from harmony.events.schemas import EventScope
 
 # A recipient's latest line on the request status card.
@@ -90,6 +94,8 @@ class RecipientStatus(_View):
     org: OrgRef
     fit: Fit | None
     reason: str
+    # On the request; false for an org the card listed that it didn't go to.
+    sent: bool
     participant: ParticipantStatus
     thread_id: UUID | None
     thread_state: ThreadState | None
@@ -99,6 +105,9 @@ class RecipientStatus(_View):
     latest_line: str | None
     # The requester side's own close summary, once its representative wrote one.
     close_summary: str | None
+    # Why its thread stopped early (a cap, the pause, a model error). Status, not
+    # content, so `scoped` keeps it.
+    stop_reason: FailureReason | None = None
     last_activity_at: datetime | None
 
 
@@ -106,7 +115,7 @@ class RequestStatusView(_View):
     """`GET /api/requests/{id}` and the chat's live request status card."""
 
     id: UUID
-    # `agents.models.brief_title(brief)`.
+    # The request's name on the requester's side (`threads.requester_title`).
     title: str
     status: RequestStatus
     brief: Brief
@@ -118,12 +127,36 @@ class RequestStatusView(_View):
     version: int
 
 
+def default_recipients(payload: CardPayload) -> list[OutreachRecipient]:
+    """Who a card goes to when no one chose: its suggested rows, else the rows whose
+    fit isn't `no` (a card from before suggestions), else every row. The web ticks the
+    same rows by default."""
+    rows = payload.recipients
+    return (
+        [row for row in rows if row.suggested]
+        or [row for row in rows if row.fit != "no"]
+        or list(rows)
+    )
+
+
+def chosen_recipients(payload: CardPayload, resolution: CardResolution) -> list[OutreachRecipient]:
+    """Who an approval sends the card to (module docstring), before asks are edited."""
+    edits = resolution.edits
+    if edits is not None and edits.recipients is not None:
+        chosen = set(edits.recipients)
+    elif resolution.auto and payload.auto_send_recipients is not None:
+        chosen = set(payload.auto_send_recipients)
+    else:
+        return default_recipients(payload)
+    return [row for row in payload.recipients if row.org_id in chosen]
+
+
 async def create_from_card(
     uow: UnitOfWork, card: Card, resolution: CardResolution, *, request_id: UUID
 ) -> NetworkRequest:
     """The request an approved outreach card describes, with the member's edits
-    applied (recipients narrowed to the approved subset). Idempotent on `request_id`
-    and on the card."""
+    applied (`chosen_recipients`, the edited brief and asks). Idempotent on
+    `request_id` and on the card."""
     session = uow.session
     existing = await repo.get(session, NetworkRequest, uow.world_id, request_id)
     if existing is None:
@@ -135,8 +168,11 @@ async def create_from_card(
     payload = cards.payload_of(card)
     edits = resolution.edits
     brief = edits.brief if edits is not None and edits.brief is not None else payload.brief
-    chosen = edits.recipients if edits and edits.recipients is not None else None
-    recipients = [r for r in payload.recipients if chosen is None or r.org_id in chosen]
+    asks = edits.asks if edits is not None and edits.asks is not None else {}
+    recipients = [
+        row.model_copy(update={"ask": asks[row.org_id]}) if row.org_id in asks else row
+        for row in chosen_recipients(payload, resolution)
+    ]
     if not recipients:
         raise ValueError("an outreach approval needs at least one recipient")
     conversation = await repo.get_required(
@@ -149,6 +185,7 @@ async def create_from_card(
         conversation_id=conversation.id,
         created_by_member_id=resolution.member_id,
         card_id=card.id,
+        title=payload.title,
         brief=brief,
         recipients=[r.model_dump(mode="json") for r in recipients],
         status="active",
@@ -208,6 +245,7 @@ async def status(
         for org_id in threads
         if org_id not in listed
     ]
+    sent = {recipient.org_id for recipient in recipients}
     if card is not None:
         listed |= threads.keys()
         recipients += [r for r in cards.payload_of(card).recipients if r.org_id not in listed]
@@ -256,6 +294,7 @@ async def status(
                     org=org,
                     fit=recipient.fit,
                     reason=recipient.reason,
+                    sent=recipient.org_id in sent,
                     participant="screened",
                     thread_id=None,
                     thread_state=None,
@@ -272,6 +311,7 @@ async def status(
                 org=org,
                 fit=recipient.fit,
                 reason=recipient.reason,
+                sent=True,
                 participant=participant(
                     thread, needs_human=bool(escalations), replied=thread.id in replied
                 ),
@@ -284,12 +324,13 @@ async def status(
                 ),
                 latest_line=latest.get(thread.id),
                 close_summary=summaries.get(thread.id),
+                stop_reason=thread.stop_reason,
                 last_activity_at=thread.last_activity_at,
             )
         )
     return RequestStatusView(
         id=request.id,
-        title=brief_title(request.brief),
+        title=requester_title(request),
         status=request_status(request.status),
         brief=request.brief,
         conversation_id=request.conversation_id,
@@ -434,7 +475,9 @@ __all__ = [
     "RecipientStatus",
     "RequestStatusView",
     "WaitingOn",
+    "chosen_recipients",
     "create_from_card",
+    "default_recipients",
     "participant",
     "readable_threads",
     "recipients_of",

@@ -8,17 +8,20 @@ import { useUnavailable } from "./unavailable";
 
 const MAX_RECENTS = 30;
 
-/** The sidebar's Recents: the acting member's chats, most recent first. */
+/**
+ * The sidebar's Recents: the acting member's chats, most recent first. It scrolls with
+ * the requests above it, in the sidebar's scroll area.
+ */
 export function Recents() {
   const conversations = useConversations();
   const items = conversations.data?.slice(0, MAX_RECENTS) ?? [];
 
   return (
-    <section aria-labelledby="recents-heading" className="mt-4 flex min-h-0 flex-1 flex-col">
+    <section aria-labelledby="recents-heading" className="flex flex-col">
       <h2 id="recents-heading" className="px-[7px] pb-1.5 text-xs leading-4 text-muted">
         Recents
       </h2>
-      <ul className="scrollbar-quiet -mr-2 flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pr-2 pb-2">
+      <ul className="flex flex-col gap-px">
         {items.map((conversation) => (
           <RecentRow key={conversation.id} conversation={conversation} />
         ))}

@@ -1,6 +1,8 @@
 # P0: Foundations — build spec
 
 > **Historical.** This plan describes P0 as it was built. [REVISION_UNSTRUCTURED.md](REVISION_UNSTRUCTURED.md) supersedes its descriptions of knowledge visibility, grants, offers and holding messages, which the revision removed; where they disagree, the revision wins.
+>
+> The live demo phase ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md)) supersedes its hosted settings: production runs live models only and refuses `MODEL_MODE=scripted`, which stays the default for local runs, tests and CI; `ACCESS_CODE` is now the master passcode that gates the whole app, and `sessions.access_code_hash` is gone; each Render service carries its own `env_vars` instead of an env group; uvicorn trusts `X-Forwarded-For` only from private addresses; and the hosted caps are those in [ARCHITECTURE.md §14](ARCHITECTURE.md).
 
 P0 builds the platform the agents will run on. It makes **no paid model calls**. The design is [ARCHITECTURE.md](ARCHITECTURE.md); section references (§n) point there. If this spec and the architecture disagree, the architecture wins. Flag the conflict rather than silently picking one.
 

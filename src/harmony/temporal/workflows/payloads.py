@@ -18,16 +18,24 @@ Owner: E4.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Any, Final, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from harmony.agents.models import EscalationAction, RequestStatus
+from harmony.agents.models import MAX_ACTIVE_THREADS, EscalationAction, RequestStatus
 from harmony.agents.runtime import OwedResult, TurnStop
-from harmony.db.models.choices import CardStatus, Side, ThreadState
+from harmony.db.models.choices import (
+    BudgetKind,
+    CardStatus,
+    FailureReason,
+    Side,
+    ThreadState,
+)
 from harmony.temporal.start import world_workflow_id
 
 CONVERSATION_KIND: Final = "conv"
@@ -43,6 +51,22 @@ NOT_IN_ORG_ERROR: Final = "NotInOrg"
 INVALID_RESOLUTION_ERROR: Final = "InvalidResolution"
 # The row an Update names isn't in the world (404).
 NOT_FOUND_ERROR: Final = "NotFoundInWorld"
+# A model activity's refused hosted reservation, non-retryable, with
+# `details=[BudgetExhaustedDetails(...).model_dump()]`: an uncaught exception would
+# reach the workflow with only its class name and message (3.5).
+BUDGET_EXHAUSTED_ERROR: Final = "BudgetExhausted"
+
+# Which failure a refused reservation is, by the cap that refused it (3.5).
+BUDGET_FAILURES: Final[Mapping[BudgetKind, FailureReason]] = MappingProxyType(
+    {
+        "session": "session_budget",
+        "client": "daily_budget",
+        "daily": "daily_budget",
+        "global": "demo_budget",
+        "provider": "demo_budget",
+        "paused": "paused",
+    }
+)
 
 # A conversation workflow continues as new after this many turns, and exits after
 # this long without a message, an update or a pending card.
@@ -74,6 +98,12 @@ def update_failure(error: ActivityError) -> ApplicationError:
 
 class _Payload(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class BudgetExhaustedDetails(_Payload):
+    """The one detail of a `BUDGET_EXHAUSTED_ERROR`."""
+
+    kind: BudgetKind
 
 
 # --- ConversationWorkflow ------------------------------------------------------------
@@ -118,8 +148,23 @@ class ConversationCarry(_Payload):
     closed_request_ids: list[UUID] = []
     # `closed` updates a turn took but never stored (`ConversationWorkflow._undelivered`).
     undelivered_updates: list[NetworkUpdate] = []
-    # The last turn failed, and no turn has run since.
-    turn_failed: bool = False
+    # Why the last turn failed, if it did and no turn has run since.
+    turn_failure: FailureReason | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _failed_flag(cls, data: object) -> object:
+        """A carry from before failure reasons (3.5) says only whether the last turn
+        failed. It reads as `model_error`, as `failure_reason` reads a failure it can't
+        place, so a conversation started or continued then still replays."""
+        if not isinstance(data, dict):
+            return data
+        fields = dict(cast(dict[str, Any], data))
+        if "turn_failed" not in fields:
+            return fields
+        failed = fields.pop("turn_failed")
+        fields.setdefault("turn_failure", "model_error" if failed else None)
+        return fields
 
 
 class ConversationInput(_Payload):
@@ -157,8 +202,8 @@ class ConversationPending(_Payload):
     turn_in_flight: bool
     pending_card_id: UUID | None
     turns: int
-    # The last turn failed (Claude couldn't reply), and no turn has run since.
-    turn_failed: bool = False
+    # Why the last turn failed (Claude couldn't reply), if no turn has run since.
+    turn_failure: FailureReason | None = None
 
 
 # --- NetworkRequestWorkflow ----------------------------------------------------------
@@ -170,7 +215,7 @@ class NetworkRequestInput(_Payload):
     requester_org_id: UUID
     conversation_id: UUID | None
     recipient_org_ids: list[UUID] = Field(min_length=1)
-    max_active_threads: int = Field(default=8, ge=1)
+    max_active_threads: int = Field(default=MAX_ACTIVE_THREADS, ge=1)
 
 
 class NetworkRequestResult(_Payload):
@@ -275,6 +320,8 @@ class ThreadProgress(_Payload):
 
 
 __all__ = [
+    "BUDGET_EXHAUSTED_ERROR",
+    "BUDGET_FAILURES",
     "CARD_NOT_PENDING_ERROR",
     "CONVERSATION_IDLE",
     "CONVERSATION_KIND",
@@ -285,6 +332,7 @@ __all__ = [
     "NOT_IN_ORG_ERROR",
     "REQUEST_KIND",
     "THREAD_KIND",
+    "BudgetExhaustedDetails",
     "CardResolved",
     "ConversationCarry",
     "ConversationInput",

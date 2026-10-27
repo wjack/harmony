@@ -33,6 +33,7 @@ from harmony.api.deps import AppServices, ServicesDep
 from harmony.api.routes.problems import (
     ApiProblemError,
     from_update_failure,
+    invalid,
     member_ref,
     not_found,
     problem,
@@ -87,6 +88,10 @@ async def resolve_escalation(
 ) -> EscalationResolved:
     async with services.sessionmaker() as db:
         escalation = await _open_escalation(db, actor, escalation_id)
+    if body.action == "revise" and (
+        escalation.kind != "outbound_review" or not (body.text or "").strip()
+    ):
+        raise invalid("revise sends a held message back with what to change, so it needs text")
     resolution = EscalationResolution(
         escalation_id=escalation.id,
         action=body.action,

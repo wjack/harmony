@@ -51,6 +51,18 @@ _LAZY_COMMANDS = (
         "app",
         "Run a scenario's story headless in a fresh world and report each beat.",
     ),
+    _LazyCommand(
+        "storage",
+        "harmony.cli_storage",
+        "app",
+        "Object storage utilities. `storage check` puts, gets and deletes a probe.",
+    ),
+    _LazyCommand(
+        "live",
+        "harmony.cli_live",
+        "app",
+        "The live-models switch through the database: `live pause` or `live resume`.",
+    ),
 )
 
 app = typer.Typer(

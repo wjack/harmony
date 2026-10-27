@@ -44,7 +44,9 @@ class NetworkRequest(CreatedAt, VersionedEntity, Base):
     card_id: Mapped[UUID | None]
     # The free-text brief the member approved: the requester representative's mandate.
     brief: Mapped[str]
-    # Approved recipients, with fit and reason as shown on the card.
+    # The request's name for the requester's member; never shown to a responder.
+    title: Mapped[str | None]
+    # Approved recipients, with fit, reason, title, ask and suggested as on the card.
     recipients: Mapped[JsonArray] = mapped_column(server_default=text("'[]'::jsonb"))
     status: Mapped[str] = mapped_column(server_default=text("'active'"))
 

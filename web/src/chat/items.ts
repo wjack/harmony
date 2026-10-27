@@ -79,10 +79,14 @@ function markEndsOfReplies(blocks: Block[]): void {
   if (lastText !== null) lastText.endOfReply = true;
 }
 
-/** The outreach card waiting on the member, drawn above the composer; null when none is. */
+/**
+ * The outreach card waiting on the member, drawn above the composer; null when none is.
+ * A card the chat sends without review is pending only while it goes out: nobody
+ * answers it (LIVE_DEMO_PLAN 3.10).
+ */
 export function pendingCard(detail: Pick<ConversationDetail, "items" | "pending_card_id">): OutreachCardItem | null {
   for (const item of detail.items) {
-    if (item.type !== "outreach_card" || item.status !== "pending") continue;
+    if (item.type !== "outreach_card" || item.status !== "pending" || item.auto) continue;
     if (detail.pending_card_id === null || item.card_id === detail.pending_card_id) return item;
   }
   return null;

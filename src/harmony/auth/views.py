@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final
 from uuid import UUID
@@ -11,11 +11,22 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from harmony.config import Settings
 from harmony.db.models import Member, Org, World
 from harmony.db.models.choices import MemberRole, WorldMode, WorldStatus
+from harmony.llm.pricing import HAIKU_5_5, OPUS_5_5
+from harmony.llm.requests import (
+    HAIKU_DISABLE_THINKING_EFFORTS,
+    ROLE_PROFILES,
+    Tier,
+    resolve_model,
+)
 from harmony.worlds.service import WorldLens
 
 _ROLE_ORDER: Final[dict[MemberRole, int]] = {"admin": 0, "member": 1}
+# How the composer names the model internal Claude runs on.
+MODEL_LABELS: Final[Mapping[str, str]] = {OPUS_5_5: "Opus 5.5", HAIKU_5_5: "Haiku 5.5"}
+SCRIPTED_LABEL: Final = "Scripted"
 
 
 class _View(BaseModel):
@@ -47,6 +58,16 @@ class WorldView(_View):
     ff_offset_s: int
 
 
+class InternalModelView(_View):
+    """The model internal Claude's chats run on for the acting member's org (3.13 E6):
+    the composer shows "{label} · Adaptive" when `adaptive`, else the label."""
+
+    id: str
+    label: str
+    # Its thinking is adaptive (`llm.requests`); never with scripted models.
+    adaptive: bool
+
+
 class SessionView(_View):
     """`GET /api/session`: who the visitor is acting as, and in which world."""
 
@@ -57,6 +78,7 @@ class SessionView(_View):
     world_id: UUID
     world: WorldView
     member: MemberView
+    internal_model: InternalModelView
 
 
 class MemberDirectory(_View):
@@ -105,6 +127,23 @@ async def member_directory(session: AsyncSession, world_id: UUID) -> MemberDirec
     return MemberDirectory(featured=featured, all=rest)
 
 
+def internal_model(org: Org, settings: Settings) -> InternalModelView:
+    """What internal Claude runs on for `org`: its tier's model, or `MODEL_OVERRIDE`."""
+    tier: Tier = "featured" if org.featured else "background"
+    model = resolve_model("internal", tier, settings.model_override)
+    if settings.model_mode == "scripted":
+        return InternalModelView(id=model, label=SCRIPTED_LABEL, adaptive=False)
+    profile = ROLE_PROFILES[("internal", tier)]
+    # The request builder disables Haiku 5.5's thinking only for a role that wants it
+    # off, at an effort that allows it; every other call thinks adaptively.
+    disabled = (
+        model == HAIKU_5_5
+        and profile.thinking_off
+        and profile.effort in HAIKU_DISABLE_THINKING_EFFORTS
+    )
+    return InternalModelView(id=model, label=MODEL_LABELS.get(model, model), adaptive=not disabled)
+
+
 async def session_view(
     session: AsyncSession,
     *,
@@ -113,6 +152,7 @@ async def session_view(
     lens: WorldLens,
     world_id: UUID,
     member_id: UUID,
+    settings: Settings,
 ) -> SessionView:
     """The view of a resolved actor. Raises `LookupError` if the world or member is gone."""
     world = await session.get(World, world_id)
@@ -134,4 +174,5 @@ async def session_view(
             ff_offset_s=world.ff_offset_s,
         ),
         member=member_view(member, org),
+        internal_model=internal_model(org, settings),
     )

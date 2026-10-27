@@ -1,17 +1,20 @@
 """Conversations routes: internal Claude chats (§5, §12, UI_REFERENCE §3–4).
 
 - GET /api/conversations: the acting member's chats, most recent first (Recents)
-- POST /api/conversations {text}: start a chat with its first message
+- POST /api/conversations {text, send_without_confirmation?}: start a chat with its
+  first message
 - GET /api/conversations/{conversation_id}: the chat view (`ChatItem`s)
+- PATCH /api/conversations/{conversation_id} {send_without_confirmation}: the chat's
+  send mode (null follows the org's default)
 - POST /api/conversations/{conversation_id}/messages {text}: send a message
 
 Only the owner sees a conversation (404 for anyone else). The API never calls the
 model and never writes the transcript: posting signal-with-starts the
 `ConversationWorkflow` (`member_message`) with an id minted here; the turn stores it.
-When a card is pending, the message rejects it with the text as feedback
-(`outcome: card_rejected`). Token deltas for the chat stream as `stream.delta` with the
-conversation's id (contract: events/sse.py, E4). Snapshot responses carry
-`X-Harmony-Cursor`.
+When a card awaits the member, the message rejects it with the text as feedback
+(`outcome: card_rejected`); a card the chat sends without review never does. Token
+deltas for the chat stream as `stream.delta` with the conversation's id (contract:
+events/sse.py, E4). Snapshot responses carry `X-Harmony-Cursor`.
 
 Owner: E4.
 """
@@ -48,8 +51,10 @@ from harmony.api.routes.problems import (
 from harmony.auth.session import Actor, ActorDep
 from harmony.db import repo
 from harmony.db.models import Card, Conversation
+from harmony.db.models.choices import FailureReason
 from harmony.db.uow import unit_of_work
 from harmony.domain import cards, conversations
+from harmony.domain.conversations import SendMode
 from harmony.errors import WorldRetired
 from harmony.temporal.activities.network import conversation_input, run_query
 from harmony.temporal.start import start_world_workflow
@@ -86,6 +91,16 @@ class ConversationSummary(_View):
 
 class StartConversation(BaseModel):
     text: str = Field(min_length=1, max_length=MESSAGE_MAX_CHARS)
+    # The new chat's send mode, from the composer; None follows the org's default.
+    send_without_confirmation: bool | None = None
+
+
+class ConversationUpdate(BaseModel):
+    """The key is required: null means "follow the org's default"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    send_without_confirmation: bool | None
 
 
 class ConversationCreated(_View):
@@ -103,9 +118,10 @@ class ConversationDetail(_View):
     # Queued messages not yet in `items` (the workflow holds them until its next turn).
     queued_message_ids: list[UUID]
     turn_in_flight: bool
-    # Claude's last turn failed and nothing has run since: the chat says it couldn't
-    # reply, so the member can try again.
-    turn_failed: bool
+    # Why Claude's last turn failed, if it did and nothing has run since: the chat says
+    # why it couldn't reply, so the member can try again.
+    turn_failure: FailureReason | None
+    send_mode: SendMode
     version: int
 
 
@@ -137,7 +153,7 @@ async def list_conversations(
                 select(Card.conversation_id).where(
                     Card.world_id == actor.world_id,
                     Card.conversation_id.in_([row.id for row in rows]),
-                    Card.status == "pending",
+                    cards.awaiting_member(),
                 )
             )
         )
@@ -176,6 +192,7 @@ async def start_conversation(
                 org_id=actor.org_id,
                 owner_member_id=actor.member_id,
                 first_message=body.text,
+                send_without_confirmation=body.send_without_confirmation,
             )
             await uow.commit()
         try:
@@ -209,6 +226,7 @@ async def get_conversation(
         items = await conversations.chat_items(db, conversation)
         card = await cards.pending(db, world_id=actor.world_id, conversation_id=conversation.id)
         owner = await member_ref(db, actor.world_id, conversation.owner_member_id)
+        mode = await conversations.send_mode(db, conversation)
         cursor = await read_cursor(db, actor.world_id)
     held = await _pending(services, actor.world_id, conversation_id)
     set_cursor(response, cursor)
@@ -222,9 +240,35 @@ async def get_conversation(
         pending_card_id=card.id if card is not None else None,
         queued_message_ids=[m.message_id for m in held.queued_messages] if held else [],
         turn_in_flight=held.turn_in_flight if held else False,
-        turn_failed=held.turn_failed if held else False,
+        turn_failure=held.turn_failure if held else None,
+        send_mode=mode,
         version=conversation.version,
     )
+
+
+@router.patch(
+    "/conversations/{conversation_id}",
+    response_model=SendMode,
+    responses=problems(status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT),
+)
+async def update_conversation(
+    conversation_id: UUID,
+    body: ConversationUpdate,
+    actor: ActorDep,
+    sessionmaker: SessionmakerDep,
+) -> SendMode:
+    """Set the chat's send mode. Only its owner may (404 otherwise)."""
+    try:
+        async with unit_of_work(sessionmaker, actor.world_id) as uow:
+            await _owned(uow.session, actor, conversation_id)
+            conversation = await conversations.set_send_mode(
+                uow, conversation_id, body.send_without_confirmation
+            )
+            mode = await conversations.send_mode(uow.session, conversation)
+            await uow.commit()
+    except WorldRetired:
+        raise world_retired() from None
+    return mode
 
 
 @router.post(

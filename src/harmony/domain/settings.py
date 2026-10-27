@@ -74,6 +74,9 @@ class SettingsEdit(_Edit):
     directory_visibility: DirectoryVisibility | None = None
     routing_prompt: str | None = None
     default_assignee_id: UUID | None = None
+    # Internal Claude's requests go out without review (3.10). Not in any
+    # representative's prompt, so a change sends no notice.
+    send_without_confirmation: bool | None = None
     # `members.profile`, by member id: in place.
     member_profiles: dict[UUID, str] | None = None
 

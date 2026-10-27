@@ -33,6 +33,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 
+from harmony.agents.consult import HELD_DECLINED
 from harmony.agents.models import CardResolution, EscalationAction, EscalationResolution
 from harmony.agents.runtime import (
     ConsultOpened,
@@ -42,7 +43,7 @@ from harmony.agents.runtime import (
     TurnEffect,
     TurnStop,
 )
-from harmony.db.models.choices import ThreadMessageKind
+from harmony.db.models.choices import BudgetKind, FailureReason, ThreadMessageKind
 from harmony.ids import turn_id_for
 from harmony.temporal.activities.agents import (
     AnswerConsultInput,
@@ -68,16 +69,25 @@ from harmony.temporal.activities.network import (
     SettledCardInput,
     StartRequestInput,
     ThreadStateInput,
+    UnsummarizedInput,
 )
-from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE, WORLD_RETIRED
+from harmony.temporal.policies import (
+    CHAT_TASK_QUEUE,
+    MAIN_TASK_QUEUE,
+    MODEL_TASK_QUEUE,
+    WORLD_RETIRED,
+    model_retry_policy,
+)
 from harmony.temporal.workflows.conversation import ConversationWorkflow
 from harmony.temporal.workflows.network_request import NetworkRequestWorkflow
 from harmony.temporal.workflows.payloads import (
+    BUDGET_EXHAUSTED_ERROR,
     CARD_NOT_PENDING_ERROR,
     CONVERSATION_IDLE,
     ESCALATION_NOT_OPEN_ERROR,
     INVALID_RESOLUTION_ERROR,
     NOT_IN_ORG_ERROR,
+    BudgetExhaustedDetails,
     CardResolved,
     ConversationInput,
     ConversationPending,
@@ -144,6 +154,9 @@ class Script:
         self.client = client
         self.calls: list[tuple[str, BaseModel]] = []
         self.rep: dict[tuple[str, int], Plan] = {}
+        # Raised by `rep_turn` in place of a turn: for that turn, else for every turn.
+        self.rep_errors: dict[tuple[str, int], ApplicationError] = {}
+        self.rep_failure: ApplicationError | None = None
         # A failure in place of a decision fails that call.
         self.consults: list[ConsultDecision | ApplicationError] = []
         # A failure in place of a result fails that turn.
@@ -154,6 +167,8 @@ class Script:
         # What `stored_resolution` reads back after a failed apply.
         self.stored: ResolutionApplied | None = None
         self.card_applied: CardResolutionApplied | None = None
+        # The request an approval of each card creates.
+        self.card_requests: dict[UUID, UUID] = {}
         # Raised by `apply_card_resolution` before it stores anything, one per call.
         self.card_errors: list[ApplicationError] = []
         self.settled: CardResolutionApplied | None = None
@@ -167,6 +182,10 @@ class Script:
         # or just after (racing the run's continue-as-new).
         self.signal_during: dict[int, MemberMessage] = {}
         self.signal_after: dict[int, MemberMessage] = {}
+        # `open_thread` starts a real `ThreadWorkflow`, and `notify_conversation`
+        # signals the chat, as the activities do.
+        self.real_threads = False
+        self.forward_notes = False
         self._background: set[asyncio.Task[None]] = set()
 
     def named(self, name: str) -> list[Any]:
@@ -190,6 +209,9 @@ class Script:
     async def rep_turn(self, turn: RepTurnInput) -> RepTurnResult:
         self.calls.append(("rep_turn", turn))
         await self._gate("rep_turn")
+        failure = self.rep_errors.get((turn.side, turn.turn), self.rep_failure)
+        if failure is not None:
+            raise failure
         plan = self.rep.get((turn.side, turn.turn))
         if plan is None:
             raise ApplicationError("no scripted turn", non_retryable=True)
@@ -244,9 +266,18 @@ class Script:
             self.state_failures -= 1
             raise ApplicationError("the database is down")
 
+    @activity.defn(name="note_unsummarized")
+    async def note_unsummarized(self, failed: UnsummarizedInput) -> None:
+        self.calls.append(("note_unsummarized", failed))
+
     @activity.defn(name="notify_conversation")
     async def notify_conversation(self, notify: NotifyConversationInput) -> None:
         self.calls.append(("notify_conversation", notify))
+        if self.forward_notes:
+            chat = self.client.get_workflow_handle(
+                conversation_workflow_id(notify.world_id, notify.conversation_id)
+            )
+            await chat.signal("network_update", notify.update)
 
     @activity.defn(name="apply_resolution")
     async def apply_resolution(self, resolution: ApplyResolutionInput) -> ResolutionApplied:
@@ -276,9 +307,19 @@ class Script:
     @activity.defn(name="apply_card_resolution")
     async def apply_card_resolution(self, card: CardResolutionInput) -> CardResolutionApplied:
         self.calls.append(("apply_card_resolution", card))
+        await self._gate("apply_card_resolution")
         if self.card_errors:
             raise self.card_errors.pop(0)
         resolution = card.resolution
+        request_id = self.card_requests.get(resolution.card_id)
+        if resolution.decision == "approve" and request_id is not None:
+            return CardResolutionApplied(
+                resolved=CardResolved(
+                    card_id=resolution.card_id, status="approved", request_id=request_id
+                ),
+                tool_use_id="toolu_card",
+                content=f"approved; request {request_id}",
+            )
         if self.card_applied is not None:
             return self.card_applied
         return CardResolutionApplied(
@@ -295,6 +336,7 @@ class Script:
     @activity.defn(name="start_network_request")
     async def start_network_request(self, start: StartRequestInput) -> None:
         self.calls.append(("start_network_request", start))
+        await self._gate("start_network_request")
         if self.start_failures > 0:
             self.start_failures -= 1
             raise ApplicationError("the database is down")
@@ -302,9 +344,23 @@ class Script:
     @activity.defn(name="open_thread")
     async def open_thread(self, opened: OpenThreadInput) -> None:
         self.calls.append(("open_thread", opened))
+        thread_id = thread_workflow_id(opened.world_id, opened.thread_id)
+        if not self.real_threads:
+            await self.client.start_workflow(
+                FakeThread.run, id=thread_id, task_queue=MAIN_TASK_QUEUE
+            )
+            return
         await self.client.start_workflow(
-            FakeThread.run,
-            id=thread_workflow_id(opened.world_id, opened.thread_id),
+            ThreadWorkflow.run,
+            ThreadInput(
+                world_id=opened.world_id,
+                thread_id=opened.thread_id,
+                request_id=opened.request_id,
+                requester_org_id=HENDERSON,
+                responder_org_id=opened.responder_org_id,
+                cassette_thread=f"henderson.{opened.responder_org_id.hex[:6]}",
+            ),
+            id=thread_id,
             task_queue=MAIN_TASK_QUEUE,
         )
 
@@ -357,6 +413,7 @@ async def workers(env: WorkflowEnvironment) -> AsyncIterator[Script]:
         ],
         activities=[
             script.set_thread_state,
+            script.note_unsummarized,
             script.notify_conversation,
             script.apply_resolution,
             script.stored_resolution,
@@ -372,9 +429,11 @@ async def workers(env: WorkflowEnvironment) -> AsyncIterator[Script]:
     model = Worker(
         env.client,
         task_queue=MODEL_TASK_QUEUE,
-        activities=[script.rep_turn, script.answer_consult, script.internal_turn],
+        activities=[script.rep_turn, script.answer_consult],
     )
-    async with main, model:
+    # Only here: a conversation that scheduled its turn anywhere else would never run it.
+    chat = Worker(env.client, task_queue=CHAT_TASK_QUEUE, activities=[script.internal_turn])
+    async with main, model, chat:
         try:
             yield script
         finally:
@@ -476,6 +535,22 @@ def states(script: Script) -> list[tuple[str, str | None, str | None]]:
     return [(s.state, s.side_to_move, s.closed_by) for s in calls]
 
 
+def stop_reasons(script: Script) -> list[tuple[str, str | None]]:
+    """The terminal `set_thread_state` calls as (state, stop_reason)."""
+    calls: list[ThreadStateInput] = script.named("set_thread_state")
+    return [(s.state, s.stop_reason) for s in calls if s.state in ("closed", "expired")]
+
+
+def refused(kind: BudgetKind) -> ApplicationError:
+    """What a model activity raises for a reservation `kind` refused (`budget_refused`)."""
+    return ApplicationError(
+        f"the {kind} cap is reached",
+        BudgetExhaustedDetails(kind=kind).model_dump(),
+        type=BUDGET_EXHAUSTED_ERROR,
+        non_retryable=True,
+    )
+
+
 def sides(script: Script) -> list[tuple[str, int]]:
     turns: list[RepTurnInput] = script.named("rep_turn")
     return [(t.side, t.turn) for t in turns]
@@ -527,6 +602,7 @@ async def test_turns_alternate_until_a_side_closes_and_the_other_writes_its_summ
         # Sending handed the move over on the row; only the close is written here, and
         # it names the closer so the other side is told.
         assert states(script) == [("closed", None, "requester")]
+        assert script.named("note_unsummarized") == []
         # The request hears the end once, after the last turn.
         assert await request_saw(request) == ["closed"]
         await stop(request)
@@ -538,23 +614,268 @@ async def test_a_turn_that_sent_nothing_still_hands_the_move_over(
 ) -> None:
     env = temporal_env_time_skipping
     async with workers(env) as script:
-        script.rep[("requester", 1)] = Plan()
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = Plan()
         late = OwedResult(tool_use_id="toolu_late", content="Not run: the turn ran out of steps.")
-        script.rep[("responder", 1)] = Plan(stop="max_steps", owed=late)
-        script.rep[("requester", 2)] = said("close")
-        script.rep[("responder", 2)] = Plan()
+        sent = MessageSent(message_id=uuid4(), message_kind="message")
+        script.rep[("requester", 2)] = Plan(effects=[sent], stop="max_steps", owed=late)
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 3)] = Plan()
         _, handle, request = await start_thread(env)
         result = await handle.result()
 
-        assert (result.state, result.turns) == ("closed", 4)
-        assert states(script) == [
-            ("active", "responder", None),
-            ("active", "requester", None),
-            ("closed", None, "requester"),
-        ]
+        # One quiet turn isn't two: the requester's message keeps the thread going.
+        assert (result.state, result.turns) == ("closed", 5)
+        assert states(script) == [("active", "requester", None), ("closed", None, "responder")]
         last: RepTurnInput = script.named("rep_turn")[-1]
-        assert (last.side, last.owed) == ("responder", [late])
+        assert (last.side, last.owed) == ("requester", [late])
         await stop(request)
+
+
+async def test_a_requester_turn_that_leaves_nothing_sent_expires_the_thread(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        escalation_id = uuid4()
+        script.rep[("requester", 1)] = held(escalation_id)
+        # Told its opener was declined, the requester sends nothing else.
+        script.rep[("requester", 2)] = Plan()
+        script.rep[("responder", 1)] = said()
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: progress(handle),
+            lambda p: p.open_escalation_ids == [escalation_id],
+            "the held opener",
+        )
+        refused = OwedResult(
+            tool_use_id="", content="Not sent: your side didn't approve it.", is_error=True
+        )
+        script.applied = ResolutionApplied(
+            resolved=EscalationResolved(escalation_id=escalation_id, action="decline"),
+            owed=refused,
+            side="requester",
+        )
+        await handle.execute_update(
+            "resolve_escalation",
+            resolution(escalation_id, "decline", ALEX, HENDERSON),
+            result_type=EscalationResolved,
+        )
+        result = await handle.result()
+
+        # Nothing reached the responder: it isn't woken to write first.
+        assert (result.state, result.turns) == ("expired", 2)
+        assert sides(script) == [("requester", 1), ("requester", 2)]
+        assert states(script) == [("active", "requester", None), ("expired", None, None)]
+        assert await request_saw(request) == ["awaiting_principal", "active", "expired"]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_two_silent_turns_in_a_row_expire_the_thread(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        # Each side ends a turn with nothing sent, consulted or held: with bare text
+        # kept private, neither will say anything more (3.13 E3).
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = Plan()
+        script.rep[("requester", 2)] = Plan(stop="max_steps")
+        script.rep[("responder", 2)] = said()
+        _, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("expired", 3)
+        assert sides(script) == [("requester", 1), ("responder", 1), ("requester", 2)]
+        assert states(script)[-1] == ("expired", None, None)
+        assert await request_saw(request) == ["expired"]
+        await stop(request)
+        await replays(env, handle)
+
+
+# Why a model activity fails for good, and the reason the chat or thread shows (3.5).
+FAILURES: list[tuple[str, ApplicationError, FailureReason]] = [
+    ("session", refused("session"), "session_budget"),
+    ("client", refused("client"), "daily_budget"),
+    ("daily", refused("daily"), "daily_budget"),
+    ("global", refused("global"), "demo_budget"),
+    ("provider", refused("provider"), "demo_budget"),
+    ("paused", refused("paused"), "paused"),
+    (
+        "unreadable-kind",
+        ApplicationError("cap", type=BUDGET_EXHAUSTED_ERROR, non_retryable=True),
+        "demo_budget",
+    ),
+    ("400", ApplicationError("400", type="BadRequest", non_retryable=True), "model_error"),
+    (
+        "incomplete",
+        ApplicationError("cut off", type="TurnIncomplete", non_retryable=True),
+        "model_error",
+    ),
+    # Retried, then given up on.
+    ("5xx", ApplicationError("overloaded", type="ModelCallError"), "model_error"),
+]
+
+
+def attempts(failure: ApplicationError) -> int:
+    return 1 if failure.non_retryable else model_retry_policy().maximum_attempts
+
+
+THREAD_FAILURES = [pytest.param(error, reason, id=name) for name, error, reason in FAILURES]
+
+
+@pytest.mark.parametrize(("failure", "reason"), THREAD_FAILURES)
+async def test_a_failed_turn_stops_the_thread_with_its_reason(
+    temporal_env_time_skipping: WorkflowEnvironment,
+    failure: ApplicationError,
+    reason: FailureReason,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep_errors[("responder", 1)] = failure
+        _, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 2)
+        assert stop_reasons(script) == [("closed", reason)]
+        assert len(script.named("rep_turn")) == 1 + attempts(failure)
+        assert await request_saw(request) == ["closed"]
+        await stop(request)
+
+
+@pytest.mark.parametrize(("failure", "reason"), THREAD_FAILURES)
+async def test_a_failed_last_turn_leaves_its_side_a_note_on_a_normal_close(
+    temporal_env_time_skipping: WorkflowEnvironment,
+    failure: ApplicationError,
+    reason: FailureReason,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = said("close")
+        script.rep_errors[("requester", 2)] = failure
+        thread, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 3)
+        # The responder's close stands: the thread isn't marked stopped.
+        assert stop_reasons(script) == [("closed", None)]
+        notes: list[UnsummarizedInput] = script.named("note_unsummarized")
+        assert [(n.org_id, n.turn_id, n.reason) for n in notes] == [
+            (HENDERSON, turn_id_for(thread.world_id, thread.thread_id, HENDERSON, 2), reason)
+        ]
+        assert await request_saw(request) == ["closed"]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_refused_last_turn_leaves_its_side_a_note_on_a_normal_close(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = said("close")
+        # The model declines to write the requester's summary: a refusal is a result,
+        # not a failed activity, and must not leave the close silent.
+        script.rep[("requester", 2)] = Plan(stop="refusal")
+        thread, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 3)
+        assert stop_reasons(script) == [("closed", None)]
+        notes: list[UnsummarizedInput] = script.named("note_unsummarized")
+        assert [(n.org_id, n.turn_id, n.reason) for n in notes] == [
+            (HENDERSON, turn_id_for(thread.world_id, thread.thread_id, HENDERSON, 2), "refused")
+        ]
+        assert await request_saw(request) == ["closed"]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_refused_answer_stops_the_thread_rather_than_asking_a_person(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = consulting(uuid4())
+        script.consults = [refused("daily")]
+        _, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert result.state == "closed"
+        assert stop_reasons(script) == [("closed", "daily_budget")]
+        assert script.named("notify_conversation") == []
+        # Waiting on the answer, then ended: nobody was asked.
+        assert await request_saw(request) == ["awaiting_principal", "closed"]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_held_message_sent_back_to_be_rewritten_sends_nothing(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        escalation_id = uuid4()
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = held(escalation_id)
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 2)] = said("close")
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: progress(handle),
+            lambda p: p.open_escalation_ids == [escalation_id],
+            "the held message",
+        )
+        # A revise says what to change.
+        cause = await update_error(
+            handle.execute_update(
+                "resolve_escalation", resolution(escalation_id, "revise", HELEN, NORTHLAKE)
+            )
+        )
+        assert cause.type == INVALID_RESOLUTION_ERROR
+        assert script.named("apply_resolution") == []
+
+        note = OwedResult(
+            tool_use_id="",
+            content="Not sent: Helen asked you to change it. Their note is for you only.",
+            is_error=True,
+        )
+        script.applied = ResolutionApplied(
+            resolved=EscalationResolved(escalation_id=escalation_id, action="revise"),
+            owed=note,
+            side="responder",
+        )
+        resolved = await handle.execute_update(
+            "resolve_escalation",
+            resolution(escalation_id, "revise", HELEN, NORTHLAKE, text="Don't quote a date."),
+            result_type=EscalationResolved,
+        )
+        assert (resolved.action, resolved.message_id) == ("revise", None)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 4)
+        (applied,) = script.named("apply_resolution")
+        assert (applied.resolution.action, applied.resolution.text) == (
+            "revise",
+            "Don't quote a date.",
+        )
+        # Nothing crossed: the responder rewrites, opening with the note.
+        assert sides(script) == [
+            ("requester", 1),
+            ("responder", 1),
+            ("responder", 2),
+            ("requester", 2),
+        ]
+        turns: list[RepTurnInput] = script.named("rep_turn")
+        call = f"toolu_{escalation_id.hex[:6]}"
+        assert turns[2].owed == [note.model_copy(update={"tool_use_id": call})]
+        await stop(request)
+        await replays(env, handle)
 
 
 async def test_a_refusal_closes_the_thread_and_the_last_turn_can_only_summarize(
@@ -571,8 +892,62 @@ async def test_a_refusal_closes_the_thread_and_the_last_turn_can_only_summarize(
 
         assert (result.state, result.turns) == ("closed", 3)
         assert states(script) == [("closed", None, "responder")]
+        assert stop_reasons(script) == [("closed", "refused")]
         assert script.named("answer_consult") == []
         assert await request_saw(request) == ["closed"]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_refusal_before_anything_crossed_never_wakes_the_responder(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        # The requester's opener is refused outright: nobody wrote to the responder, so
+        # it has nothing to answer or summarize (3.13 E3).
+        script.rep[("requester", 1)] = Plan(stop="refusal")
+        script.rep[("responder", 1)] = said("close")
+        _, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 1)
+        assert sides(script) == [("requester", 1)]
+        assert states(script) == [("closed", None, None)]
+        assert stop_reasons(script) == [("closed", "refused")]
+        assert script.named("note_unsummarized") == []
+        assert await request_saw(request) == ["closed"]
+        await stop(request)
+        await replays(env, handle)
+
+        script.calls.clear()
+        script.rep.clear()
+        escalation_id = uuid4()
+        # Refused after its held opener was declined: still nothing crossed.
+        script.rep[("requester", 1)] = held(escalation_id)
+        script.rep[("requester", 2)] = Plan(stop="refusal")
+        script.rep[("responder", 1)] = said("close")
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: progress(handle),
+            lambda p: p.open_escalation_ids == [escalation_id],
+            "the held opener",
+        )
+        script.applied = ResolutionApplied(
+            resolved=EscalationResolved(escalation_id=escalation_id, action="decline"),
+            owed=OwedResult(tool_use_id="", content=HELD_DECLINED, is_error=True),
+            side="requester",
+        )
+        await handle.execute_update(
+            "resolve_escalation",
+            resolution(escalation_id, "decline", ALEX, HENDERSON),
+            result_type=EscalationResolved,
+        )
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 2)
+        assert sides(script) == [("requester", 1), ("requester", 2)]
+        assert stop_reasons(script) == [("closed", "refused")]
         await stop(request)
         await replays(env, handle)
 
@@ -599,6 +974,7 @@ async def test_the_turn_cap_expires_a_thread_and_a_failed_turn_closes_one(
         result = await failed.result()
         assert (result.state, result.turns) == ("closed", 2)
         assert states(script) == [("closed", None, None)]
+        assert stop_reasons(script) == [("closed", "model_error")]
         for request in (capped_request, failed_request):
             await stop(request)
 
@@ -635,6 +1011,14 @@ async def test_an_escalated_consult_waits_for_a_member(
         cause = await update_error(
             handle.execute_update(
                 "resolve_escalation", resolution(escalation_id, "take_over", HELEN, NORTHLAKE)
+            )
+        )
+        assert cause.type == INVALID_RESOLUTION_ERROR
+        # Sending back to be rewritten is for a held message, not a consult (3.13 E3b).
+        cause = await update_error(
+            handle.execute_update(
+                "resolve_escalation",
+                resolution(escalation_id, "revise", HELEN, NORTHLAKE, text="Shorter."),
             )
         )
         assert cause.type == INVALID_RESOLUTION_ERROR
@@ -1448,6 +1832,7 @@ async def test_a_card_pauses_the_turn_until_it_is_approved(
             tool_use_id="toolu_card",
             content=f"approved; request {request_id} sent to Northlake",
         )
+        script.gates["start_network_request"] = asyncio.Event()
         handle, message = await start_chat(env)
         await eventually(
             lambda: pending(handle), lambda p: p.pending_card_id == card_id, "the card"
@@ -1473,6 +1858,9 @@ async def test_a_card_pauses_the_turn_until_it_is_approved(
             result_type=CardResolved,
         )
         assert (resolved.status, resolved.request_id) == ("approved", request_id)
+        # Approved, the card is gone and the turn about to resume: the chat reads busy.
+        assert ((p := await pending(handle)).pending_card_id, p.turn_in_flight) == (None, True)
+        script.gates["start_network_request"].set()
 
         result = await handle.result()
         assert result.turns == 1
@@ -1864,24 +2252,221 @@ async def test_a_failed_turn_is_reported_until_the_next_one(
             "the next run",
         )
         failed = await pending(handle)
-        assert (failed.turns, failed.turn_failed) == (1, True)
+        assert (failed.turns, failed.turn_failure) == (1, "model_error")
 
         await handle.signal("member_message", _message("Try again."))
         await eventually(taken(script), lambda t: len(t) == 2, "the next turn")
         retried = await eventually(
             lambda: pending(handle), lambda p: not p.turn_in_flight, "the next turn's end"
         )
-        assert (retried.turns, retried.turn_failed) == (2, False)
+        assert (retried.turns, retried.turn_failure) == (2, None)
         assert (await handle.result()).turns == 2
+
+
+def auto_card(card_id: UUID) -> InternalTurnResult:
+    """A turn paused on a card its chat sends without review."""
+    return _turn("awaiting_card", card_id=card_id, card_tool_use_id="toolu_card", card_auto=True)
+
+
+def updates_in(history: Any) -> int:
+    return sum(
+        1
+        for e in history.events
+        if e.HasField("workflow_execution_update_accepted_event_attributes")
+    )
+
+
+def scheduled_retries(history: Any, activity_name: str) -> list[int]:
+    """The `maximum_attempts` each scheduling of `activity_name` asked for."""
+    return [
+        e.activity_task_scheduled_event_attributes.retry_policy.maximum_attempts
+        for e in history.events
+        if e.HasField("activity_task_scheduled_event_attributes")
+        and e.activity_task_scheduled_event_attributes.activity_type.name == activity_name
+    ]
+
+
+CHAT_FAILURES = [
+    *(pytest.param([error] * attempts(error), reason, id=name) for name, error, reason in FAILURES),
+    pytest.param([_turn("refusal")], "refused", id="refusal"),
+]
+
+
+@pytest.mark.parametrize(("lost", "reason"), CHAT_FAILURES)
+async def test_why_a_turn_failed_is_shown_until_the_next_message(
+    temporal_env_time_skipping: WorkflowEnvironment,
+    lost: list[InternalTurnResult | ApplicationError],
+    reason: FailureReason,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.internal = [*lost, _turn("end_turn")]
+        handle, _ = await start_chat(env)
+        if len(lost) > 1:
+            # Let the server's retry timers run out.
+            await env.sleep(timedelta(minutes=5))
+        failed = await eventually(
+            lambda: pending(handle),
+            lambda p: p.turn_failure is not None and not p.turn_in_flight,
+            "the failed turn",
+        )
+        assert failed.turn_failure == reason
+        assert len(script.named("internal_turn")) == len(lost)
+
+        await handle.signal("member_message", _message("Try again."))
+        retried = await eventually(
+            lambda: pending(handle),
+            lambda p: p.turns == 2 and not p.turn_in_flight,
+            "the next turn's end",
+        )
+        assert retried.turn_failure is None
+        assert (await handle.result()).turns == 2
+
+
+async def test_an_auto_card_is_sent_as_its_owner_without_an_update(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        card_id, request_id = uuid4(), uuid4()
+        script.internal = [auto_card(card_id), _turn("end_turn")]
+        script.card_requests[card_id] = request_id
+        script.gates["apply_card_resolution"] = asyncio.Event()
+        script.gates["start_network_request"] = asyncio.Event()
+        handle, _ = await start_chat(env)
+        await eventually(
+            lambda: script.recorded("apply_card_resolution"), lambda r: len(r) == 1, "the send"
+        )
+        # Never the member's to settle: no pending card, and resolving it is refused.
+        # The chat reads busy all along, so the web keeps following the turn.
+        assert ((p := await pending(handle)).pending_card_id, p.turn_in_flight) == (None, True)
+        cause = await update_error(
+            handle.execute_update(
+                "resolve_card",
+                CardResolution(card_id=card_id, decision="reject", member_id=ALEX, feedback="No"),
+            )
+        )
+        assert cause.type == CARD_NOT_PENDING_ERROR
+        script.gates["apply_card_resolution"].set()
+        await eventually(
+            lambda: script.recorded("start_network_request"), lambda r: len(r) == 1, "the start"
+        )
+        assert (await pending(handle)).turn_in_flight
+        script.gates["start_network_request"].set()
+        assert (await handle.result()).turns == 1
+
+        assert [name for name, _ in script.calls] == [
+            "internal_turn",
+            "apply_card_resolution",
+            "start_network_request",
+            "internal_turn",
+        ]
+        (applied,) = script.named("apply_card_resolution")
+        assert applied.resolution == CardResolution(
+            card_id=card_id, decision="approve", member_id=ALEX, auto=True
+        )
+        started: list[StartRequestInput] = script.named("start_network_request")
+        assert [s.request_id for s in started] == [request_id]
+        _, resumed = script.named("internal_turn")
+        assert resumed.card == CardOutcome(
+            card_id=card_id, tool_use_id="toolu_card", content=f"approved; request {request_id}"
+        )
+        history = await handle.fetch_history()
+        assert updates_in(history) == 0
+        # Mirror options: retried until it is stored.
+        assert scheduled_retries(history, "apply_card_resolution") == [0]
+        await replays(env, handle)
+
+
+async def test_an_auto_send_that_fails_once_starts_its_request_once(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        card_id, request_id = uuid4(), uuid4()
+        script.internal = [auto_card(card_id), _turn("end_turn")]
+        script.card_requests[card_id] = request_id
+        script.card_errors = [ApplicationError("the database is down")]
+        handle, _ = await start_chat(env)
+        assert (await handle.result()).turns == 1
+
+        applied: list[CardResolutionInput] = script.named("apply_card_resolution")
+        assert [a.resolution.decision for a in applied] == ["approve", "approve"]
+        started: list[StartRequestInput] = script.named("start_network_request")
+        assert [s.request_id for s in started] == [request_id]
+        await replays(env, handle)
+
+
+async def test_an_auto_send_that_cant_be_stored_rejects_the_card_and_resumes(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        card_id = uuid4()
+        script.internal = [auto_card(card_id), _turn("end_turn"), _turn("end_turn")]
+        script.card_requests[card_id] = uuid4()
+        script.card_errors = [
+            ApplicationError(
+                "no recipient is left to send to", type=INVALID_RESOLUTION_ERROR, non_retryable=True
+            )
+        ]
+        handle, _ = await start_chat(env)
+        await eventually(taken(script), lambda t: len(t) == 2, "the resumed turn")
+        await handle.signal("member_message", _message("Why not?"))
+        turns = await eventually(taken(script), lambda t: len(t) == 3, "the member's turn")
+        assert (await handle.result()).turns == 2
+
+        approve, reject = script.named("apply_card_resolution")
+        assert approve.resolution.decision == "approve"
+        assert reject.resolution == CardResolution(
+            card_id=card_id,
+            decision="reject",
+            member_id=ALEX,
+            feedback="no recipient is left to send to",
+            auto=True,
+        )
+        assert script.named("start_network_request") == []
+        _, resumed, after = turns
+        assert resumed.card is not None
+        assert resumed.card.content == "rejected: no recipient is left to send to"
+        assert (after.turn, [m.text for m in after.messages]) == (2, ["Why not?"])
+        await replays(env, handle)
+
+
+async def test_two_auto_sends_in_one_turn_create_two_requests(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        first, second = uuid4(), uuid4()
+        script.card_requests = {first: uuid4(), second: uuid4()}
+        script.internal = [auto_card(first), auto_card(second), _turn("end_turn")]
+        handle, _ = await start_chat(env)
+        assert (await handle.result()).turns == 1
+
+        started: list[StartRequestInput] = script.named("start_network_request")
+        assert [s.request_id for s in started] == [
+            script.card_requests[first],
+            script.card_requests[second],
+        ]
+        turns: list[InternalTurnInput] = script.named("internal_turn")
+        assert [t.card.card_id if t.card else None for t in turns] == [None, first, second]
+        assert len({t.turn_id for t in turns}) == 1, "one turn, resumed twice"
+        assert updates_in(await handle.fetch_history()) == 0
+        await replays(env, handle)
 
 
 # --- NetworkRequestWorkflow -----------------------------------------------------------
 
 
 async def start_request(
-    env: WorkflowEnvironment, recipients: list[UUID], **overrides: Any
+    env: WorkflowEnvironment,
+    recipients: list[UUID],
+    *,
+    world_id: UUID | None = None,
+    **overrides: Any,
 ) -> tuple[WorkflowHandle[Any, Any], UUID]:
-    world_id, request_id = uuid4(), uuid4()
+    world_id, request_id = world_id or uuid4(), uuid4()
     handle = await env.client.start_workflow(
         NetworkRequestWorkflow.run,
         NetworkRequestInput.model_validate(
@@ -1998,3 +2583,32 @@ async def test_an_ended_thread_stays_ended_and_a_request_without_a_chat_tells_no
         assert script.named("notify_conversation") == []
         for thread_id in (northlake, calder):
             await stop(env.client.get_workflow_handle(thread_workflow_id(world_id, thread_id)))
+
+
+async def test_a_request_whose_threads_all_stop_on_the_budget_closes_and_wakes_claude_once(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.real_threads = script.forward_notes = True
+        script.rep_failure = refused("global")
+        script.internal = [_turn("end_turn"), _turn("end_turn")]
+        chat, _ = await start_chat(env)
+        (first,) = await eventually(taken(script), lambda t: len(t) == 1, "the first turn")
+        handle, _ = await start_request(
+            env,
+            [NORTHLAKE, CALDER],
+            world_id=first.world_id,
+            conversation_id=first.conversation_id,
+        )
+        result = await handle.result()
+
+        assert result.status == "closed"
+        assert sorted(stop_reasons(script)) == [("closed", "demo_budget")] * 2
+        notes: list[NotifyConversationInput] = script.named("notify_conversation")
+        assert [n.update.kind for n in notes] == ["closed"]
+        turns = await eventually(taken(script), lambda t: len(t) == 2, "the closed turn")
+        assert [u.kind for u in turns[1].network_updates] == ["closed"]
+        assert (await chat.result()).turns == 2
+        assert len(script.named("internal_turn")) == 2
+        await replays(env, handle, chat)

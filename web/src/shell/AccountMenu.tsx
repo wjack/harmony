@@ -7,7 +7,7 @@ import {
   Gift,
   Globe,
   Info,
-  LogOut,
+  Lock,
   RotateCcw,
   Settings,
   SlidersHorizontal,
@@ -16,6 +16,7 @@ import {
 import { useState } from "react";
 
 import type { MemberView } from "../api/types";
+import { useLockHarmony } from "../app/lock";
 import { useDemoStory, useMembers } from "../app/queries";
 import { useSwitchAccount } from "../demo/accounts";
 import { menuAccounts } from "../demo/cast";
@@ -160,6 +161,7 @@ export function AccountMenuContent({
   const members = useMembers();
   const story = useDemoStory();
   const { switchTo } = useSwitchAccount();
+  const lockHarmony = useLockHarmony();
   const unavailable = useUnavailable();
   const { shown, more } = menuAccounts(members.data, story.data, member.id);
 
@@ -253,8 +255,13 @@ export function AccountMenuContent({
       </MenuItem>
 
       <MenuSeparator />
-      <MenuItem icon={<LogOut {...ICON} />} onSelect={() => { unavailable("Log out"); }}>
-        Log out
+      <MenuItem
+        icon={<Lock {...ICON} />}
+        onSelect={() => {
+          lockHarmony.mutate();
+        }}
+      >
+        Lock Harmony
       </MenuItem>
     </MenuContent>
   );

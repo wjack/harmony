@@ -29,6 +29,7 @@ from harmony.db import repo
 from harmony.db.models import Member, NetworkRequest, Org, Thread, ThreadAccess, ThreadMessage
 from harmony.db.models.choices import (
     AccessReason,
+    FailureReason,
     Provenance,
     Side,
     ThreadMessageKind,
@@ -51,9 +52,11 @@ class ThreadSummary(_View):
     """One inbox row."""
 
     id: UUID
-    # The request's title as the member's side names it (`threads.request_title`).
+    # As the member's side names the thread (`threads.thread_title`).
     title: str
     state: ThreadState
+    # Why it stopped early (a cap, the pause, a model error); None otherwise.
+    stop_reason: FailureReason | None = None
     # The acting member's side of the thread.
     side: Side
     requester: OrgRef
@@ -269,13 +272,15 @@ async def _summaries(
             thread,
             ThreadSummary(
                 id=thread.id,
-                title=threads.request_title(
-                    actor.org_id,
+                title=threads.thread_title(
+                    thread,
                     request,
+                    actor.org_id,
                     requester=requester_org.name,
                     opening=openings.get(thread.id),
                 ),
                 state=thread.state,
+                stop_reason=thread.stop_reason,
                 side="requester" if thread.requester_org_id == actor.org_id else "responder",
                 requester=org_ref(requester_org),
                 responder=org_ref(responder_org),

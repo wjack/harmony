@@ -6,10 +6,20 @@
 - `search_network(need)`: runs discovery (`discovery.DiscoveryStrategy`) on a free-text
   need and returns the shortlist as JSON: fits, org ids and slugs, the code-computed
   rank, and quoted, truncated, summary-derived reasons (§6.1 step 5).
-- `send_network_request(brief, recipients)`: creates the pending outreach card
-  (`domain.cards.create`) from the free-text brief and the proposed recipients; the turn
-  pauses until the member resolves it (`runtime.CardRaised`). Its result, when the turn
-  resumes, is "approved; request R sent to …" or "rejected: <feedback>".
+- `send_network_request(title, brief, recipients)`: creates the outreach card
+  (`domain.cards.create`) from the request's title, the free-text brief and the proposed
+  recipients, each with its own title, ask and `suggested` flag; the turn pauses until
+  the card is resolved (`runtime.CardRaised`). With two or more recipients, the brief
+  names none of them and no recipient's ask or title names another (our representative
+  in each conversation sees only the brief and that organization's ask, and both sides
+  see its title). In a chat that sends without review
+  (`conversations.effective_send_mode`, read live) the card is `auto`: it goes to the
+  suggested recipients once the guards pass (screened strong or possible in this chat,
+  at most `AUTO_SEND_MAX_RECIPIENTS`, at most `AUTO_SENDS_PER_TURN` such cards a turn,
+  none already in a live conversation from this chat), and the workflow settles it. The
+  decision is stored on the card, so a retried call keeps it. The result, when the turn
+  resumes, says whether the request was sent (and its ID) or what the member said
+  instead.
 - `get_request_status`: each recipient's status, its latest line and this side's own
   close summary. Counterparty-derived text reaches internal Claude only here, as
   tool-result content (§2.1 Untrusted inbound).
@@ -22,16 +32,18 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Sequence
-from typing import Final, NamedTuple
+from collections.abc import Mapping, Sequence
+from typing import Annotated, Final, NamedTuple
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from harmony.agents.discovery import FIT_TIERS, DiscoveryStrategy, SearchOrigin
 from harmony.agents.models import (
+    MAX_ACTIVE_THREADS,
+    Ask,
     Brief,
     OutreachCardPayload,
     OutreachRecipient,
@@ -42,6 +54,7 @@ from harmony.agents.tools import ToolDefinition
 from harmony.auth.access import MemberViewer
 from harmony.db import repo
 from harmony.db.models import (
+    Card,
     ChatMessage,
     Document,
     KnowledgeItem,
@@ -49,10 +62,11 @@ from harmony.db.models import (
     NetworkRequest,
     Org,
     Screening,
+    Thread,
 )
 from harmony.db.models.choices import Fit
 from harmony.db.uow import unit_of_work
-from harmony.domain import cards, records, requests
+from harmony.domain import cards, conversations, records, requests, threads
 from harmony.ids import side_effect_id
 from harmony.llm.wire import objects
 
@@ -112,41 +126,94 @@ SEARCH_NETWORK_TOOL: Final[ToolDefinition] = {
     },
 }
 
+# A request's or a conversation's name, like an email subject (3.13 E7, E13).
+TITLE_MAX_CHARS: Final = 60
+
 SEND_NETWORK_REQUEST_TOOL: Final[ToolDefinition] = {
     "name": SEND_NETWORK_REQUEST,
     "description": (
-        "Propose a request to organizations on Harmony. The member sees an approval card "
-        "with the brief and recipients and may edit the brief; nothing is sent until they "
-        "approve. The result says whether they approved (and the request ID) or what they "
-        "said instead."
+        "Propose a Harmony Network Request to organizations the search screened: one brief "
+        "for all of them, and each organization's own title and ask. Usually the member "
+        "approves it first on a card, where they can edit the brief and the asks and "
+        "choose the recipients; in a chat set to send without review it goes out at once, "
+        "to the suggested organizations. The result says which: sent (with the request "
+        "ID), or what the member said instead. Send one request per call."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
+            "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": TITLE_MAX_CHARS,
+                "description": (
+                    "The request's name for the member, like an email subject, at most "
+                    "about 6 words. No recipient sees it."
+                ),
+            },
             "brief": {
                 "type": "string",
                 "description": (
-                    "The brief for the member's representative, in prose: what is needed, "
-                    "by when, what it may tell counterparties, and what it may agree to "
-                    "on its own. It is the representative's whole mandate."
+                    "The brief goes to every recipient's representative: write only what "
+                    "holds for all of them (who you are, timing, what may be shared). Put "
+                    "each organization's part, and any limit such as a budget, in its ask. "
+                    "In prose: what is needed, by when, what the representative may tell "
+                    "counterparties, and what it may agree to on its own. Don't name the "
+                    "recipients."
                 ),
             },
             "recipients": {
                 "type": "array",
                 "description": (
-                    "Organizations the search screened, by slug, with why: the shortlist, "
-                    "and any near miss the member may still want (the card leaves it "
-                    "unticked)."
+                    "Organizations the search screened, by slug: the ones that fit, and any "
+                    "near miss the member may still want (suggested false)."
                 ),
                 "items": {
                     "type": "object",
-                    "properties": {"org": {"type": "string"}, "reason": {"type": "string"}},
-                    "required": ["org", "reason"],
+                    "properties": {
+                        "org": {
+                            "type": "string",
+                            "description": "Its slug from the search's shortlist.",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Why it fits, or why it was screened out, for the "
+                            "member.",
+                        },
+                        "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": TITLE_MAX_CHARS,
+                            "description": (
+                                "This conversation's subject. Both sides see it verbatim, so "
+                                "name only this organization's part, and never a budget, "
+                                "limit, deadline pressure or anything the brief keeps "
+                                "private."
+                            ),
+                        },
+                        "ask": {
+                            "type": "string",
+                            "description": (
+                                "What to ask this organization, in prose: only its part, and "
+                                "any limit such as a budget. Your representative in that "
+                                "conversation sees the brief and this ask, and nothing about "
+                                "the other organizations."
+                            ),
+                        },
+                        "suggested": {
+                            "type": "boolean",
+                            "description": (
+                                "true to send to it; false lists the organization for the "
+                                "member's decision, and the card starts it unticked."
+                            ),
+                        },
+                    },
+                    "required": ["org", "reason", "title", "ask", "suggested"],
                     "additionalProperties": False,
                 },
             },
         },
-        "required": ["brief", "recipients"],
+        "required": ["title", "brief", "recipients"],
         "additionalProperties": False,
     },
 }
@@ -207,12 +274,21 @@ class SearchNetworkInput(_Input):
     need: str = Field(min_length=1)
 
 
+Title = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TITLE_MAX_CHARS)
+]
+
+
 class RecipientInput(_Input):
     org: str
     reason: str
+    title: Title
+    ask: Ask
+    suggested: bool
 
 
 class SendNetworkRequestInput(_Input):
+    title: Title
     brief: Brief
     recipients: list[RecipientInput] = Field(min_length=1)
 
@@ -235,6 +311,21 @@ INTERNAL_INPUTS: Final[dict[str, type[_Input]]] = {
 SEARCH_RESULTS_MAX: Final = 20
 EXCERPT_CHARS: Final = 240
 _TERM: Final = re.compile(r"\w{3,}")
+# Sending without review (3.10): at most the request's `max_active_threads`
+# recipients, so every conversation opens at once, and at most this many requests a
+# turn (a resumed turn always makes its first call, so the step cap doesn't bound them).
+AUTO_SEND_MAX_RECIPIENTS: Final = MAX_ACTIVE_THREADS
+AUTO_SENDS_PER_TURN: Final = 3
+# The fits a search in the chat must have given a recipient sent without review.
+AUTO_SEND_FITS: Final[frozenset[Fit]] = frozenset(("strong", "possible"))
+BRIEF_NAMES_RECIPIENT: Final = (
+    "The brief goes to every recipient's representative, so it can't name the recipients. "
+    "Put each organization's part in its ask."
+)
+ALREADY_IN_TOUCH: Final = (
+    "{org} already has an open conversation from this chat (request {request}), or one "
+    "about to open. Check it with get_request_status."
+)
 
 
 class InternalToolScope(_Input):
@@ -411,27 +502,44 @@ class InternalToolExecutor:
         scope = self._scope
         card_id = side_effect_id(scope.turn_id, step_idx, tool_use_id)
         async with unit_of_work(self._sessionmaker, scope.world_id) as uow:
-            recipients, search_ids, screened = await _recipients(
-                uow.session, scope, args.recipients
-            )
-            payload = OutreachCardPayload(
-                brief=args.brief.strip(),
-                recipients=recipients,
-                screened=screened,
-                search_ids=search_ids,
-            )
-            card = await cards.create(
-                uow,
-                card_id=card_id,
-                conversation_id=scope.conversation_id,
-                turn_id=scope.turn_id,
-                tool_use_id=tool_use_id,
-                payload=payload,
-            )
-            await uow.commit()
+            session = uow.session
+            # A retried call keeps the decision stored with its card, whatever the
+            # chat's setting is now.
+            card = await repo.get(session, Card, scope.world_id, card_id)
+            if card is None:
+                # The row lock holds the send mode and the per-turn count until commit.
+                conversation = await conversations.locked(uow, scope.conversation_id)
+                auto = await conversations.effective_send_mode(session, conversation)
+                orgs = await _orgs(session, scope, args.recipients)
+                _check_names(args, orgs)
+                recipients, search_ids, screened = await _recipients(
+                    session, scope, args.recipients, orgs
+                )
+                payload = OutreachCardPayload(
+                    brief=args.brief.strip(),
+                    recipients=recipients,
+                    screened=screened,
+                    search_ids=search_ids,
+                    title=args.title,
+                    auto_send_recipients=(
+                        await _auto_send(session, scope, recipients, orgs) if auto else None
+                    ),
+                )
+                card = await cards.create(
+                    uow,
+                    card_id=card_id,
+                    conversation_id=scope.conversation_id,
+                    turn_id=scope.turn_id,
+                    tool_use_id=tool_use_id,
+                    payload=payload,
+                    auto=auto,
+                )
+                await uow.commit()
         return ToolExecution(
             ends_turn=True,
-            effect=CardRaised(card_id=card.id, card_kind="outreach", tool_use_id=tool_use_id),
+            effect=CardRaised(
+                card_id=card.id, card_kind="outreach", tool_use_id=tool_use_id, auto=card.auto
+            ),
         )
 
     async def _request_status(self, ref: str | None) -> ToolExecution:
@@ -564,13 +672,16 @@ async def _chat_searches(session: AsyncSession, scope: InternalToolScope) -> lis
     return searches
 
 
-async def _recipients(
+def _slug(recipient: RecipientInput) -> str:
+    return recipient.org.strip().removeprefix("@")
+
+
+async def _orgs(
     session: AsyncSession, scope: InternalToolScope, recipients: Sequence[RecipientInput]
-) -> tuple[list[OutreachRecipient], list[UUID], ScreenedCounts | None]:
-    """The recipients by org, each with its best fit across this chat's searches (a
-    request with several parts searches once per part, and an org fits the part it was
-    found for), the searches those fits came from, and their combined counts."""
-    slugs = [recipient.org.strip().removeprefix("@") for recipient in recipients]
+) -> dict[str, Org]:
+    """The recipients' orgs by slug; `_Refused` for an unknown slug or the chat's own
+    org."""
+    slugs = [_slug(recipient) for recipient in recipients]
     orgs = {
         org.slug: org
         for org in await repo.list_in_world(session, Org, scope.world_id, Org.slug.in_(slugs))
@@ -580,8 +691,150 @@ async def _recipients(
         raise _Refused(
             f"Unknown organizations: {', '.join(missing)}. Use slugs from the shortlist."
         )
-    if any(orgs[slug].id == scope.org_id for slug in slugs):
+    if any(org.id == scope.org_id for org in orgs.values()):
         raise _Refused("Your own organization can't be a recipient.")
+    return orgs
+
+
+def _check_names(args: SendNetworkRequestInput, orgs: Mapping[str, Org]) -> None:
+    """With two or more recipients, `_Refused` when the brief names one of them, or one
+    recipient's ask or title names another: our representative in each conversation sees
+    the brief and that organization's ask, both sides see its title, and nothing should
+    say anything about the other organizations (3.13 E2)."""
+    if len({org.id for org in orgs.values()}) < 2:
+        return
+    named = [org.name for org in orgs.values() if _names(args.brief, org.name)]
+    if named:
+        raise _Refused(f"{BRIEF_NAMES_RECIPIENT} It names {_listed(named)}.")
+    for recipient in args.recipients:
+        own = orgs[_slug(recipient)]
+        for other in orgs.values():
+            if other.id == own.id:
+                continue
+            for part, text in (("ask", recipient.ask), ("title", recipient.title)):
+                if _names(text, other.name):
+                    raise _Refused(
+                        f"The {part} for {own.name} names {other.name}. Your representative "
+                        "in each conversation sees only that organization's ask, and both "
+                        "sides see its title, so keep each to that organization's part."
+                    )
+
+
+def _names(text: str, name: str) -> bool:
+    """Whether `text` names the org `name`: in full, in any case, on word boundaries,
+    with any whitespace between its words."""
+    words = name.split()
+    if not words:
+        return False
+    pattern = r"(?<!\w)" + r"\s+".join(re.escape(word) for word in words) + r"(?!\w)"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _listed(names: Sequence[str]) -> str:
+    if len(names) <= 2:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+async def _auto_send(
+    session: AsyncSession,
+    scope: InternalToolScope,
+    recipients: Sequence[OutreachRecipient],
+    orgs: Mapping[str, Org],
+) -> list[UUID]:
+    """Who a request sent without review goes to: its suggested recipients, once each
+    guard passes (3.10). Each refusal is `_Refused`, and nothing is stored."""
+    names = {org.id: org.name for org in orgs.values()}
+    sending = [row for row in recipients if row.suggested]
+    if not sending:
+        raise _Refused(
+            "Nothing was sent. In this chat requests go out without review, to the "
+            "suggested organizations only, and none is suggested: mark the ones to send to "
+            "suggested true."
+        )
+    unscreened = [names[row.org_id] for row in sending if row.fit not in AUTO_SEND_FITS]
+    if unscreened:
+        raise _Refused(
+            f"Nothing was sent. In this chat requests go out without review, so only to "
+            "organizations a search in this chat screened as a strong or possible fit, and "
+            f"{_listed(unscreened)} isn't one. Search for that part first, or mark it "
+            "suggested false: then it's listed but not sent."
+        )
+    if len(sending) > AUTO_SEND_MAX_RECIPIENTS:
+        raise _Refused(
+            f"Nothing was sent. A request sent without review goes to at most "
+            f"{AUTO_SEND_MAX_RECIPIENTS} organizations, and this one suggests {len(sending)}: "
+            f"suggest at most {AUTO_SEND_MAX_RECIPIENTS}."
+        )
+    sent = await session.scalar(
+        select(func.count())
+        .select_from(Card)
+        .where(
+            Card.world_id == scope.world_id,
+            Card.conversation_id == scope.conversation_id,
+            Card.turn_id == scope.turn_id,
+            Card.auto.is_(True),
+        )
+    )
+    if (sent or 0) >= AUTO_SENDS_PER_TURN:
+        raise _Refused(
+            f"Nothing was sent. This turn already sent {AUTO_SENDS_PER_TURN} requests "
+            "without review, the most one turn may send. Tell the member what went out; "
+            "more can follow in a later turn."
+        )
+    in_touch = await _in_touch(session, scope, {row.org_id for row in sending})
+    if in_touch is not None:
+        org_id, request_id = in_touch
+        raise _Refused(ALREADY_IN_TOUCH.format(org=names[org_id], request=request_id))
+    return [row.org_id for row in sending]
+
+
+async def _in_touch(
+    session: AsyncSession, scope: InternalToolScope, org_ids: set[UUID]
+) -> tuple[UUID, UUID] | None:
+    """The first of `org_ids` a request from this chat went to whose thread to it hasn't
+    ended, and that request. Recipients, not threads: the request workflow opens a
+    thread a moment after the request, or only once one of its `MAX_ACTIVE_THREADS`
+    slots frees, and an org waiting for its thread is still in touch."""
+    open_requests = (
+        await session.scalars(
+            repo.in_world(NetworkRequest, scope.world_id)
+            .where(
+                NetworkRequest.conversation_id == scope.conversation_id,
+                NetworkRequest.status != "closed",
+            )
+            .order_by(NetworkRequest.created_at, NetworkRequest.id)
+        )
+    ).all()
+    if not open_requests:
+        return None
+    ended = {
+        (request_id, org_id)
+        for request_id, org_id in await session.execute(
+            select(Thread.request_id, Thread.responder_org_id).where(
+                Thread.world_id == scope.world_id,
+                Thread.request_id.in_([request.id for request in open_requests]),
+                Thread.state.in_(threads.TERMINAL_STATES),
+            )
+        )
+    }
+    for request in open_requests:
+        for row in requests.recipients_of(request):
+            if row.org_id in org_ids and (request.id, row.org_id) not in ended:
+                return row.org_id, request.id
+    return None
+
+
+async def _recipients(
+    session: AsyncSession,
+    scope: InternalToolScope,
+    recipients: Sequence[RecipientInput],
+    orgs: Mapping[str, Org],
+) -> tuple[list[OutreachRecipient], list[UUID], ScreenedCounts | None]:
+    """The recipients by org, each with its title, ask and suggestion, and its best fit
+    across this chat's searches (a request with several parts searches once per part,
+    and an org fits the part it was found for), the searches those fits came from, and
+    their combined counts."""
     order = {
         search_id: index for index, search_id in enumerate(await _chat_searches(session, scope))
     }
@@ -598,14 +851,19 @@ async def _recipients(
         if best is None or _better(row.fit, order[row.search_id], best.fit, order[best.search_id]):
             screenings[row.org_id] = row
     result: list[OutreachRecipient] = []
-    for slug, recipient in zip(slugs, recipients, strict=True):
-        org = orgs[slug]
+    for recipient in recipients:
+        org = orgs[_slug(recipient)]
         if any(existing.org_id == org.id for existing in result):
             continue
         screening = screenings.get(org.id)
         result.append(
             OutreachRecipient(
-                org_id=org.id, fit=screening.fit if screening else None, reason=recipient.reason
+                org_id=org.id,
+                fit=screening.fit if screening else None,
+                reason=recipient.reason,
+                ask=recipient.ask.strip(),
+                title=recipient.title,
+                suggested=recipient.suggested,
             )
         )
     search_ids = sorted({row.search_id for row in screenings.values()}, key=order.__getitem__)
@@ -645,7 +903,12 @@ async def _screened(
 
 
 __all__ = [
+    "ALREADY_IN_TOUCH",
     "ANSWERER_TOOLS",
+    "AUTO_SENDS_PER_TURN",
+    "AUTO_SEND_FITS",
+    "AUTO_SEND_MAX_RECIPIENTS",
+    "BRIEF_NAMES_RECIPIENT",
     "GET_REQUEST_STATUS",
     "INTERNAL_INPUTS",
     "INTERNAL_TOOLS",
@@ -653,6 +916,7 @@ __all__ = [
     "SEARCH_NETWORK",
     "SEARCH_ORG_KNOWLEDGE",
     "SEND_NETWORK_REQUEST",
+    "TITLE_MAX_CHARS",
     "GetRequestStatusInput",
     "InternalToolExecutor",
     "InternalToolScope",

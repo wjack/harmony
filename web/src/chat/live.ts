@@ -43,6 +43,10 @@ export function concernsConversation(
   switch (snapshot.entity_type) {
     case "conversation":
       return snapshot.entity_id === conversationId;
+    // The org's send-mode default, which a chat without its own override follows.
+    // Another org's policy reaches only a lens viewer, and costs just a refetch.
+    case "rep_policy":
+      return true;
     case "card":
     case "network_request":
       return field(snapshot, "conversation_id") === conversationId;

@@ -3,6 +3,8 @@
  * REVISION_UNSTRUCTURED.md §9): pill labels and tones, edge tones and labels, and the
  * header's counts.
  */
+import type { BudgetState } from "../app/budget";
+import { stoppedLine } from "../chat/failureCopy";
 import { shortOrgName } from "./format";
 import type { NetworkEdge, NetworkNode, ParticipantStatus, ThreadState, WorldLens } from "./types";
 
@@ -48,21 +50,34 @@ export function edgeStyle(state: ThreadState): EdgeStyle {
 const EXPIRED: StatusStyle = { label: "Expired", tone: "muted", pulse: false };
 
 /**
+ * What an ended thread says: the viewer's own side's closing summary, else why the
+ * system stopped it (LIVE_DEMO_PLAN 3.5), read against the budget's state now. A
+ * stopped thread has a summary only when the other side refused: ours is written in
+ * the last turn that follows.
+ */
+export function closingLine(edge: NetworkEdge, budget: BudgetState): string | null {
+  return edge.close_summary ?? (edge.stop_reason ? stoppedLine(edge.stop_reason, budget) : null);
+}
+
+/**
  * What an edge says (UI_REFERENCE.md §8): the thread's latest line while it runs, and
- * once it ends the viewer's own side's closing summary, else just that it ended. A
- * thread the viewer can't open has no line, so its color says it alone (null).
+ * once it ends the viewer's own side's closing summary, else "Closed" with why the
+ * system stopped it, else just that it ended (`closingLine`). A thread the viewer can't open has no line,
+ * so its color says it alone (null).
  *
  * The line names its sender ("Northlake Characterization Core: Nov 4 works."); the
  * edge has room for little, so a sender among `parties` (the edge's two orgs) is
  * shortened to "Northlake: Nov 4 works.".
  */
-export function edgeLabel(edge: NetworkEdge, parties: readonly string[]): string | null {
+export function edgeLabel(edge: NetworkEdge, parties: readonly string[], budget: BudgetState): string | null {
   if (!EDGE[edge.state].ended) {
     const line = edge.latest_line;
     const sender = parties.find((name) => line?.startsWith(`${name}: `) === true);
     return line === null || sender === undefined ? line : `${shortOrgName(sender)}${line.slice(sender.length)}`;
   }
-  return edge.close_summary ?? (edge.state === "expired" ? EXPIRED.label : PARTICIPANT.closed.label);
+  if (edge.close_summary !== null) return edge.close_summary;
+  if (edge.stop_reason) return `${PARTICIPANT.closed.label}: ${stoppedLine(edge.stop_reason, budget)}`;
+  return edge.state === "expired" ? EXPIRED.label : PARTICIPANT.closed.label;
 }
 
 /**

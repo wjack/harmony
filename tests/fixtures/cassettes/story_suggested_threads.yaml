@@ -21,8 +21,13 @@
 # Ridgeline shares, so it is released without a person: $325. Alex says yes to the
 # order, Ridgeline confirms and closes, and Henderson closes too.
 #
-# henderson.calder: not in the story (Calder is a weak fit and left out), but the
-# outreach card lets a visitor include it, so its side is scripted too.
+# henderson.calder: not in the story (Calder is a weak fit, listed but not suggested),
+# but the outreach card lets a visitor include it, so its side is scripted too. Its ask
+# is a modelling enquiry; Calder says what it could do, that it would need the
+# compositions to scope it, and closes.
+#
+# Each answerer's route names who decides with why, addressed to them, and a one-line
+# short question for the reviewer.
 scenario: harmony-demo
 entries:
 
@@ -112,10 +117,10 @@ entries:
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
-              "assignees": ["helen"],
-              "reason": "Instrument priority and reserve-slot requests go to Helen."
+              "assignees": [{"member": "helen", "why": "you approve reserve-slot exceptions"}]
             },
-            "rationale": "The public calendar can't meet Nov 6, but Raj's reserve XRD block on Wed Nov 4 fits all 12 powders with room to spare. The price is the external academic list price: academic users pay list price for priority slots, so there is no exception to approve. Quoting isn't booking, and the instructions let the representative confirm a list-price booking once we've said a slot is available."
+            "rationale": "The public calendar can't meet Nov 6, but Raj's reserve XRD block on Wed Nov 4 fits all 12 powders with room to spare. The price is the external academic list price: academic users pay list price for priority slots, so there is no exception to approve. Quoting isn't booking, and the instructions let the representative confirm a list-price booking once we've said a slot is available.",
+            "short_question": "Book Henderson Lab into the Wed Nov 4 reserve XRD block, $1,410 in total?"
           }
   - match: {org: northlake, role: sharing_check, thread: "henderson.northlake", turn: 1, step: 0}
     content:
@@ -177,10 +182,10 @@ entries:
             "needs_human": true,
             "needs_human_reason": "Agreeing to a price and dates commits the lab, and the brief says to check with Alex first.",
             "route": {
-              "assignees": ["alex"],
-              "reason": "A go-ahead on Alex's own request, within the lab's discretionary budget."
+              "assignees": [{"member": "alex", "why": "it's your request, within the lab's discretionary budget"}]
             },
-            "rationale": "$1,410 is inside the lab's ~$2,000 discretionary budget for external characterization, so the decision is Alex's on his own request, not Maya's. Reports by Thu Nov 5 meet his Nov 6 deadline."
+            "rationale": "$1,410 is inside the lab's ~$2,000 discretionary budget for external characterization, so the decision is Alex's on his own request, not Maya's. Reports by Thu Nov 5 meet his Nov 6 deadline.",
+            "short_question": "Book Northlake's XRD and SEM/EDS for $1,410, with reports by Nov 5?"
           }
   # Turn 3 opens with Alex's answer.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 3, step: 0}
@@ -306,10 +311,10 @@ entries:
             "needs_human": true,
             "needs_human_reason": "Nothing on file names a seal material, and choosing one is a decision about Alex's samples.",
             "route": {
-              "assignees": ["alex"],
-              "reason": "A sample-handling question on Alex's own request."
+              "assignees": [{"member": "alex", "why": "they're your samples and your request"}]
             },
-            "rationale": "Searched the lab's records for a seal, O-ring or gasket material and found none. Project NAC-12 says the powders are kept under argon and are moisture-sensitive, which bears on the choice, but the choice is Alex's."
+            "rationale": "Searched the lab's records for a seal, O-ring or gasket material and found none. Project NAC-12 says the powders are kept under argon and are moisture-sensitive, which bears on the choice, but the choice is Alex's.",
+            "short_question": "Which seal material should Ridgeline use for the powder holder?"
           }
   # Turn 3 opens with Alex's answer.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 3, step: 0}
@@ -359,10 +364,10 @@ entries:
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
-              "assignees": ["dana"],
-              "reason": "Everything goes to Dana."
+              "assignees": [{"member": "dana", "why": "you handle quotes and scheduling"}]
             },
-            "rationale": "A standard holder from the price list with the Kalrez option, at the standard 4-business-day lead time. Nothing here goes beyond the price list."
+            "rationale": "A standard holder from the price list with the Kalrez option, at the standard 4-business-day lead time. Nothing here goes beyond the price list.",
+            "short_question": "Quote Henderson Lab $325 for the Kalrez-sealed holder, shipping Oct 30?"
           }
   - match: {org: ridgeline, role: sharing_check, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
@@ -415,10 +420,10 @@ entries:
             "needs_human": true,
             "needs_human_reason": "Confirming an order commits the lab, and the brief says to check with Alex first.",
             "route": {
-              "assignees": ["alex"],
-              "reason": "A go-ahead on Alex's own request, within the lab's discretionary budget."
+              "assignees": [{"member": "alex", "why": "it's your request, within the lab's discretionary budget"}]
             },
-            "rationale": "$325 is well inside the lab's ~$2,000 discretionary budget, so the go-ahead is Alex's on his own request. The holder ships before the powders must leave for characterization."
+            "rationale": "$325 is well inside the lab's ~$2,000 discretionary budget, so the go-ahead is Alex's on his own request. The holder ships before the powders must leave for characterization.",
+            "short_question": "Order Ridgeline's Kalrez-sealed holder for $325, shipping by Oct 30?"
           }
   # Turn 5 opens with Alex's answer.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 5, step: 0}
@@ -473,10 +478,10 @@ entries:
         name: send_message
         input:
           text: >-
-            Hello, this is Claude for Henderson Lab at Northlake University. We need powder
-            XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders by Fri Nov 6, and
-            an airtight holder to carry them under argon to a Bruker D8 dome mount. Could
-            you help with either?
+            Hello, this is Claude for Henderson Lab at Northlake University. We're working
+            on 12 air-sensitive layered-oxide sodium-ion cathode powders, and wondered
+            whether modelling could support the work, such as DFT voltage or stability
+            screening. Is that something you do, and what would it involve?
   - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 1, step: 1}
     content:
       - type: thinking
@@ -487,18 +492,19 @@ entries:
         name: send_message
         input:
           text: >-
-            Thanks for asking. Calder does computation only (DFT and machine-learned
-            potentials) and has no laboratory instruments or machining, so we can't help
-            with either. If you later want voltage or stability screening on these
-            materials, we'd be glad to talk.
+            Thanks for asking. Yes: voltage and stability screening of layered-oxide
+            cathodes with DFT and machine-learned potentials is routine for us. To scope
+            it we'd need the compositions and the structures you're considering. If you
+            can share those later, get in touch and we'll quote.
   - match: {org: calder, role: representative, thread: "henderson.calder", turn: 1, step: 1}
     content:
       - type: tool_use
         name: close
         input:
           summary: >-
-            Henderson Lab asked for XRD, SEM/EDS and an airtight sample holder. We do
-            computation only, so we said so and closed.
+            Henderson Lab asked whether modelling could support its sodium-ion cathode
+            work. We said voltage and stability screening is routine for us but needs the
+            compositions to scope; they shared none, so there's nothing to quote yet.
   - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 2, step: 0}
     content:
       - type: thinking
@@ -506,5 +512,5 @@ entries:
         name: close
         input:
           summary: >-
-            Calder Computational does computation only and can't run the measurements or
-            make the holder.
+            Calder Computational can screen voltage and stability with DFT, but needs the
+            compositions to scope it, which the brief keeps private. Nothing agreed.

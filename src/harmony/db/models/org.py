@@ -141,6 +141,9 @@ class RepPolicy(Versioned, Base):
     )
     routing_prompt: Mapped[str] = mapped_column(server_default=text("''"))
     default_assignee_id: Mapped[UUID | None]
+    # Internal Claude's requests go out without a member's review (3.10); a chat may
+    # override it (`conversations.send_without_confirmation`).
+    send_without_confirmation: Mapped[bool] = mapped_column(server_default=text("false"))
 
     def snapshot_id(self) -> UUID:
         return self.org_id

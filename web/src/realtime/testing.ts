@@ -183,8 +183,15 @@ export function demoNotice(seq: number, kind: string): EventEnvelope {
   );
 }
 
-export function needsHuman(seq: number, memberSlug: string, entityId: string, orgSlug = "northlake"): EventEnvelope {
-  return durable(
+/** A needs-human cue; cues committed together (one routing) share `committedAt`. */
+export function needsHuman(
+  seq: number,
+  memberSlug: string,
+  entityId: string,
+  orgSlug = "northlake",
+  committedAt = "2026-10-26T09:00:00Z",
+): EventEnvelope {
+  const envelope = durable(
     seq,
     {
       type: "demo.needs_human",
@@ -195,4 +202,5 @@ export function needsHuman(seq: number, memberSlug: string, entityId: string, or
     },
     { ...worldScope, kind: "demo" },
   );
+  return { ...envelope, created_at: committedAt };
 }

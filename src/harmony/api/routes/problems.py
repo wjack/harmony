@@ -13,6 +13,11 @@ How the API maps workflow and domain errors:
 - `harmony.errors.WorldRetired` → 409 `world_retired`; a non-admin settings write →
   403 `not_admin`; something the acting member can't see → 404 `not_found` (never 403).
 
+The live phase's gate (`api/gate.py`) answers with the same body: 401
+`passcode_required` before unlock and `passcode_invalid` for a wrong passcode, 429
+`too_many_attempts` (with `Retry-After`) for throttled unlocks and world creation, and
+413 `payload_too_large` for an oversized body.
+
 Owner: E4.
 """
 
@@ -51,7 +56,13 @@ ProblemCode = Literal[
     "escalation_not_open",
     "not_in_org",
     "world_retired",
+    "passcode_required",
+    "passcode_invalid",
+    "too_many_attempts",
+    "payload_too_large",
 ]
+
+RETRY_AFTER: Final = "Retry-After"
 
 
 class ApiProblem(BaseModel):
@@ -156,13 +167,27 @@ async def problem_handler(request: Request, exc: Exception) -> JSONResponse:
 def problems(*codes: int, cursor: bool = False) -> dict[int | str, dict[str, Any]]:
     """`responses=` for a P1–P2 route: `ApiProblem` for each code, 401 with FastAPI's
     body, and the cursor header on 200 when `cursor`."""
-    responses = documented(status.HTTP_401_UNAUTHORIZED, cursor=cursor)
+    return documented(status.HTTP_401_UNAUTHORIZED, cursor=cursor) | problem_entries(*codes)
+
+
+def problem_entries(*codes: int) -> dict[int | str, dict[str, Any]]:
+    """`responses=` entries answering each code with an `ApiProblem`; a 429 also
+    documents `Retry-After`. Merge them into a route's other entries."""
+    entries: dict[int | str, dict[str, Any]] = {}
     for code in codes:
-        responses[code] = {"model": ApiProblem}
-    return responses
+        entries[code] = {"model": ApiProblem}
+        if code == status.HTTP_429_TOO_MANY_REQUESTS:
+            entries[code]["headers"] = {
+                RETRY_AFTER: {
+                    "description": "Seconds until another attempt may succeed.",
+                    "schema": {"type": "integer"},
+                }
+            }
+    return entries
 
 
 __all__ = [
+    "RETRY_AFTER",
     "ApiProblem",
     "ApiProblemError",
     "ProblemCode",
@@ -171,6 +196,7 @@ __all__ = [
     "member_ref",
     "not_found",
     "problem",
+    "problem_entries",
     "problem_handler",
     "problems",
     "temporal_of",

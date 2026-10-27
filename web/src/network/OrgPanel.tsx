@@ -3,11 +3,12 @@ import type { ReactNode } from "react";
 import { Link } from "react-router";
 
 import type { MemberView } from "../api/types";
+import type { BudgetState } from "../app/budget";
 import { firstName } from "../shell/names";
 import { Button, IconButton, OrgAvatar, cx } from "../shell/ui";
 import { formatAgo, formatWait, kindLabel, plural, shortOrgName } from "./format";
 import { StatusPill } from "./StatusPill";
-import { TONE_STROKE, edgeStyle, threadStatus } from "./status";
+import { TONE_STROKE, closingLine, edgeStyle, threadStatus } from "./status";
 import type { NetworkEdge, NetworkNode, ParticipantStatus, WorldLens } from "./types";
 import type { Wait, WaitAction } from "./waiting";
 
@@ -48,6 +49,8 @@ export interface OrgPanelProps {
   actingAs?: boolean;
   onClose: () => void;
   now: number;
+  /** The live-model budget's state now, which a stopped thread's line reads by. */
+  budget: BudgetState;
 }
 
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
@@ -77,6 +80,7 @@ function ThreadRow({
   recipient,
   openable,
   now,
+  budget,
 }: {
   thread: NetworkEdge;
   counterpart: CanvasOrg;
@@ -84,10 +88,12 @@ function ThreadRow({
   recipient: ParticipantStatus | null;
   openable: boolean;
   now: number;
+  budget: BudgetState;
 }) {
   const status = threadStatus(thread.state, recipient);
-  // An ended thread shows our own closing summary, if we wrote one; a live one, its newest line.
-  const line = edgeStyle(thread.state).ended ? thread.close_summary : thread.latest_line;
+  // An ended thread shows our own closing summary if we wrote one, else why the system
+  // stopped it; a live one, its newest line.
+  const line = edgeStyle(thread.state).ended ? closingLine(thread, budget) : thread.latest_line;
   const body = (
     <>
       <OrgAvatar name={counterpart.name} seed={counterpart.slug} size={24} />
@@ -221,6 +227,7 @@ export function OrgPanel({
   actingAs = false,
   onClose,
   now,
+  budget,
 }: OrgPanelProps) {
   const status = node.participant;
   const isHome = node.org.id === homeOrgId;
@@ -288,6 +295,7 @@ export function OrgPanel({
                     recipient={orgs.get(thread.to_org_id)?.participant ?? null}
                     openable={world === "desk" && ours}
                     now={now}
+                    budget={budget}
                   />
                 );
               })}

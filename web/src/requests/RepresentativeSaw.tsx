@@ -6,7 +6,7 @@
  * what a person wrote. The server lists a notice or result only once a stored call
  * carried it. Nothing else from our side ever reaches the representative.
  */
-import { Bell, Building2, FileText, IdCard, MessageCircleQuestion, ScrollText, Share2, X } from "lucide-react";
+import { Bell, Building2, FileText, IdCard, MessageCircleQuestion, ScrollText, Share2, Target, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState, type ReactNode } from "react";
 
@@ -21,6 +21,7 @@ const PART_ICON: Record<ContextPart["kind"], ReactNode> = {
   instructions: <ScrollText size={15} strokeWidth={1.5} />,
   sharing: <Share2 size={15} strokeWidth={1.5} />,
   brief: <FileText size={15} strokeWidth={1.5} />,
+  ask: <Target size={15} strokeWidth={1.5} />,
   counterparty: <Building2 size={15} strokeWidth={1.5} />,
 };
 
@@ -108,9 +109,11 @@ interface RepresentativeSawProps {
   us: OrgRef;
   them: OrgRef;
   representative: RepresentativeContext | null;
+  /** Focuses what opened it: it has no Radix trigger, so focus would fall to the page. */
+  returnFocus: () => void;
 }
 
-export function RepresentativeSaw({ open, onOpenChange, us, them, representative }: RepresentativeSawProps) {
+export function RepresentativeSaw({ open, onOpenChange, us, them, representative, returnFocus }: RepresentativeSawProps) {
   const calendar = useCalendar();
   const released = [...(representative?.released ?? [])].sort(
     (a, b) => Date.parse(a.released_at) - Date.parse(b.released_at),
@@ -120,7 +123,13 @@ export function RepresentativeSaw({ open, onOpenChange, us, them, representative
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[rgb(20_20_19/0.16)] data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="fixed inset-y-2 right-2 z-50 flex w-[min(440px,calc(100vw-16px))] flex-col rounded-2xl border border-border bg-canvas text-ink shadow-modal outline-none data-[state=open]:animate-pop-in">
+        <Dialog.Content
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            returnFocus();
+          }}
+          className="fixed inset-y-2 right-2 z-50 flex w-[min(440px,calc(100vw-16px))] flex-col rounded-2xl border border-border bg-canvas text-ink shadow-modal outline-none data-[state=open]:animate-pop-in"
+        >
           <header className="flex items-start gap-3 border-b border-border px-5 pt-4 pb-3.5">
             <div className="min-w-0 flex-1">
               <Dialog.Title className="text-[16px] leading-6 font-semibold">What our representative saw</Dialog.Title>

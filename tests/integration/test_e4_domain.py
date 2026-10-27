@@ -21,6 +21,7 @@ from harmony.agents.models import (
     InlineQuestionItem,
     OutreachEdits,
     Route,
+    RouteAssignee,
     ScreenedCounts,
     ToolActivityItem,
     UserTextItem,
@@ -477,7 +478,9 @@ async def ask_alex_side(
             side="requester",
             consult_id=consult_id,
         )
-        await routing.apply_route(uow, escalation, Route(assignees=[assignee], reason="r"))
+        await routing.apply_route(
+            uow, escalation, Route(assignees=[RouteAssignee(member=assignee, why="r")])
+        )
         await uow.commit()
     return escalation_id, consult_id
 

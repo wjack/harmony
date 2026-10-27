@@ -4,7 +4,9 @@
 #
 # Turn 1 runs one search per part of the need (step 0 the characterization, step 1 the
 # holder; the screener verdicts are story_suggested_screen.yaml), then drafts the brief
-# and proposes the recipients: the outreach card pauses the turn at step 2, and it
+# and proposes the recipients, each with its own title and ask (the budget is split
+# between the asks, since each representative sees only its own conversation), with
+# Calder listed but not suggested: the outreach card pauses the turn at step 2, and it
 # resumes at step 3 once Alex approves. Turn 2 is woken when the request closes (both
 # conversations ended) and sums up in prose.
 scenario: harmony-demo
@@ -42,9 +44,9 @@ entries:
       - type: thinking
         thinking: >-
           Northlake for the measurements and Ridgeline for the holder. Calder came up in
-          both searches but only does computation. One brief for both: the sample class
-          and count but not the compositions, the budget kept to ourselves, and a check
-          with Alex before agreeing to anything.
+          both searches but only does computation. One brief for all: the sample class
+          and count but not the compositions, and a check with Alex before agreeing to
+          anything. Each organization's part and its share of the budget go in its ask.
       - type: text
         text: |-
           Two organizations are strong fits:
@@ -54,10 +56,11 @@ entries:
 
           Calder Computational came up too, but it's a weak fit: it does DFT and modelling only, with no lab instruments, so I'd leave it out. Bayside and Ostrander run XRD, but Bayside can't handle air-sensitive samples and Ostrander is booked through December. Granite machines parts, but not sealed ones.
 
-          Here's the brief I'd send. It shares the sample class and count and that the powders are air-sensitive, but not their compositions, and it keeps the budget to us. The representatives will check with you before agreeing to a price, a date or an order.
+          Here's the Harmony Network Request I'd send. The brief shares the sample class and count and that the powders are air-sensitive, but not their compositions. Each organization gets its own ask, with its share of the budget kept to us: about $1,600 for the measurements and $400 for the holder. The representatives will check with you before agreeing to a price, a date or an order.
       - type: tool_use
         name: send_network_request
         input:
+          title: Cathode characterization and holder
           brief: |-
             XRD and SEM/EDS on 12 air-sensitive cathode powders by Nov 6, and a holder
 
@@ -67,18 +70,38 @@ entries:
 
             You may tell counterparties the sample class and count, that the powders are air-sensitive and kept under argon (no air exposure at any point), the instrument and mount, the dates, and the shipping address: Henderson Lab, Bldg 4, Northlake campus. Don't share the compositions, dopant fractions or any results.
 
-            The budget is about $2,000 for both together; keep it to yourself. Ask for quotes with dates, and check with Alex before agreeing to a price, a date or an order.
+            Ask for quotes with dates, and check with Alex before agreeing to a price, a date or an order.
           recipients:
             - org: northlake
               reason: >-
                 Powder XRD and SEM/EDS with air-free dome holders; priority service by
                 arrangement.
+              title: XRD and SEM/EDS quote
+              ask: >-
+                Powder XRD and SEM/EDS on the 12 powders, with standard reports by Fri
+                Nov 6: ask whether they can meet that date, for a quote with dates, and how
+                they'd like the samples delivered. Up to about $1,600 for both
+                measurements is acceptable; keep that figure to yourself.
+              suggested: true
             - org: ridgeline
               reason: >-
                 Machines airtight sample holders and transfer vessels in 3–5 business days.
+              title: Airtight holder quote
+              ask: >-
+                An airtight holder to carry the 12 powders under argon to a Bruker D8 powder
+                XRD dome mount, delivered to the lab before Tue Nov 3: ask for a quote and a
+                delivery date. Up to about $400 is acceptable; keep that figure to
+                yourself.
+              suggested: true
             - org: calder
               reason: >-
                 Weak fit: DFT and modelling only, with no lab instruments. I'd leave it out.
+              title: Modelling support enquiry
+              ask: >-
+                Ask whether modelling could support this cathode work, such as DFT voltage
+                or stability screening of layered-oxide sodium-ion cathodes, and what it
+                would involve. It's an enquiry only: don't commit to any work.
+              suggested: false
   - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 3}
     content:
       - type: text

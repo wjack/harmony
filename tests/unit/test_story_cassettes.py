@@ -256,6 +256,37 @@ def test_the_chat_searches_once_per_part_then_proposes_the_request(scenario: Sce
     assert "NaₓMn" not in request.brief
 
 
+def test_the_request_has_a_title_and_each_recipient_its_own_title_and_ask() -> None:
+    """3.13 E2, E4, E7, E13 (L7's specs match these values): the budget is split
+    between the asks, each representative sees only its own, and only the fits are
+    suggested."""
+    (call,) = tool_calls(entry("internal", "henderson", CHAT, 1, 2))
+    request = SendNetworkRequestInput.model_validate(call[1])
+    assert request.title == "Cathode characterization and holder"
+    rows = {r.org: r for r in request.recipients}
+    assert {org: (r.title, r.suggested) for org, r in rows.items()} == {
+        "northlake": ("XRD and SEM/EDS quote", True),
+        "ridgeline": ("Airtight holder quote", True),
+        "calder": ("Modelling support enquiry", False),
+    }
+    assert "XRD and SEM/EDS" in rows["northlake"].ask
+    assert "holder" in rows["ridgeline"].ask
+    assert "modelling" in rows["calder"].ask
+    # No combined budget anywhere a representative reads it: a share in each ask.
+    assert "budget" not in request.brief
+    assert "$1,600" in rows["northlake"].ask
+    assert "$400" in rows["ridgeline"].ask
+    # The names guard passes: no recipient's name in the brief or another's ask or title.
+    names = {"northlake": "Northlake Characterization Core", "ridgeline": "Ridgeline Fabrication"}
+    names["calder"] = "Calder Computational"
+    for name in names.values():
+        assert name.casefold() not in request.brief.casefold()
+    for org, row in rows.items():
+        for other, name in names.items():
+            if other != org:
+                assert name.casefold() not in f"{row.ask} {row.title}".casefold()
+
+
 def test_the_resumed_and_woken_turns_follow_the_card_and_the_close() -> None:
     resumed = entry("internal", "henderson", CHAT, 1, 3)
     assert (tool_calls(resumed), bool(text_of(resumed))) == ([], True)
@@ -327,13 +358,31 @@ def test_each_thread_plays_the_story_turn_by_turn() -> None:
         ("ridgeline", 4, "close"),
         ("henderson", 6, "close"),
     ]
-    # If a visitor keeps Calder on the card, it says it can't help and closes.
+    # If a visitor ticks Calder on the card, it answers the modelling enquiry and closes.
     assert moves(CALDER, threads) == [
         ("henderson", 1, "send_message"),
         ("calder", 1, "send_message"),
         ("calder", 1, "close"),
         ("henderson", 2, "close"),
     ]
+
+
+def test_every_close_comes_after_the_counterparty_has_written() -> None:
+    """3.13 E1: a close before any reply is refused, so no cassette plays one. The
+    story's threads file lists each thread's moves in the order they play."""
+    for thread in (NORTHLAKE, RIDGELINE, CALDER):
+        written: set[str] = set()
+        for org_slug, _, name in moves(thread, "story_suggested_threads"):
+            if name == "close":
+                assert written - {org_slug}, (thread, org_slug)
+            if name == "send_message":
+                written.add(org_slug)
+    # The adversary never consults, so each of its turns after the first is opened by a
+    # message from Northlake; Northlake answers only after Vantage has written.
+    vantage = moves("*", "story_adversary")
+    assert "consult" not in {name for _, _, name in vantage}
+    assert all(turn > 1 for _, turn, name in vantage if name == "close")
+    assert vantage[0][1:] == (1, "send_message")
 
 
 def test_prices_and_agreement_are_messages() -> None:
@@ -392,9 +441,14 @@ def test_answerers_read_their_own_orgs_records(scenario: Scenario) -> None:
                 if name == "read_document":
                     assert tool_input["id"] in own, (org_slug, thread, tool_input)
         members = {m.slug for m in org(scenario, org_slug).members}
-        route = draft(org_slug, thread, turn).route
+        proposed = draft(org_slug, thread, turn)
+        route = proposed.route
         if route is not None:
-            assert set(route.assignees) <= members, (org_slug, thread)
+            assert {a.member for a in route.assignees} <= members, (org_slug, thread)
+            # 3.13 E12: each why is addressed to its assignee.
+            assert all(a.why.startswith(("you ", "it's ", "they're ")) for a in route.assignees)
+        assert proposed.short_question is not None, (org_slug, thread, turn)
+        assert len(proposed.short_question.split()) <= 15, proposed.short_question
 
 
 def read_ids(org_slug: str, thread: str, turn: int = 1) -> list[str]:
@@ -439,8 +493,9 @@ def test_northlakes_reserve_slot_fails_the_sharing_check_and_goes_to_helen(
     assert answer.needs_human is False
     # Proposed although no person is needed: the sharing check may still call for one.
     assert answer.route is not None
-    assert answer.route.assignees == ["helen"]
-    assert "reserve-slot" in answer.route.reason
+    (assignee,) = answer.route.assignees
+    assert assignee.member == "helen"
+    assert "reserve-slot" in assignee.why
     assert "Wed Nov 4" in answer.answer
     assert "$1,410" in answer.answer
     check = sharing_check("northlake", NORTHLAKE)
@@ -463,7 +518,7 @@ def test_the_seal_question_comes_back_to_alex(scenario: Scenario) -> None:
     answer = draft("henderson", RIDGELINE)
     assert answer.needs_human
     assert answer.route is not None
-    assert answer.route.assignees == ["alex"]
+    assert [a.member for a in answer.route.assignees] == ["alex"]
     decision = decide(henderson.policy.autonomy, answer, None)
     assert isinstance(decision, NeedsHuman)
     assert decision.reason == "needs_human"
@@ -492,7 +547,7 @@ def test_each_go_ahead_reaches_alex_within_the_budget(thread: str, turn: int) ->
     answer = draft("henderson", thread, turn)
     assert answer.needs_human
     assert answer.route is not None
-    assert answer.route.assignees == ["alex"]
+    assert [a.member for a in answer.route.assignees] == ["alex"]
     assert "budget" in answer.rationale
     assert "2,000" not in answer.answer, "the answer may reach the counterparty"
 

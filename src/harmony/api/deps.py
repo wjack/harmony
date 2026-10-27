@@ -23,6 +23,7 @@ from temporalio.client import Client
 from harmony.config import Settings
 from harmony.events.bus import EventBus
 from harmony.events.cursor import current_cursor
+from harmony.llm.budget_pg import HostedCaps
 from harmony.worlds.requests_temporal import TemporalRequestStarter
 from harmony.worlds.retirer import Retirer, SyncRetirer
 from harmony.worlds.service import WorldService
@@ -88,6 +89,7 @@ def get_world_service(services: ServicesDep) -> WorldService:
             if temporal is not None
             else None
         ),
+        caps=HostedCaps.from_settings(services.settings),
     )
 
 

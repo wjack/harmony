@@ -13,15 +13,19 @@ attempt at a time, as `ThreadWorkflow` would run and retry it.
   (Northlake, no access) receives nothing about the thread.
 - An attempt that crashes after its message is committed is retried without a second
   model call for that step and without a duplicate message.
+- A model that is silent for 12 s (as Opus thinking is) still shows the turn typing:
+  `stream.typing` repeats every 5 s until the turn ends (3.5).
 - No spend-ledger line is written.
 """
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from itertools import takewhile
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -387,6 +391,54 @@ async def test_a_crashed_attempt_is_retried_without_a_second_call_or_message(
     resets = [e for e in _stream_events(helen) if isinstance(e, StreamReset)]
     assert [reset.attempt for reset in resets] == [2]
     _assert_no_ledger(app_settings)
+
+
+class _Thinks(ScriptedModel):
+    """Writes nothing for `PAUSE_S` before the turn's first step answers, as a long
+    thinking block does."""
+
+    PAUSE_S = 12.0
+
+    async def call(
+        self,
+        request: ModelRequest,
+        *,
+        on_stream_event: StreamEventCallback | None = None,
+        heartbeat: HeartbeatCallback | None = None,
+    ) -> ModelResult:
+        if request.key.step_idx == 0:
+            await asyncio.sleep(self.PAUSE_S)
+        return await super().call(request, on_stream_event=on_stream_event, heartbeat=heartbeat)
+
+
+async def test_a_long_silence_keeps_the_turn_typing(
+    app: FastAPI,
+    app_settings: Settings,
+    db_sessionmaker: Sessionmaker,
+    runtime: ModelRuntime,
+) -> None:
+    model = _Thinks.from_paths(app_settings.cassette_dir)
+    stage = await _stage(app, app_settings, db_sessionmaker)
+    agents = _agents(runtime, app_settings, db_sessionmaker, model)
+
+    async with _streams(
+        app, stage, {"helen": VIEWERS["helen"], "alex": VIEWERS["alex"]}
+    ) as streams:
+        result = await _run_turn(agents, stage)
+        received = {
+            name: await streams[name].envelopes_until(_is_message, WAIT_S)
+            for name in ("helen", "alex")
+        }
+
+    assert result.stop == "end_turn"
+    helen = _stream_events(received["helen"])
+    # Until the model writes, the stream is typing frames alone: the opening one, then
+    # the heartbeat at 5 s and 10 s into the 12 s silence.
+    silent = list(takewhile(lambda event: isinstance(event, StreamTyping), helen))
+    assert len(silent) >= 3, helen
+    alex = _stream_events(received["alex"])
+    assert len(alex) >= 3, alex
+    assert all(isinstance(event, StreamTyping) for event in alex), alex
 
 
 async def test_running_a_finished_turn_again_reuses_it(

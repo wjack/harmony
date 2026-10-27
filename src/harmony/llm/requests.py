@@ -68,7 +68,8 @@ class RoleProfile:
 ROLE_PROFILES: Final[Mapping[tuple[ModelRole, Tier], RoleProfile]] = MappingProxyType(
     {
         ("internal", "featured"): RoleProfile(OPUS_5_5, "medium"),
-        ("internal", "background"): RoleProfile(OPUS_5_5, "medium"),
+        # A background org's chat is the visitor's side cast, not the story (3.1).
+        ("internal", "background"): RoleProfile(HAIKU_5_5, "medium"),
         ("representative", "featured"): RoleProfile(OPUS_5_5, "medium"),
         ("representative", "background"): RoleProfile(HAIKU_5_5, "low"),
         ("answerer", "featured"): RoleProfile(OPUS_5_5, "medium"),
@@ -203,6 +204,29 @@ def build_request(
     return ModelRequest(key=key, body=body, betas=tuple(sorted(parts.betas)))
 
 
+def production_body(body: Mapping[str, JsonValue], role: ModelRole, tier: Tier) -> JsonObject:
+    """`body` as production would send it, for re-pricing a call made under
+    `MODEL_OVERRIDE` (3.14): the role's production model and, where that model has one,
+    its server-side fallback hop. Only what pricing reads changes; the messages and
+    `max_tokens` stay as sent."""
+    profile = ROLE_PROFILES[(role, tier)]
+    parts = _BUILDERS[profile.model](
+        _Plan(
+            model=profile.model,
+            role=role,
+            effort=profile.effort,
+            thinking_off=profile.thinking_off,
+            stream_to_ui=False,
+            prefix_mismatch=None,
+        )
+    )
+    repriced: JsonObject = {key: value for key, value in body.items() if key != "fallbacks"}
+    repriced["model"] = profile.model
+    if parts.fallbacks is not None:
+        repriced["fallbacks"] = parts.fallbacks
+    return repriced
+
+
 def _tool_entry(tool: JsonObject, *, eager: bool) -> JsonObject:
     entry = dict(tool)
     if eager and is_client_tool(entry):
@@ -224,5 +248,6 @@ __all__ = [
     "Tier",
     "build_request",
     "is_client_tool",
+    "production_body",
     "resolve_model",
 ]
