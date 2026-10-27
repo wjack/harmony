@@ -23,6 +23,8 @@ export type AssistantTextItem = Schemas["AssistantTextItem"];
 export type ThinkingSummaryItem = Schemas["ThinkingSummaryItem"];
 export type ToolActivityItem = Schemas["ToolActivityItem"];
 export type OutreachCardItem = Schemas["OutreachCardItem"];
+/** How a rejected card was turned down: its Decline, or a message typed while it waited. */
+export type CardRejectedWith = NonNullable<OutreachCardItem["rejected_with"]>;
 export type RequestStatusItem = Schemas["RequestStatusItem"];
 export type InlineQuestionItem = Schemas["InlineQuestionItem"];
 export type CardStatus = OutreachCardItem["status"];
@@ -32,6 +34,7 @@ export type ScreenedCounts = Schemas["ScreenedCounts"];
 export type Fit = NonNullable<CardRecipient["fit"]>;
 export type ApproveCard = Schemas["ApproveCard"];
 export type CardResolved = Schemas["CardResolved"];
+export type RejectCard = Schemas["RejectCard"];
 
 export type RequestStatusView = Schemas["RequestStatusView"];
 export type RecipientStatus = Schemas["RecipientStatus"];

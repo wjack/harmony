@@ -63,16 +63,24 @@ function member(
 }
 
 export const members = {
-  alex: member(1, "alex", "Alex Chen", "PhD student", "member", orgs.henderson),
+  alex: member(1, "alex", "Alex Chen", "PhD student", "admin", orgs.henderson),
   maya: member(2, "maya", "Prof. Maya Henderson", "Principal investigator", "admin", orgs.henderson),
   helen: member(3, "helen", "Dr. Helen Ward", "Core director", "admin", orgs.northlake),
-  raj: member(4, "raj", "Raj Patel", "Staff scientist, XRD and SEM", "member", orgs.northlake),
+  raj: member(4, "raj", "Raj Patel", "Staff scientist, XRD and SEM", "admin", orgs.northlake),
   dana: member(5, "dana", "Dana Okafor", "Operations lead", "admin", orgs.ridgeline),
   priya: member(6, "priya", "Priya Nair", "Principal", "admin", orgs.calder),
-  jordan: member(7, "jordan", "Jordan Pike", "Analyst", "member", orgs.vantage),
+  jordan: member(7, "jordan", "Jordan Pike", "Analyst", "admin", orgs.vantage),
   lena: member(8, "lena", "Lena Ortiz", "Facility manager", "admin", orgs.cascade),
   sam: member(9, "sam", "Sam Whitfield", "Beamline scientist", "member", orgs.pacific),
 } satisfies Record<string, MemberView>;
+
+/**
+ * `member` as a non-admin. Everyone in the demo is an admin (docs/SCENARIO.md), so tests
+ * of the view-only paths make one.
+ */
+export function nonAdmin(member: MemberView): MemberView {
+  return { ...member, role: "member" };
+}
 
 export const memberDirectory: MemberDirectory = {
   featured: [members.priya, members.alex, members.maya, members.helen, members.raj, members.dana, members.jordan],

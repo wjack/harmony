@@ -237,8 +237,6 @@ class Executor:
         self.cards = frozenset(cards)
         self.fail_once = set(fail_once)
         self.executed: list[tuple[str, int]] = []
-        self.replies: list[tuple[str, int]] = []
-        self.sent = False
 
     async def execute(self, call: ToolCall, *, step_idx: int) -> ToolExecution:
         self.executed.append((call.name, step_idx))
@@ -260,19 +258,10 @@ class Executor:
                 closed = MessageSent(message_id=message_id, message_kind="close")
                 return ToolExecution(ends_turn=True, owed_result="Closed.", effect=closed)
             case "send_message":
-                self.sent = True
                 sent = MessageSent(message_id=message_id, message_kind="message")
                 return ToolExecution(result="Sent.", effect=sent)
             case _:
                 return ToolExecution(result=f"{call.name} ok")
-
-    async def text_reply(self, text: str, *, step_idx: int) -> ToolExecution | None:
-        self.replies.append((text, step_idx))
-        if self.role != "representative" or self.sent:
-            return None
-        self.sent = True
-        sent = MessageSent(message_id=uuid5(NAMESPACE, f"reply/{step_idx}"), message_kind="message")
-        return ToolExecution(result="Sent.", effect=sent)
 
 
 def turn_context(

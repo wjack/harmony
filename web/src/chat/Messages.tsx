@@ -138,36 +138,55 @@ const TOOL_ICONS: Readonly<Record<string, LucideIcon>> = {
   read_document: FileText,
 };
 
-function ActivityStep({ item }: { item: ActivityItem }) {
+function ActivityStep({ item, working }: { item: ActivityItem; working: boolean }) {
   if (item.type === "thinking_summary") {
     return (
       <li className="flex gap-2.5">
-        <Sparkles size={14} strokeWidth={1.6} className="mt-[3px] shrink-0 text-faint" />
-        <p className="text-[13.5px] leading-[1.55] whitespace-pre-wrap text-muted">{item.text}</p>
+        <Sparkles size={14} strokeWidth={1.6} className="mt-0.5 shrink-0 text-faint" />
+        <p className="text-ui-sm whitespace-pre-wrap text-muted">{item.text}</p>
       </li>
     );
   }
   const Icon = TOOL_ICONS[item.tool] ?? Search;
+  const detail = item.detail === null || item.detail === "" ? null : item.detail;
   return (
     <li className="flex gap-2.5">
-      <Icon size={14} strokeWidth={1.6} className="mt-[3px] shrink-0 text-faint" />
-      <p className="min-w-0 text-[13.5px] leading-[1.55] text-muted">
-        <span className="text-secondary">{item.label}</span>
-        {item.detail !== null && item.detail !== "" && <span> · {item.detail}</span>}
-        {item.status === "running" && (
-          <LoaderCircle size={12} strokeWidth={2} className="ml-1.5 inline animate-spin align-[-1px]" />
+      <Icon size={14} strokeWidth={1.6} className="mt-0.5 shrink-0 text-faint" />
+      <div className="min-w-0 flex-1 text-ui-sm">
+        <p className="text-muted">
+          <span className="text-secondary">{item.label}</span>
+          {item.outcome !== null && item.outcome !== "" && <span> · {item.outcome}</span>}
+          {item.status === "running" && working && (
+            <LoaderCircle size={12} strokeWidth={2} className="ml-1.5 inline animate-spin align-[-1px]" />
+          )}
+          {item.status === "error" && <span className="ml-1.5 text-danger">failed</span>}
+        </p>
+        {detail !== null && (
+          // What it searched for: the need, or the query.
+          <p title={detail} className="truncate text-ui-xs text-muted">
+            {detail}
+          </p>
         )}
-        {item.status === "error" && <span className="ml-1.5 text-danger">failed</span>}
-      </p>
+      </div>
     </li>
   );
 }
 
 /**
- * "Searched the Harmony network · 14 organizations ›", expandable into the steps.
- * `reply` is the text right after the line, which it shouldn't repeat.
+ * "Searched the network for 2 needs and your records ›", expandable into the steps.
+ * `reply` is the text right after the line, which it shouldn't repeat. A step still
+ * marked running only moves while the chat is `working`: a turn that stopped doesn't
+ * leave it spinning.
  */
-export function ActivityLine({ items, reply = null }: { items: readonly ActivityItem[]; reply?: string | null }) {
+export function ActivityLine({
+  items,
+  reply = null,
+  working,
+}: {
+  items: readonly ActivityItem[];
+  reply?: string | null;
+  working: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const summary = summarize(items, reply);
   return (
@@ -178,10 +197,10 @@ export function ActivityLine({ items, reply = null }: { items: readonly Activity
         onClick={() => {
           setOpen((value) => !value);
         }}
-        className="group/activity -mx-1 inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[14px] leading-6 text-muted transition-colors hover:text-secondary"
+        className="group/activity -mx-1 inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-ui leading-6 text-muted transition-colors hover:text-secondary"
       >
         {summary.failed && <CircleAlert size={14} strokeWidth={1.8} className="shrink-0 text-danger" />}
-        <span className={cx("truncate", summary.running && "chat-shimmer")}>{summary.text}</span>
+        <span className={cx("truncate", summary.running && working && "chat-shimmer")}>{summary.text}</span>
         <ChevronRight
           size={14}
           strokeWidth={1.8}
@@ -191,7 +210,7 @@ export function ActivityLine({ items, reply = null }: { items: readonly Activity
       {open && (
         <ol className="mt-1.5 mb-1 ml-[3px] flex flex-col gap-2 border-l border-border py-1 pl-4 animate-fade-in">
           {items.map((item) => (
-            <ActivityStep key={item.id} item={item} />
+            <ActivityStep key={item.id} item={item} working={working} />
           ))}
         </ol>
       )}

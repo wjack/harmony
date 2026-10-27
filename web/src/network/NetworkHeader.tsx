@@ -43,7 +43,7 @@ function RequestPicker({ requests, requestId, onChange, now }: RequestPickerProp
       <MenuTrigger asChild>
         <button
           type="button"
-          className="-ml-2 flex h-8 max-w-[320px] min-w-[160px] shrink-0 items-center gap-1.5 rounded-control px-2 text-sm font-medium text-ink transition-colors hover:bg-hover data-[state=open]:bg-hover"
+          className="-ml-2 flex h-8 max-w-[320px] min-w-[120px] shrink-[4] items-center gap-1.5 rounded-control px-2 text-sm font-medium text-ink transition-colors hover:bg-hover data-[state=open]:bg-hover"
         >
           <span className="truncate">{current?.title ?? "Choose a Harmony Network Request"}</span>
           <ChevronDown size={15} strokeWidth={1.75} className="shrink-0 text-muted" aria-hidden />
@@ -187,8 +187,9 @@ export function NetworkHeader({
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <RequestPicker requests={requests} requestId={requestId} onChange={onRequestChange} now={now} />
         {parts.length > 0 && (
-          // The counts give way before the picker does, measured on the header itself.
-          <p className="hidden min-w-0 truncate text-[13px] text-muted @min-[880px]:block" aria-live="polite">
+          // Measured on the header itself. Once there's room for them the picker's title
+          // gives way first (`shrink-[4]`), so the counts stay readable.
+          <p className="hidden min-w-0 truncate text-ui-sm text-muted @min-[640px]:block" aria-live="polite">
             {parts.map((part, index) => (
               <span key={part}>
                 {index > 0 && <span className="px-1.5 text-faint">·</span>}

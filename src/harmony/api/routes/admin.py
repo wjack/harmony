@@ -5,7 +5,8 @@ gate's 401 `passcode_required`, and with the cookie 403 `not_admin`.
 - GET /api/admin/spend: the live switch, global, today, the number of lineages today,
   the top 10 lineages and the top 5 client keys by spend
 - POST /api/admin/live {enabled}: pause or resume live models (`live_controls`);
-  resuming also clears a provider block, and never touches a cap
+  resuming also clears a provider block, and never touches a cap. Every live world gets
+  `demo.notice {kind: "budget"}`, so open tabs refetch the budget at once
 - GET /api/admin/worlds/{world_id}: a world's status and its retire workflow's
 - GET /api/admin/client-key: the caller's own client key and the headers it came from
 
@@ -27,6 +28,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
 
@@ -36,6 +38,9 @@ from harmony.api.routes.problems import not_found, problem, problem_entries, tem
 from harmony.config import ClientIpHeader, Settings
 from harmony.db.models import World
 from harmony.db.models.choices import WorldStatus
+from harmony.db.uow import unit_of_work
+from harmony.errors import WorldRetired
+from harmony.events.schemas import DemoNotice, EventScope
 from harmony.llm import budget_pg
 from harmony.temporal.workflows.retire_world import retire_workflow_id
 
@@ -140,7 +145,9 @@ async def set_live(
     body: LiveToggle, services: ServicesDep, x_admin_secret: AdminSecret = None
 ) -> LiveState:
     require_admin(services.settings, x_admin_secret)
-    return _live_state(await budget_pg.set_live(services.sessionmaker, enabled=body.enabled))
+    report = await budget_pg.set_live(services.sessionmaker, enabled=body.enabled)
+    await _tell_live_worlds(services.sessionmaker)
+    return _live_state(report)
 
 
 @router.get(
@@ -197,6 +204,20 @@ def require_admin(settings: Settings, secret: str | None) -> None:
         or not hmac.compare_digest(secret.encode(), expected.encode())
     ):
         raise problem(status.HTTP_403_FORBIDDEN, "not_admin", "the admin secret is required")
+
+
+async def _tell_live_worlds(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+    """A budget notice to every live world, so a pause or resume reaches open tabs now
+    rather than on their next budget poll."""
+    async with sessionmaker() as session:
+        world_ids = list(await session.scalars(select(World.id).where(World.status == "live")))
+    for world_id in world_ids:
+        try:
+            async with unit_of_work(sessionmaker, world_id) as uow:
+                uow.add_event(DemoNotice(kind="budget"), EventScope.demo())
+                await uow.commit()
+        except WorldRetired:
+            continue  # retired since the read: nobody is watching it
 
 
 def _totals(totals: budget_pg.Totals) -> BudgetTotals:

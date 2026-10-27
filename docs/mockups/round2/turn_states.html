@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request view turns</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400&display=swap">
+<style>
+  /* Tokens from the approved request_view.html mockup and web/src/theme/tokens.css, on the
+     proposed five-step type scale (sizing-proposal.css): 12, 13, 14, 15 medium, 16 serif prose.
+     No scripts: the tabs are radio buttons, so the page works where scripts don't run. */
+  :root {
+    --surface-0: #faf9f5; --surface-1: #f0eee6; --surface-2: #ffffff;
+    --border: #e8e6dc; --border-strong: #d9d6ca;
+    --text: #141413; --text-secondary: #3d3d3a; --text-muted: #73726c; --text-faint: #a3a198;
+    --text-accent: #2c6fbb; --fill-control: #efede5; --fill-primary: #141413; --on-primary: #fff;
+    --bg-warning: #f8e7df; --text-warning: #b8532f;
+    --bg-info: #e3eefa; --bg-info-soft: #f4f8fd; --text-info: #2c6fbb;
+    --bg-comment: #fbf4e3; --bar-comment: #d9a441;
+    --sans: Inter, system-ui, sans-serif; --serif: "Source Serif 4", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-1); color: var(--text); font: 14px/20px var(--sans); }
+  .page { max-width: 1120px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font: 500 16px/24px var(--sans); margin: 0 0 4px; }
+  .lede { color: var(--text-muted); margin: 0 0 16px; max-width: 780px; }
+  .lede b { font-weight: 500; color: var(--text-secondary); }
+
+  /* Radio tabs */
+  .page > input { position: absolute; opacity: 0; pointer-events: none; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 20px; position: sticky; top: 0; z-index: 2; background: var(--surface-1); padding: 8px 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--fill-control); padding: 3px; border-radius: 10px; }
+  .tabs label { font: 14px/20px var(--sans); color: var(--text-secondary); padding: 5px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; user-select: none; }
+  .tabs label:hover { color: var(--text); }
+  #s-all:checked ~ .controls label[for="s-all"], #s-a:checked ~ .controls label[for="s-a"],
+  #s-ae:checked ~ .controls label[for="s-ae"], #s-b:checked ~ .controls label[for="s-b"],
+  #s-c:checked ~ .controls label[for="s-c"], #s-ce:checked ~ .controls label[for="s-ce"],
+  #s-cc:checked ~ .controls label[for="s-cc"], #s-cr:checked ~ .controls label[for="s-cr"],
+  #s-d:checked ~ .controls label[for="s-d"], #s-dr:checked ~ .controls label[for="s-dr"],
+  #w-desk:checked ~ .controls label[for="w-desk"], #w-phone:checked ~ .controls label[for="w-phone"] {
+    background: var(--surface-2); color: var(--text); box-shadow: 0 0 0 0.5px var(--border-strong);
+  }
+  .width { margin-left: auto; }
+
+  .state { display: none; grid-template-columns: minmax(0, 1fr) 260px; gap: 24px; align-items: start; margin-bottom: 40px; }
+  #s-all:checked ~ .states .state, #s-a:checked ~ .states .s-a, #s-ae:checked ~ .states .s-ae,
+  #s-b:checked ~ .states .s-b, #s-c:checked ~ .states .s-c, #s-ce:checked ~ .states .s-ce,
+  #s-cc:checked ~ .states .s-cc, #s-cr:checked ~ .states .s-cr,
+  #s-d:checked ~ .states .s-d, #s-dr:checked ~ .states .s-dr { display: grid; }
+  @media (max-width: 1000px) { .state { grid-template-columns: minmax(0, 1fr); } .width { margin-left: 0; } }
+  .state > h3 { grid-column: 1 / -1; margin: 0 0 -12px; font: 500 14px/20px var(--sans); color: var(--text-secondary); }
+  .frame { width: 100%; max-width: 780px; margin: 0 auto; }
+  #w-phone:checked ~ .states .frame { max-width: 390px; }
+  #w-phone:checked ~ .states .head .with, #w-phone:checked ~ .states .head .details span { display: none; }
+  #w-phone:checked ~ .states .label .note span { display: none; }
+  .explain { color: var(--text-secondary); font-size: 13px; line-height: 18px; }
+  .explain h2 { font: 500 14px/20px var(--sans); margin: 0 0 6px; color: var(--text); }
+  .explain p { margin: 0 0 10px; }
+  .explain b { font-weight: 500; color: var(--text); }
+  .explain .was { color: var(--text-muted); border-top: 0.5px solid var(--border-strong); padding-top: 10px; }
+
+  /* The request view */
+  .view { border: 0.5px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-0); display: flex; flex-direction: column; }
+  .head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 0.5px solid var(--border); min-width: 0; }
+  .head .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .head .with { color: var(--text-muted); white-space: nowrap; }
+  .pill { font-size: 12px; line-height: 16px; border-radius: 8px; padding: 2px 8px; white-space: nowrap; flex: none; }
+  .pill.info { background: var(--bg-info); color: var(--text-info); }
+  .pill.warn { background: var(--bg-warning); color: var(--text-warning); }
+  .head .details { margin-left: auto; color: var(--text-secondary); white-space: nowrap; display: flex; gap: 4px; align-items: center; }
+
+  .transcript { padding: 20px 16px 8px; display: flex; flex-direction: column; gap: 20px; }
+  .row { display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; }
+  .av { width: 28px; height: 28px; border-radius: 7px; background: var(--fill-control); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; }
+  .sender { font-weight: 500; }
+  .time { color: var(--text-muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
+  .prose { font: 16px/24px var(--serif); margin-top: 4px; }
+  .prose p { margin: 0 0 10px; } .prose p:last-child { margin-bottom: 0; }
+  .prose ol { margin: 0 0 10px; padding-left: 22px; } .prose li { margin-bottom: 4px; }
+
+  /* Every event is the same quiet row: an icon in the avatar column and 13px text. */
+  .event { display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; font-size: 13px; line-height: 18px; color: var(--text-muted); }
+  .event i { font-size: 16px; text-align: center; line-height: 18px; }
+  .event b { font-weight: 500; color: var(--text-secondary); }
+  .event a { color: var(--text-accent); text-decoration: none; white-space: nowrap; }
+  .event .said { display: block; color: var(--text-secondary); margin: 2px 0; }
+
+  .comment { background: var(--bg-comment); border-left: 2px solid var(--bar-comment); border-radius: 0 8px 8px 0; padding: 8px 12px; }
+  .comment .who { font-size: 12px; line-height: 16px; color: var(--text-muted); }
+  .comment .who b { color: var(--text-secondary); font-weight: 500; }
+  .comment .text { margin-top: 2px; }
+  .mention { color: var(--text-accent); }
+
+  .card { border: 0.5px solid var(--border-strong); border-radius: 12px; background: var(--surface-2); padding: 16px; }
+  .eyebrow { font-size: 13px; line-height: 18px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; }
+  .question { font-size: 15px; line-height: 22px; font-weight: 500; margin: 6px 0 4px; }
+  .eyebrow .reassign { margin-left: auto; color: var(--text-accent); text-decoration: none; }
+  .pill.muted { background: var(--fill-control); color: var(--text-secondary); }
+  .closed { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0 4px; text-align: center; }
+  .closed .what { font-size: 13px; line-height: 18px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; }
+  .closed .what b { font-weight: 500; color: var(--text-secondary); }
+  .reopen { width: 100%; max-width: 560px; margin: 4px auto 0; text-align: left; border: 1px solid var(--text-accent); background: var(--bg-info-soft); border-radius: 12px; padding: 12px; }
+  .reopen .q { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text-info); display: flex; gap: 6px; align-items: center; }
+  .reopen .field { margin-top: 6px; min-height: 44px; }
+  .reopen .bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .reopen .bar .note { flex: 1; font-size: 12px; line-height: 16px; color: var(--text-info); min-width: 0; }
+  #w-phone:checked ~ .states .reopen .bar { flex-wrap: wrap; }
+  #w-phone:checked ~ .states .reopen .bar .note { flex-basis: 100%; }
+  .reopen .bar .b.ghost { margin-left: auto; }
+  .route { font-size: 13px; line-height: 18px; color: var(--text-muted); }
+  .route a { color: var(--text-accent); text-decoration: none; }
+  .label { font-size: 13px; line-height: 18px; color: var(--text-muted); border-top: 0.5px solid var(--border); margin-top: 14px; padding-top: 14px; display: flex; gap: 6px; align-items: center; }
+  .label .note { margin-left: auto; color: var(--text-faint); display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+  .label .note i { font-size: 14px; }
+  .label .note.info { color: var(--text-info); }
+  .label .new { color: var(--text-info); }
+  .draft { margin: 6px -8px 0; padding: 4px 8px; border-radius: 8px; }
+  .draft.pending { background: var(--bg-info-soft); box-shadow: inset 2px 0 0 var(--text-accent); }
+  .looked { font-size: 13px; line-height: 18px; color: var(--text-muted); margin-top: 12px; display: flex; gap: 6px; }
+  .actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .actions .spacer { flex: 1; }
+  .hint { font-size: 12px; line-height: 16px; color: var(--text-muted); margin-top: 8px; text-align: right; }
+  .b { display: inline-flex; align-items: center; gap: 6px; font: 14px/20px var(--sans); height: 32px; padding: 0 12px; border-radius: 8px; border: 0.5px solid var(--border-strong); background: var(--surface-2); color: var(--text); white-space: nowrap; flex: none; }
+  .b.primary { background: var(--fill-primary); color: var(--on-primary); border-color: var(--fill-primary); }
+  .b.accent { background: var(--text-accent); color: var(--on-primary); border-color: var(--text-accent); }
+  .b.ghost { border-color: transparent; background: none; color: var(--text-secondary); padding: 0 8px; }
+  .b.off { opacity: .45; }
+
+  /* The composer: one box with two modes. */
+  .foot { padding: 8px 16px 12px; }
+  .composer { border: 0.5px solid var(--border-strong); border-radius: 14px; background: var(--surface-2); padding: 10px 10px 8px 12px; }
+  .composer .field { min-height: 44px; color: var(--text-faint); }
+  .composer .field.typed { color: var(--text); }
+  .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .composer .bar .spacer { flex: 1; }
+  .modes { display: inline-flex; background: var(--fill-control); border-radius: 8px; padding: 2px; flex: none; }
+  .modes span { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; line-height: 18px; padding: 5px 9px; border-radius: 6px; color: var(--text-secondary); white-space: nowrap; }
+  .modes span i { font-size: 15px; }
+  .modes span.on { background: var(--surface-2); color: var(--text); box-shadow: 0 0 0 0.5px var(--border-strong); }
+  .composer.edit { border: 1px solid var(--text-accent); background: var(--bg-info-soft); }
+  .composer.edit .modes { background: var(--bg-info); }
+  .composer.edit .modes span.on { color: var(--text-info); box-shadow: 0 0 0 0.5px var(--text-accent); }
+  .caption { font-size: 12px; line-height: 16px; color: var(--text-muted); margin-top: 6px; padding: 0 4px; display: flex; gap: 5px; align-items: flex-start; }
+  .caption i { font-size: 13px; line-height: 16px; }
+  .caption.edit { color: var(--text-info); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Request view: turns, decisions, comments and edits (revised)</h1>
+  <p class="lede"><b>As built (round 2):</b> desktop only; the Phone width is out of scope (FEEDBACK_R2_PLAN E7). Where this file and <code>composer.html</code> differ, <code>composer.html</code> wins.</p>
+  <p class="lede">The other side never shows as "writing": one steady line says whose move it is. A decision card holds Decline and Approve and send. The box at the bottom has two modes. <b>Comment</b> talks to your team, and no Claude reads it. <b>Edit</b> tells your Claude what to do differently: it changes how Claude handles the rest of this conversation, and rewrites the draft if one is waiting. Messages and drafts always show in full. A finished conversation reads Closed and can be reopened.</p>
+
+  <input type="radio" name="s" id="s-all" checked>
+  <input type="radio" name="s" id="s-a">
+  <input type="radio" name="s" id="s-ae">
+  <input type="radio" name="s" id="s-b">
+  <input type="radio" name="s" id="s-c">
+  <input type="radio" name="s" id="s-ce">
+  <input type="radio" name="s" id="s-cc">
+  <input type="radio" name="s" id="s-cr">
+  <input type="radio" name="s" id="s-d">
+  <input type="radio" name="s" id="s-dr">
+  <input type="radio" name="w" id="w-desk" checked>
+  <input type="radio" name="w" id="w-phone">
+
+  <div class="controls">
+    <div class="tabs" aria-label="State">
+      <label for="s-all">All states</label>
+      <label for="s-a">A · Their move</label>
+      <label for="s-ae">A · Dana edits</label>
+      <label for="s-b">B · Waiting on Alex</label>
+      <label for="s-c">C · Helen decides</label>
+      <label for="s-ce">C · Edit</label>
+      <label for="s-cc">C · Comment</label>
+      <label for="s-cr">C · Rewritten</label>
+      <label for="s-d">D · Closed</label>
+      <label for="s-dr">D · Reopen</label>
+    </div>
+    <div class="tabs width" aria-label="Width">
+      <label for="w-desk">1000 px</label>
+      <label for="w-phone">Phone</label>
+    </div>
+  </div>
+
+  <div class="states">
+
+    <!-- A: Dana at Ridgeline, after Ridgeline replied. It is Henderson's move. -->
+    <section class="state s-a">
+      <h3>A · Dana at Ridgeline: it's Henderson's move</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">Airtight holder quote</span><span class="with">with Henderson Lab</span>
+          <span class="pill info">Waiting on Henderson Lab</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">H</div><div>
+            <div><span class="sender">Claude for Henderson Lab</span><span class="time">7:59 PM</span></div>
+            <div class="prose">
+              <p>Hello, this is Claude for Henderson Lab (Dept. of Materials Science, Northlake University). We are looking for a fabrication quote for an airtight sample holder and would like to confirm feasibility and timing.</p>
+              <p>We need one airtight sample holder that seals under argon and can be transferred from an argon glovebox to XRD and SEM/EDS instruments without air exposure. The samples are powders, air- and moisture-sensitive within minutes of exposure, and results are needed by November 11, 2026.</p>
+              <p>Could you tell us:</p>
+              <ol><li>Whether you can fabricate such a holder, and the proposed design.</li><li>Whether it fits standard XRD and SEM/EDS stages, and what instrument details you need from us.</li><li>Your turnaround, and whether you can meet November 11.</li><li>A quote, per holder and for any quantity you recommend.</li></ol>
+              <p>We will not agree to any price or order in this conversation; any commitment will be confirmed separately by our lab.</p>
+            </div>
+          </div></div>
+          <div class="event"><i class="ti ti-circle-check"></i><span><b>Dana</b> approved Claude's reply · only Ridgeline sees this · 8:02 PM</span></div>
+          <div class="row"><div class="av">R</div><div>
+            <div><span class="sender">Claude for Ridgeline Fabrication</span><span class="time">8:02 PM</span></div>
+            <div class="prose">
+              <p>Thank you for the detailed request. Here is where we stand.</p>
+              <p>Published list: we have one airtight powder transfer holder, for a Bruker D8 dome mount, aluminum body, $240 per holder, 4 business days lead time, with Viton seals. Viton must be confirmed as acceptable for your use before machining.</p>
+              <p>Custom work: we don't have a published holder for SEM/EDS stages, so we can't yet confirm SEM/EDS fit, a custom design, or delivery by November 11. Our team will review and confirm feasibility, any non-list pricing, and timing.</p>
+              <p>To move forward, please send the XRD and SEM/EDS instrument models and stage details, drawings or dimensions for anything non-standard, the seal material you want, and the quantity.</p>
+            </div>
+          </div></div>
+          <div class="event"><i class="ti ti-clock"></i><span>Waiting for Henderson Lab to reply</span></div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field">Comment for your team… Use @ to bring someone in</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b off">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Ridgeline sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Their move</h2>
+        <p>From the moment our message lands until theirs does, the last row reads "Waiting for Henderson Lab to reply", and the pill says the same. Nothing animates, and nothing changes when their Claude checks with its own team or waits on a person.</p>
+        <p>The box at the bottom starts in <b>Comment</b>. The switch to <b>Edit</b> is always beside it.</p>
+        <p class="was">Before: "Claude for Henderson Lab is writing…" for a few seconds, then gone when they consulted Alex, which read like an error.</p>
+      </aside>
+    </section>
+
+    <!-- A · Edit: Dana steers her Claude with no draft pending. -->
+    <section class="state s-ae">
+      <h3>A · Dana switches to Edit: no draft is waiting, so it changes what Claude does next</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">Airtight holder quote</span><span class="with">with Henderson Lab</span>
+          <span class="pill info">Waiting on Henderson Lab</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">R</div><div>
+            <div><span class="sender">Claude for Ridgeline Fabrication</span><span class="time">8:02 PM</span></div>
+            <div class="prose">
+              <p>Thank you for the detailed request. Here is where we stand.</p>
+              <p>Published list: we have one airtight powder transfer holder, for a Bruker D8 dome mount, aluminum body, $240 per holder, 4 business days lead time, with Viton seals. Viton must be confirmed as acceptable for your use before machining.</p>
+              <p>Custom work: we don't have a published holder for SEM/EDS stages, so we can't yet confirm SEM/EDS fit, a custom design, or delivery by November 11. Our team will review and confirm feasibility, any non-list pricing, and timing.</p>
+              <p>To move forward, please send the XRD and SEM/EDS instrument models and stage details, drawings or dimensions for anything non-standard, the seal material you want, and the quantity.</p>
+            </div>
+          </div></div>
+          <div class="event"><i class="ti ti-clock"></i><span>Waiting for Henderson Lab to reply</span></div>
+        </div>
+        <div class="foot">
+          <div class="composer edit">
+            <div class="field typed">If they send the stage models, offer to start machining the D8 holder this week. Don't promise a date for an SEM/EDS holder until Sam has checked the drawings.</div>
+            <div class="bar"><span class="modes"><span><i class="ti ti-message"></i>Comment</span><span class="on"><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b accent">Tell Claude</span></div>
+          </div>
+          <div class="caption edit"><i class="ti ti-sparkles"></i>Claude follows this from its next message in this conversation. Only Ridgeline sees it.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Edit with nothing waiting</h2>
+        <p><b>Edit</b> asks what Claude should do differently. It goes to Ridgeline's own Claude, which turns it into guidance for the Claude talking to Henderson Lab, for the rest of this conversation.</p>
+        <p>The Claude talking to Henderson Lab sees only that guidance, never Dana's words or any comment. Henderson Lab sees neither.</p>
+        <p>Details shows the guidance Claude now follows, so the team can see exactly what it was told.</p>
+      </aside>
+    </section>
+
+    <!-- B: a Henderson teammate (Prof. Henderson) while our Claude waits on Alex. -->
+    <section class="state s-b">
+      <h3>B · Prof. Henderson: our Claude is waiting on Alex</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">Airtight holder quote</span><span class="with">with Ridgeline Fabrication</span>
+          <span class="pill warn">Waiting on Alex</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">R</div><div>
+            <div><span class="sender">Claude for Ridgeline Fabrication</span><span class="time">8:02 PM</span></div>
+            <div class="prose">
+              <p>Thank you for the detailed request. Here is where we stand.</p>
+              <p>Published list: we have one airtight powder transfer holder, for a Bruker D8 dome mount, aluminum body, $240 per holder, 4 business days lead time, with Viton seals. Viton must be confirmed as acceptable for your use before machining.</p>
+              <p>Custom work: we don't have a published holder for SEM/EDS stages, so we can't yet confirm SEM/EDS fit, a custom design, or delivery by November 11. Our team will review and confirm feasibility, any non-list pricing, and timing.</p>
+              <p>To move forward, please send the XRD and SEM/EDS instrument models and stage details, drawings or dimensions for anything non-standard, the seal material you want, and the quantity.</p>
+            </div>
+          </div></div>
+          <div class="event"><i class="ti ti-clock"></i><span>Waiting on Alex Chen</span></div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field">Comment for your team… Use @ to bring someone in</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b off">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Henderson Lab sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Our Claude waits on a teammate</h2>
+        <p>The last row says whose move it is, the same steady row as A: "Waiting on Alex Chen". The pill says the same. Alex sees the decision card in his own view.</p>
+        <p class="was">Before: an "Our Claude asked the team" row, then a separate "waiting on Alex" line with a spark and a link.</p>
+        <p><b>As built:</b> Prof. Henderson also sees the decision card under that row, naming Alex ("Claude needs Alex's answer before replying to Ridgeline Fabrication"), because anyone who can see an open item may act on it.</p>
+      </aside>
+    </section>
+
+    <!-- C: Helen at Northlake decides. -->
+    <section class="state s-c">
+      <h3>C · Helen at Northlake: Claude needs her answer</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">XRD and SEM/EDS for 14 powders</span><span class="with">with Henderson Lab</span>
+          <span class="pill warn">Needs your answer</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">H</div><div>
+            <div><span class="sender">Claude for Henderson Lab</span><span class="time">8:07 PM</span></div>
+            <div class="prose">
+              <p>Thank you, that's helpful. Before we take this to our PI, could your staff confirm the following?</p>
+              <ol>
+                <li>SEM/EDS: how will the powders stay under inert atmosphere from loading through measurement? Is SEM/EDS run in an air-free holder or transfer vessel, or would the samples be exposed to air at any point?</li>
+                <li>XRD: if the instrument opens on November 10, can all 14 samples be measured with results by November 11? If not, what is the earliest realistic completion date?</li>
+                <li>Can you combine XRD and SEM/EDS into a single visit so samples are handled once, and would that change the quote?</li>
+                <li>Transfer holder: if you can't fabricate one, do you know a partner or vendor who can?</li>
+                <li>Sample delivery: how should sealed samples reach you, and what prep is required before loading?</li>
+              </ol>
+            </div>
+          </div></div>
+          <div class="card">
+            <div class="eyebrow"><i class="ti ti-help-circle"></i>Claude needs your answer before replying to Henderson Lab<a class="reassign" href="#">Reassign</a></div>
+            <div class="question">Can SEM/EDS stay air-free, can all 14 finish by Nov 11, and can we do both in one visit?</div>
+            <div class="label">Draft reply<span class="note"><i class="ti ti-pencil"></i><span>Click the text to change the wording</span></span></div>
+            <div class="draft"><div class="prose">
+              <p>Thanks for the follow-up questions. Here is what our team can confirm.</p>
+              <p>SEM/EDS: we load your powders into our air-free transfer vessel inside the glovebox, and the vessel docks to the SEM chamber, so samples are not exposed to air at any point.</p>
+              <p>Timing: XRD opens on November 10, so all 14 samples can be measured that day, but results by November 11 are tight. November 12 is the realistic completion date. SEM/EDS can run earlier, on November 4 to 6.</p>
+              <p>One visit: we can handle both in one booking. The samples are loaded once in the glovebox and stay sealed between instruments. The quote is unchanged: $1,620 for 14 samples, valid for 14 days.</p>
+              <p>Transfer holder: we don't fabricate holders. Ridgeline Fabrication machines airtight transfer holders and may be able to help.</p>
+              <p>Delivery: ship the samples sealed under argon in vials with Viton or Kalrez O-rings. No other prep is needed before loading.</p>
+              <p>Nothing is booked until our team confirms a slot.</p>
+            </div></div>
+            <div class="looked"><i class="ti ti-eye"></i><span>Looked at: public calendar, SEM transfer procedure, price list</span></div>
+            <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+            <div class="hint">Sends this reply to Henderson Lab's Claude · ⌘↵</div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field">Comment for your team… Use @ to bring someone in</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b off">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Northlake sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Decide, comment, or edit</h2>
+        <p>The card holds the decision: <b>Approve and send</b>, or <b>Decline</b> on the left. To fix a word yourself, click into the draft.</p>
+        <p>The box at the bottom is for everything else, in one of two modes: <b>Comment</b> to your team, or <b>Edit</b> to tell Claude what to do differently.</p>
+        <p>The question and the whole draft show in full: no "View more", no inner scroll.</p>
+        <p class="was">Before: a "Why it came to you" section and a "Claude's reasoning" disclosure in the card, both gone. One field was both "Tell Claude what to change" and an internal note, and what you typed changed what the buttons did. The Claude drafting the reply also read every note, and in Auto mode its reply can go out with no one reviewing it.</p>
+      </aside>
+    </section>
+
+    <!-- C · Edit -->
+    <section class="state s-ce">
+      <h3>C · Edit: Helen tells Claude what to do differently</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">XRD and SEM/EDS for 14 powders</span><span class="with">with Henderson Lab</span>
+          <span class="pill warn">Needs your answer</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">H</div><div>
+            <div><span class="sender">Claude for Henderson Lab</span><span class="time">8:07 PM</span></div>
+            <div class="prose">
+              <p>Thank you, that's helpful. Before we take this to our PI, could your staff confirm the following?</p>
+              <ol>
+                <li>SEM/EDS: how will the powders stay under inert atmosphere from loading through measurement? Is SEM/EDS run in an air-free holder or transfer vessel, or would the samples be exposed to air at any point?</li>
+                <li>XRD: if the instrument opens on November 10, can all 14 samples be measured with results by November 11? If not, what is the earliest realistic completion date?</li>
+                <li>Can you combine XRD and SEM/EDS into a single visit so samples are handled once, and would that change the quote?</li>
+                <li>Transfer holder: if you can't fabricate one, do you know a partner or vendor who can?</li>
+                <li>Sample delivery: how should sealed samples reach you, and what prep is required before loading?</li>
+              </ol>
+            </div>
+          </div></div>
+          <div class="card">
+            <div class="eyebrow"><i class="ti ti-help-circle"></i>Claude needs your answer before replying to Henderson Lab<a class="reassign" href="#">Reassign</a></div>
+            <div class="question">Can SEM/EDS stay air-free, can all 14 finish by Nov 11, and can we do both in one visit?</div>
+            <div class="label">Draft reply<span class="note info"><i class="ti ti-sparkles"></i><span>Claude rewrites this when you tell it</span></span></div>
+            <div class="draft pending"><div class="prose">
+              <p>Thanks for the follow-up questions. Here is what our team can confirm.</p>
+              <p>SEM/EDS: we load your powders into our air-free transfer vessel inside the glovebox, and the vessel docks to the SEM chamber, so samples are not exposed to air at any point.</p>
+              <p>Timing: XRD opens on November 10, so all 14 samples can be measured that day, but results by November 11 are tight. November 12 is the realistic completion date. SEM/EDS can run earlier, on November 4 to 6.</p>
+              <p>One visit: we can handle both in one booking. The samples are loaded once in the glovebox and stay sealed between instruments. The quote is unchanged: $1,620 for 14 samples, valid for 14 days.</p>
+              <p>Transfer holder: we don't fabricate holders. Ridgeline Fabrication machines airtight transfer holders and may be able to help.</p>
+              <p>Delivery: ship the samples sealed under argon in vials with Viton or Kalrez O-rings. No other prep is needed before loading.</p>
+              <p>Nothing is booked until our team confirms a slot.</p>
+            </div></div>
+            <div class="looked"><i class="ti ti-eye"></i><span>Looked at: public calendar, SEM transfer procedure, price list</span></div>
+            <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+            <div class="hint">Sends this reply to Henderson Lab's Claude · ⌘↵</div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="composer edit">
+            <div class="field typed">Don't name other suppliers; just say a fabrication shop can machine a holder. Lead with SEM/EDS on Nov 4 to 6, and be plain that XRD results land Nov 12.</div>
+            <div class="bar"><span class="modes"><span><i class="ti ti-message"></i>Comment</span><span class="on"><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b accent">Tell Claude</span></div>
+          </div>
+          <div class="caption edit"><i class="ti ti-sparkles"></i>Claude rewrites the draft and follows this for the rest of the conversation. Only Northlake sees it.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Edit</h2>
+        <p>Helen flips the box to <b>Edit</b>: it turns blue and asks what Claude should do differently. The draft it will rewrite gets a matching blue edge.</p>
+        <p>Northlake's own Claude reads the instruction and does two things: it rewrites the waiting draft, and it updates the guidance the Claude talking to Henderson Lab follows for the rest of this conversation.</p>
+        <p>The card doesn't change: Approve and send still sends whatever the draft says.</p>
+        <p class="was">Before: Edit was a button on the card that turned the box into a rewrite field, and before that, a small "Or tell Claude what to change" bar inside the card.</p>
+      </aside>
+    </section>
+
+    <!-- C · Comment -->
+    <section class="state s-cc">
+      <h3>C · Comment: Helen checks with Raj before approving</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">XRD and SEM/EDS for 14 powders</span><span class="with">with Henderson Lab</span>
+          <span class="pill warn">Needs your answer</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">H</div><div>
+            <div><span class="sender">Claude for Henderson Lab</span><span class="time">8:07 PM</span></div>
+            <div class="prose">
+              <p>Thank you, that's helpful. Before we take this to our PI, could your staff confirm the following?</p>
+              <ol>
+                <li>SEM/EDS: how will the powders stay under inert atmosphere from loading through measurement? Is SEM/EDS run in an air-free holder or transfer vessel, or would the samples be exposed to air at any point?</li>
+                <li>XRD: if the instrument opens on November 10, can all 14 samples be measured with results by November 11? If not, what is the earliest realistic completion date?</li>
+                <li>Can you combine XRD and SEM/EDS into a single visit so samples are handled once, and would that change the quote?</li>
+                <li>Transfer holder: if you can't fabricate one, do you know a partner or vendor who can?</li>
+                <li>Sample delivery: how should sealed samples reach you, and what prep is required before loading?</li>
+              </ol>
+            </div>
+          </div></div>
+          <div class="comment">
+            <div class="who"><b>Raj Patel</b> · comment · 8:05 PM</div>
+            <div class="text">The transfer vessel is booked Nov 3 for the Kessler group but free Nov 4 to 6, so SEM/EDS fits before XRD opens.</div>
+          </div>
+          <div class="card">
+            <div class="eyebrow"><i class="ti ti-help-circle"></i>Claude needs your answer before replying to Henderson Lab<a class="reassign" href="#">Reassign</a></div>
+            <div class="question">Can SEM/EDS stay air-free, can all 14 finish by Nov 11, and can we do both in one visit?</div>
+            <div class="label">Draft reply<span class="note"><i class="ti ti-pencil"></i><span>Click the text to change the wording</span></span></div>
+            <div class="draft"><div class="prose">
+              <p>Thanks for the follow-up questions. Here is what our team can confirm.</p>
+              <p>SEM/EDS: we load your powders into our air-free transfer vessel inside the glovebox, and the vessel docks to the SEM chamber, so samples are not exposed to air at any point.</p>
+              <p>Timing: XRD opens on November 10, so all 14 samples can be measured that day, but results by November 11 are tight. November 12 is the realistic completion date. SEM/EDS can run earlier, on November 4 to 6.</p>
+              <p>One visit: we can handle both in one booking. The samples are loaded once in the glovebox and stay sealed between instruments. The quote is unchanged: $1,620 for 14 samples, valid for 14 days.</p>
+              <p>Transfer holder: we don't fabricate holders. Ridgeline Fabrication machines airtight transfer holders and may be able to help.</p>
+              <p>Delivery: ship the samples sealed under argon in vials with Viton or Kalrez O-rings. No other prep is needed before loading.</p>
+              <p>Nothing is booked until our team confirms a slot.</p>
+            </div></div>
+            <div class="looked"><i class="ti ti-eye"></i><span>Looked at: public calendar, SEM transfer procedure, price list</span></div>
+            <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+            <div class="hint">Sends this reply to Henderson Lab's Claude · ⌘↵</div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field typed"><span class="mention">@Raj</span> can you hold Nov 4 on the transfer vessel for Henderson Lab? I'm about to approve.</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Northlake sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Comment</h2>
+        <p>Comments show in the transcript in their own amber style, so they never look like messages to the other side.</p>
+        <p>No Claude reads them, so Raj can say who else has the vessel booked without it ever reaching Henderson Lab. To change what Claude says, use Edit.</p>
+        <p>While a decision is pending, its card stays the last thing in the transcript, and new comments land above it.</p>
+      </aside>
+    </section>
+
+    <!-- C · Rewritten -->
+    <section class="state s-cr">
+      <h3>C · Rewritten: Claude redrafted from Helen's instruction</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">XRD and SEM/EDS for 14 powders</span><span class="with">with Henderson Lab</span>
+          <span class="pill warn">Needs your answer</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">H</div><div>
+            <div><span class="sender">Claude for Henderson Lab</span><span class="time">8:07 PM</span></div>
+            <div class="prose">
+              <p>Thank you, that's helpful. Before we take this to our PI, could your staff confirm the following?</p>
+              <ol>
+                <li>SEM/EDS: how will the powders stay under inert atmosphere from loading through measurement? Is SEM/EDS run in an air-free holder or transfer vessel, or would the samples be exposed to air at any point?</li>
+                <li>XRD: if the instrument opens on November 10, can all 14 samples be measured with results by November 11? If not, what is the earliest realistic completion date?</li>
+                <li>Can you combine XRD and SEM/EDS into a single visit so samples are handled once, and would that change the quote?</li>
+                <li>Transfer holder: if you can't fabricate one, do you know a partner or vendor who can?</li>
+                <li>Sample delivery: how should sealed samples reach you, and what prep is required before loading?</li>
+              </ol>
+            </div>
+          </div></div>
+          <div class="comment">
+            <div class="who"><b>Raj Patel</b> · comment · 8:05 PM</div>
+            <div class="text">The transfer vessel is booked Nov 3 for the Kessler group but free Nov 4 to 6, so SEM/EDS fits before XRD opens.</div>
+          </div>
+          <div class="event"><i class="ti ti-sparkles"></i><span><b>Helen</b> told Claude what to do differently · only Northlake sees this · 8:11 PM
+            <span class="said">"Don't name other suppliers; just say a fabrication shop can machine a holder. Lead with SEM/EDS on Nov 4 to 6, and be plain that XRD results land Nov 12."</span>
+            Claude rewrote the draft and will follow this for the rest of the conversation. <a href="#">See guidance</a></span></div>
+          <div class="card">
+            <div class="eyebrow"><i class="ti ti-help-circle"></i>Claude needs your answer before replying to Henderson Lab<a class="reassign" href="#">Reassign</a></div>
+            <div class="question">Can SEM/EDS stay air-free, can all 14 finish by Nov 11, and can we do both in one visit?</div>
+            <div class="label">Draft reply · <span class="new">rewritten by Claude</span><span class="note"><i class="ti ti-pencil"></i><span>Click the text to change the wording</span></span></div>
+            <div class="draft"><div class="prose">
+              <p>Thanks for the follow-up questions. Here is what our team can confirm.</p>
+              <p>SEM/EDS: we can run it on November 4 to 6. We load your powders into our air-free transfer vessel inside the glovebox, and the vessel docks to the SEM chamber, so samples are not exposed to air at any point.</p>
+              <p>XRD: it opens on November 10 and can measure all 14 samples that day. Results will be ready on November 12, a day after your target.</p>
+              <p>One visit: we can handle both in one booking. The samples are loaded once in the glovebox and stay sealed between instruments. The quote is unchanged: $1,620 for 14 samples, valid for 14 days.</p>
+              <p>Transfer holder: we don't fabricate holders, but a fabrication shop can machine one. We're happy to share the stage dimensions it would need.</p>
+              <p>Delivery: ship the samples sealed under argon in vials with Viton or Kalrez O-rings. No other prep is needed before loading.</p>
+              <p>Nothing is booked until our team confirms a slot.</p>
+            </div></div>
+            <div class="looked"><i class="ti ti-eye"></i><span>Looked at: public calendar, SEM transfer procedure, price list</span></div>
+            <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+            <div class="hint">Sends this reply to Henderson Lab's Claude · ⌘↵</div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field">Comment for your team… Use @ to bring someone in</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b off">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Northlake sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Rewritten</h2>
+        <p>The instruction shows as one quiet row with a spark, not an amber comment, because it went to Claude. It says what Claude did with it: rewrote the draft, and will follow it from here on.</p>
+        <p>"See guidance" opens Details, which shows the guidance the Claude talking to Henderson Lab now follows.</p>
+        <p>The new draft replaces the old one in the same card. Helen can edit again, fix a word herself, or approve. The box goes back to Comment.</p>
+        <p class="was">Before: the instruction was saved as a note, so it looked like a comment to the team.</p>
+      </aside>
+    </section>
+
+    <!-- D: Alex at Henderson, after the conversation closed. -->
+    <section class="state s-d">
+      <h3>D · Alex at Henderson: the conversation closed</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">Airtight holder quote</span><span class="with">with Ridgeline Fabrication</span>
+          <span class="pill muted">Closed</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">R</div><div>
+            <div><span class="sender">Claude for Ridgeline Fabrication</span><span class="time">Oct 27, 8:02 PM</span></div>
+            <div class="prose">
+              <p>Thank you for the detailed request. Here is where we stand.</p>
+              <p>Published list: we have one airtight powder transfer holder, for a Bruker D8 dome mount, aluminum body, $240 per holder, 4 business days lead time, with Viton seals. Viton must be confirmed as acceptable for your use before machining.</p>
+              <p>Custom work: we don't have a published holder for SEM/EDS stages, so we can't yet confirm SEM/EDS fit, a custom design, or delivery by November 11. Our team will review and confirm feasibility, any non-list pricing, and timing.</p>
+              <p>To move forward, please send the XRD and SEM/EDS instrument models and stage details, drawings or dimensions for anything non-standard, the seal material you want, and the quantity.</p>
+            </div>
+          </div></div>
+          <div class="closed">
+            <div class="what"><i class="ti ti-circle-check"></i><span><b>Closed</b> · Oct 29 · both sides went quiet</span></div>
+            <span class="b"><i class="ti ti-arrow-back-up"></i>Reopen</span>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field">Comment for your team… Use @ to bring someone in</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span style="opacity:.45" title="Reopen the conversation to tell Claude what to pick up" aria-disabled="true"><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b off">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Henderson Lab sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Closed, not expired</h2>
+        <p>However a conversation ends (a side closed it, both went quiet, or it hit its turn limit or deadline), it reads <b>Closed</b>, with the reason in a few words.</p>
+        <p><b>Reopen</b> sits right under it, for either side. It opens a small prompt to continue the discussion (next tab).</p>
+        <p>Edit is shown but off, with the hint "Reopen the conversation to tell Claude what to pick up": Edit on a closed conversation is refused, and Reopen is how Claude picks it up.</p>
+        <p class="was">Before: "Expired. It ended without a close: both sides went quiet, or it reached its turn limit or deadline." with no way back in.</p>
+      </aside>
+    </section>
+
+    <!-- D · Reopen -->
+    <section class="state s-dr">
+      <h3>D · Reopen: a small prompt to continue the discussion</h3>
+      <div class="frame"><div class="view">
+        <div class="head">
+          <span class="title">Airtight holder quote</span><span class="with">with Ridgeline Fabrication</span>
+          <span class="pill muted">Closed</span>
+          <span class="details"><i class="ti ti-layout-sidebar-right"></i><span>Details</span></span>
+        </div>
+        <div class="transcript">
+          <div class="row"><div class="av">R</div><div>
+            <div><span class="sender">Claude for Ridgeline Fabrication</span><span class="time">Oct 27, 8:02 PM</span></div>
+            <div class="prose">
+              <p>Thank you for the detailed request. Here is where we stand.</p>
+              <p>Published list: we have one airtight powder transfer holder, for a Bruker D8 dome mount, aluminum body, $240 per holder, 4 business days lead time, with Viton seals. Viton must be confirmed as acceptable for your use before machining.</p>
+              <p>Custom work: we don't have a published holder for SEM/EDS stages, so we can't yet confirm SEM/EDS fit, a custom design, or delivery by November 11. Our team will review and confirm feasibility, any non-list pricing, and timing.</p>
+              <p>To move forward, please send the XRD and SEM/EDS instrument models and stage details, drawings or dimensions for anything non-standard, the seal material you want, and the quantity.</p>
+            </div>
+          </div></div>
+          <div class="closed">
+            <div class="what"><i class="ti ti-circle-check"></i><span><b>Closed</b> · Oct 29 · both sides went quiet</span></div>
+            <div class="reopen">
+              <div class="q"><i class="ti ti-arrow-back-up"></i>Reopen with Ridgeline Fabrication</div>
+              <div class="field typed">We have the stage models now: a Bruker D8 Advance and a Thermo Apreo 2 SEM. Send them and ask for a quote on one D8 holder with Kalrez seals.</div>
+              <div class="bar"><span class="note">Claude writes the next message, following your usual review settings. Only Henderson Lab sees what you typed.</span><span class="b ghost">Cancel</span><span class="b accent">Reopen</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="composer">
+            <div class="field">Comment for your team… Use @ to bring someone in</div>
+            <div class="bar"><span class="modes"><span class="on"><i class="ti ti-message"></i>Comment</span><span style="opacity:.45" title="Reopen the conversation to tell Claude what to pick up" aria-disabled="true"><i class="ti ti-sparkles"></i>Edit</span></span><span class="spacer"></span><span class="b off">Comment</span></div>
+          </div>
+          <div class="caption"><i class="ti ti-lock"></i>Only Henderson Lab sees comments. Claude doesn't read them.</div>
+        </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Reopen</h2>
+        <p>Reopen opens a small prompt right where the button was: what should Claude pick up? It's blue like Edit, because it goes to Claude, not to Ridgeline.</p>
+        <p>Claude reopens the conversation and writes the next message, held for review if your settings say so. Ridgeline's Claude answers as usual.</p>
+        <p>The box at the bottom stays on Comment, with Edit off until the conversation is open. Each reopen gets a fresh 16 turns and 20 hours. A conversation can be reopened twice.</p>
+      </aside>
+    </section>
+
+  </div>
+</div>
+</body>
+</html>

@@ -67,8 +67,9 @@ export function SidebarRequests() {
 }
 
 /**
- * Two lines: a warning dot and the title, then who it's with; a dot at the end while
- * unread, which the link's name says too (a dot alone says nothing to a screen reader).
+ * Two lines: the title, then who it's with. The section already says it needs you, so
+ * the row's one dot, at its end, means unread, which the link's name says too (a dot
+ * alone says nothing to a screen reader).
  */
 function NeedsRow({ item, unread }: { item: InboxItem; unread: boolean }) {
   return (
@@ -80,11 +81,8 @@ function NeedsRow({ item, unread }: { item: InboxItem; unread: boolean }) {
           cx(ROW, "relative flex-col gap-px py-1.5 pr-6", isActive ? "bg-hover" : "hover:bg-hover")
         }
       >
-        <span className="flex min-w-0 items-center gap-2">
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning" />
-          <span className={cx("min-w-0 flex-1 truncate", unread && "font-medium")}>{item.title}</span>
-        </span>
-        <span className="truncate pl-3.5 text-[12.5px] leading-[18px] text-muted">{item.counterparty.name}</span>
+        <span className={cx("min-w-0 truncate", unread && "font-medium")}>{item.title}</span>
+        <span className="truncate text-[12.5px] leading-[18px] text-muted">{item.counterparty.name}</span>
         {unread && <span aria-hidden className="absolute top-3 right-3 size-1.5 rounded-full bg-accent" />}
       </NavLink>
     </li>

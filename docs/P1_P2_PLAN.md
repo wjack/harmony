@@ -88,12 +88,12 @@ One module per aggregate. Each function takes a `UnitOfWork` and emits `entity.s
   - signal `thread_changed(thread_id, state)`;
   - query `status()`.
 - **`ThreadWorkflow`:**
-  - Updates `resolve_escalation(escalation_id, action, text?, draft_rev?)`, `reassign(escalation_id, member_id)` and `redraft(escalation_id, instruction)`;
+  - Updates `resolve_escalation(escalation_id, action, text?, draft_rev?)`, `reassign(escalation_id, member_id)` and `redraft(escalation_id, instruction)` (round 2 replaced `redraft` with the `steer` Update, docs/design/EDIT.md);
   - query `state()`.
 
 **Activities:**
 - on `harmony-model`: `internal_turn`, `rep_turn`, `answer_consult` (the answerer's loop, then the sharing check);
-- on `harmony-main`: `apply_card_resolution`, `start_network_request`, `open_thread`, `apply_resolution`, `reassign_escalation`, `set_thread_state`, `set_request_status`, `notify_conversation`.
+- on `harmony-main`: `apply_card_resolution`, `start_network_request`, `open_thread`, `apply_resolution`, `reassign_escalation`, `set_thread_state`, `set_request_status`, `notify_conversation` (round 2 removed `set_request_status`: the request closes through `end_round`, REOPEN.md §6.3).
 
 ### API (`api/routes/`)
 
@@ -112,8 +112,8 @@ Pydantic models for every request and response, so `make gen-api` regenerates th
 | `GET /api/threads/{id}/workspace` | Own side only: consults, escalations with their drafts and what Claude looked at, notes, "What our representative saw" and the close summary |
 | `POST /api/escalations/{id}/resolve {action, text?, draft_rev?}` | Approve & send (with `text`, Edit), Decline or Take over |
 | `POST /api/escalations/{id}/reassign {member_id}` | Reassign an inbox item |
-| `POST /api/escalations/{id}/redraft {instruction}` | Ask Claude to redraft |
-| `POST /api/threads/{id}/notes {body}` | Add an internal note |
+| `POST /api/escalations/{id}/redraft {instruction}` | Ask Claude to redraft (removed in round 2: `POST /api/threads/{id}/steers` is Edit) |
+| `POST /api/threads/{id}/notes {body}` | Add an internal note (round 2: a comment, `{body, as_member_id}`, which no Claude reads) |
 | `GET /api/orgs/{slug}/harmony` | Public summary, instructions, sharing description, autonomy, trusted organizations, directory visibility, routing prompt, default assignee, and members with role and profile |
 | `PUT /api/orgs/{slug}/harmony` | Admin only; policy is live, prompt settings are versioned |
 | `POST`, `PUT`, `DELETE /api/orgs/{slug}/trusted-organizations[/{counterparty_org_id}]` | Admin only; add, edit or remove a trusted organization |
@@ -156,7 +156,7 @@ The coordinator has already drafted the prompts in `src/harmony/agents/prompts/`
 - It loops over `call_model_checkpointed(turn_id, step_idx, request)` (P0).
 - It appends the response bytes to the transcript and executes tool calls through the executor.
 - Tool results go back as a `user` message with `tool_result` blocks.
-- The turn ends when the model stops calling tools, or when a tool stops it: `consult` until the answer is released, `close` for good, and `send_message` only when *Ask* holds the message. A turn may send several messages.
+- The turn ends when the model stops calling tools, or when a tool stops it: `consult` until the answer is released, `close`, which ends the conversation (until someone reopens it, REOPEN.md), and `send_message` only when *Ask* holds the message. A turn may send several messages.
 - Maximum 8 steps per turn.
 - `disable_parallel_tool_use` is set on representatives.
 
@@ -230,7 +230,7 @@ Owns `temporal/workflows/{conversation,network_request,thread}.py`, `temporal/ac
 - A pending card pauses the turn:
   - the `internal_turn` activity returns `AwaitingCard`;
   - the workflow waits for the `resolve_card` Update;
-  - then `internal_turn` continues with the tool result: "approved; request R sent to …" or "rejected: <feedback>".
+  - then `internal_turn` continues with the tool result: "approved; request R sent to …" or "rejected: <feedback>" (round 2: "Approved and sent: request R to …" with what happens next, a Decline's own result, or "rejected: <message>" for a message sent while the card waited; P1_P2_CONTRACT.md, Round 2).
 - An inline question sends `network_update`. Only `closed`, sent once every thread of the request has ended, wakes a model turn, with a placeholder user turn plus a system note. Internal Claude then summarizes in prose.
 - It continues-as-new when idle.
 
@@ -306,7 +306,7 @@ The three-pane inbox per UI_REFERENCE §7:
   - the routing reason and Reassign (member picker);
   - the editable draft answer;
   - what Claude looked at (activity lines);
-  - Approve & send, Decline, Take over, and "Tell Claude what to do instead" (redraft);
+  - Approve & send, Decline, Take over, and "Tell Claude what to do instead" (redraft; round 2 replaced it with the request view's Edit);
   - a link to edit what the org shares with that organization.
 - **Properties rail.**
 - **"What our representative saw" drawer:** the parts of the frozen prompt, the notices sent since, and the released answers.
@@ -333,7 +333,7 @@ The three-pane inbox per UI_REFERENCE §7:
 
 - A Playwright smoke test of the suggested request on `ScriptedModel` against the containerized app.
 - Vitest for the dispatcher-driven pieces (cards update live, badges, act-as reset).
-- Screenshots of the main screens saved to `docs/screenshots/`. The `final-*` set walks the suggested story after the unstructured rework; shots of removed UI are gone.
+- Screenshots of the main screens saved to `docs/screenshots/`. The `final-*` set walks the suggested story after the unstructured rework; shots of removed UI are gone. Round 2 deleted the `final-*` request-view shots; the request view and its cards are now `r2-request-*` and `r2-cards-*`, and the chat's outreach card `r2-outreach-*`.
 
 ## Order of work
 

@@ -15,6 +15,8 @@ from hypothesis import strategies as st
 from pydantic import JsonValue
 
 from harmony.agents.runtime import (
+    BARE_TEXT_NOT_SENT,
+    EMPTY_NUDGE,
     INTERRUPTED,
     NOT_RUN,
     NOT_RUN_YET,
@@ -31,8 +33,14 @@ from harmony.agents.runtime import (
     tool_calls,
     tool_result_block,
 )
-from harmony.agents.transcript import ConversationTranscript, TranscriptConflict, WireMessage
-from harmony.llm import ModelRequest
+from harmony.agents.transcript import (
+    ConversationTranscript,
+    TranscriptConflict,
+    TranscriptRef,
+    WireMessage,
+)
+from harmony.llm import ModelRequest, StreamEventCallback
+from harmony.llm.checkpoint import CheckpointedCall
 from harmony.llm.contract import check_requests
 from harmony.llm.scripted import ScriptedBlock, ScriptedModel, ThinkingBlock
 from harmony.llm.wire import JsonObject, canonical_json
@@ -97,15 +105,6 @@ class SendsWithoutReview(Executor):
         return execution
 
 
-class NothingToAnswer(Executor):
-    """A representative executor for a turn opened with nothing new: bare text is the
-    model's own (`RepToolScope.bare_text_sends` false)."""
-
-    async def text_reply(self, text: str, *, step_idx: int) -> ToolExecution | None:
-        self.replies.append((text, step_idx))
-        return None
-
-
 # --- One turn ------------------------------------------------------------------------
 
 
@@ -151,9 +150,7 @@ async def test_a_turn_sends_several_messages_and_ends_when_the_model_stops() -> 
     assert (outcome.stop, outcome.performative, outcome.owed) == ("end_turn", None, None)
     assert [effect.kind for effect in outcome.effects] == ["message_sent", "message_sent"]
     assert executor.executed == [("send_message", 0), ("send_message", 1)]
-    # The closing text is the model's own: it follows the turn's own tool results, so
-    # it is never proposed as a reply nor shown live.
-    assert executor.replies == []
+    # The closing text is the model's own: it is never sent nor shown live.
     assert "".join(shown) == "Yes, we can run XRD.\n\nResults by Nov 6."
     stored = store.messages(ctx.transcript)
     assert roles(stored) == ["user", "assistant", "user", "assistant", "user", "assistant"]
@@ -185,9 +182,7 @@ async def test_text_alongside_consult_is_dropped() -> None:
     assert outcome.performative == "consult"
     assert outcome.owed == OwedResult(tool_use_id="toolu_c", content=None)
     assert isinstance(outcome.effects[0], ConsultOpened)
-    # The text never reaches the counterparty: no text reply, no send_message, and
-    # nothing shown live.
-    assert executor.replies == []
+    # The text never reaches the counterparty: no send_message, and nothing shown live.
     assert executor.executed == [("consult", 0)]
     assert shown == []
 
@@ -200,6 +195,7 @@ async def test_a_representative_streams_only_what_it_sends() -> None:
                     (1, 0): [say("Let me answer."), use("send_message", "toolu_s", text="Yes.")],
                     (1, 1): [say("Done.")],
                     (2, 0): [say("We can do Nov 4.")],
+                    (2, 1): [],
                 }
             ),
             chunk_chars=3,
@@ -215,20 +211,41 @@ async def test_a_representative_streams_only_what_it_sends() -> None:
         world_id=WORLD, turn=2, turn_id=turn_id(2), opening=[text_block("Thursday?")]
     )
     await run_turn(second, Executor(), model, transcript=store, on_text=shown.append)
-    # A bare reply is shown once its response has ended without a tool call.
-    assert "".join(shown) == "We can do Nov 4."
+    # Plain text is the model's own, never sent: nothing is shown.
+    assert shown == []
 
 
-async def test_a_bare_text_reply_maps_to_send_message() -> None:
-    model = Checkpointed(ScriptedModel(cassette({(1, 0): [say("We can do Nov 4.")]})))
-    executor = Executor()
+async def test_a_plain_text_answer_is_never_sent_and_the_model_is_told_once() -> None:
+    """Section 5 bug 2: only `send_message` reaches the counterparty. Plain text answering
+    their message is kept, the model is told it wasn't sent, and it can send it now; a
+    retry replays the turn without telling it twice."""
+    model = Checkpointed(
+        ScriptedModel(
+            cassette(
+                {
+                    (1, 0): [say("We can do Nov 4.")],
+                    (1, 1): [use("send_message", "toolu_s", text="We can do Nov 4.")],
+                    (1, 2): [],
+                }
+            )
+        )
+    )
+    store, executor = MemoryTranscripts(), Executor()
     ctx = turn_context(world_id=WORLD, turn=1, turn_id=turn_id(1), opening=opening())
 
-    outcome = await run_turn(ctx, executor, model, transcript=MemoryTranscripts())
+    outcome = await run_turn(ctx, executor, model, transcript=store)
+    again = await run_turn(
+        ctx.model_copy(update={"attempt": 2}), Executor(), model, transcript=store
+    )
 
-    assert (outcome.stop, outcome.performative, outcome.owed) == ("end_turn", None, None)
+    assert (outcome.stop, outcome.next_step) == ("end_turn", 3)
     assert [effect.kind for effect in outcome.effects] == ["message_sent"]
-    assert executor.replies == [("We can do Nov 4.", 0)]
+    assert executor.executed == [("send_message", 1)]
+    assert (again.stop, again.next_step) == ("end_turn", 3)
+    stored = store.messages(ctx.transcript)
+    assert roles(stored) == ["user", "assistant", "user", "assistant", "user"]
+    assert stored[2].content() == [text_block(BARE_TEXT_NOT_SENT)]
+    assert check_requests(model.requests) == []
 
 
 async def test_internal_claude_ends_on_a_reply_with_its_text() -> None:
@@ -614,45 +631,61 @@ async def test_an_empty_end_turn_after_its_own_tool_results_ends_the_turn() -> N
     assert unpaired(model.requests) == []
 
 
-@pytest.mark.parametrize("role", ["internal", "representative"])
-async def test_an_empty_first_response_still_fails_and_keeps_the_turns_news(role: str) -> None:
-    """The first call carries the turn's input: an empty answer to it raises, and its
-    notices (the network's news for a woken internal turn) aren't consumed, so the next
-    attempt delivers them again."""
-    internal = role == "internal"
-    model = Checkpointed(
-        ScriptedModel(cassette({(1, 0): []}, role="internal" if internal else "representative"))
-    )
+NEWS = "Harmony: Northlake Characterization Core replied to your request."
+
+
+@pytest.mark.parametrize(
+    ("role", "first"),
+    [("internal", []), ("representative", [ThinkingBlock(type="thinking"), say("  ")])],
+)
+async def test_an_empty_first_response_is_asked_once_more_then_ends_quietly(
+    role: str, first: list[ScriptedBlock]
+) -> None:
+    """Section 5 bug 1: the first call carries the turn's input, so an answer that says
+    nothing (thinking alone included) is asked once more, with the turn's news. A second
+    empty answer is a quiet turn, not a failure: its notices aren't stored, so the next
+    turn delivers them again. A retry replays it to the same end."""
+    turn_role = "internal" if role == "internal" else "representative"
+    steps: dict[tuple[int, int], list[ScriptedBlock]] = {(1, 0): first, (1, 1): []}
+    # The nudged call sends the notices after the nudge, not after the input, so it
+    # can't extend the first call byte for byte: the real API only misses the cache.
+    model = Checkpointed(ScriptedModel(cassette(steps, role=turn_role), strict_contract=False))
     store = MemoryTranscripts()
     ctx = turn_context(
         world_id=WORLD,
         turn=1,
         turn_id=turn_id(1),
         opening=opening("No new message from the member."),
-        role="internal" if internal else "representative",
-        transcript=conversation() if internal else None,
-        notices="Harmony: Northlake Characterization Core replied to your request.",
+        role=turn_role,
+        transcript=conversation() if role == "internal" else None,
+        notices=NEWS,
     )
 
-    with pytest.raises(TurnIncomplete) as raised:
-        await run_turn(ctx, Executor(role=ctx.role), model, transcript=store)
+    outcome = await run_turn(ctx, Executor(role=ctx.role), model, transcript=store)
+    again = await run_turn(
+        ctx.model_copy(update={"attempt": 2}), Executor(role=ctx.role), model, transcript=store
+    )
 
-    assert raised.value.stop_reason == "end_turn"
-    assert roles(store.messages(ctx.transcript)) == ["user"]
+    assert (outcome.stop, outcome.next_step, outcome.effects) == ("end_turn", 2, [])
+    assert (again.stop, again.next_step, again.calls) == ("end_turn", 2, 1)
+    nudge = sent_messages(model, 1)[-2:]
+    assert canonical_json(nudge) == canonical_json(
+        [
+            {"role": "user", "content": [text_block(EMPTY_NUDGE)]},
+            {"role": "system", "content": [text_block(NEWS)]},
+        ]
+    )
+    # The input and the nudge are kept, without the notices and the thinking.
+    stored = store.messages(ctx.transcript)
+    assert roles(stored) == ["user", "user"]
+    assert stored[1].content() == [text_block(EMPTY_NUDGE)]
 
 
-@pytest.mark.parametrize("role", ["internal", "representative"])
-async def test_a_thinking_only_first_response_fails_as_an_empty_one(role: str) -> None:
-    """Thinking display is omitted unless the call streams it, so a response of thinking
-    alone says nothing: answering the turn's input with it would drop the input as an
-    empty answer would."""
-    internal = role == "internal"
+async def test_an_answer_after_the_nudge_carries_the_turns_news() -> None:
     model = Checkpointed(
         ScriptedModel(
-            cassette(
-                {(1, 0): [ThinkingBlock(type="thinking"), say("  ")]},
-                role="internal" if internal else "representative",
-            )
+            cassette({(1, 0): [], (1, 1): [say("Northlake replied.")]}, role="internal"),
+            strict_contract=False,
         )
     )
     store = MemoryTranscripts()
@@ -660,18 +693,16 @@ async def test_a_thinking_only_first_response_fails_as_an_empty_one(role: str) -
         world_id=WORLD,
         turn=1,
         turn_id=turn_id(1),
-        opening=opening(),
-        role="internal" if internal else "representative",
-        transcript=conversation() if internal else None,
-        notices=NOTICE,
+        opening=opening("No new message from the member."),
+        role="internal",
+        transcript=conversation(),
+        notices=NEWS,
     )
 
-    with pytest.raises(TurnIncomplete, match="has no text or tool call") as raised:
-        await run_turn(ctx, Executor(role=ctx.role), model, transcript=store)
+    outcome = await run_turn(ctx, Executor(role="internal"), model, transcript=store)
 
-    assert raised.value.stop_reason == "end_turn"
-    # The input is kept, without the notices and the thinking.
-    assert roles(store.messages(ctx.transcript)) == ["user"]
+    assert (outcome.stop, outcome.final_text) == ("end_turn", "Northlake replied.")
+    assert roles(store.messages(ctx.transcript)) == ["user", "user", "system", "assistant"]
 
 
 async def test_a_thinking_only_answer_to_an_opening_that_asks_nothing_ends_the_turn() -> None:
@@ -682,9 +713,9 @@ async def test_a_thinking_only_answer_to_an_opening_that_asks_nothing_ends_the_t
         turn=1,
         turn_id=turn_id(1),
         opening=opening("No new message from Henderson Lab since your last turn."),
-    ).model_copy(update={"quiet_opening": True, "bare_text_sends": False})
+    ).model_copy(update={"quiet_opening": True})
 
-    outcome = await run_turn(ctx, NothingToAnswer(), model, transcript=store)
+    outcome = await run_turn(ctx, Executor(), model, transcript=store)
 
     assert (outcome.stop, outcome.effects, outcome.final_text) == ("end_turn", [], None)
 
@@ -701,9 +732,9 @@ async def test_an_empty_first_response_to_an_opening_that_asks_nothing_ends_the_
         turn_id=turn_id(1),
         opening=opening("No new message from Henderson Lab since your last turn."),
         notices=NOTICE,
-    ).model_copy(update={"quiet_opening": True, "bare_text_sends": False})
+    ).model_copy(update={"quiet_opening": True})
 
-    outcome = await run_turn(ctx, NothingToAnswer(), model, transcript=store)
+    outcome = await run_turn(ctx, Executor(), model, transcript=store)
 
     assert (outcome.stop, outcome.next_step, outcome.effects) == ("end_turn", 1, [])
     assert roles(store.messages(ctx.transcript)) == ["user"]
@@ -729,20 +760,20 @@ async def test_an_empty_response_cut_short_after_a_tool_step_still_fails() -> No
 
 
 async def test_bare_text_after_nothing_new_stays_private_and_never_streams() -> None:
-    """3.13 E3: a turn opened with nothing owed and nothing new may not send bare text;
-    the text stays in the transcript and nothing reaches the counterparty live."""
+    """3.13 E3: in a turn opened with nothing owed and nothing new, plain text ends the
+    turn; it stays in the transcript and nothing reaches the counterparty live."""
     model = Checkpointed(
         ScriptedModel(cassette({(1, 0): [say("Still waiting on Henderson.")]}), chunk_chars=4)
     )
-    store, executor, shown = MemoryTranscripts(), NothingToAnswer(), list[str]()
+    store, executor, shown = MemoryTranscripts(), Executor(), list[str]()
     ctx = turn_context(
         world_id=WORLD, turn=1, turn_id=turn_id(1), opening=opening("Nothing new.")
-    ).model_copy(update={"bare_text_sends": False})
+    ).model_copy(update={"quiet_opening": True})
 
     outcome = await run_turn(ctx, executor, model, transcript=store, on_text=shown.append)
 
     assert (outcome.stop, outcome.effects) == ("end_turn", [])
-    assert executor.replies == [("Still waiting on Henderson.", 0)]
+    assert executor.executed == []
     assert shown == []
     assert store.messages(ctx.transcript)[-1].content() == [
         say("Still waiting on Henderson.").model_dump()
@@ -783,7 +814,6 @@ async def test_text_after_the_turns_own_tool_results_is_never_sent_or_shown() ->
 
     assert (outcome.stop, outcome.effects) == ("end_turn", [])
     assert outcome.final_text == "Understood, I'll wait for their reply."
-    assert executor.replies == []
     assert shown == []
 
 
@@ -907,6 +937,73 @@ async def test_a_retried_turn_reuses_its_calls_and_never_duplicates() -> None:
         "user",
         "assistant",
     ]
+
+
+class Watching(Checkpointed):
+    """Records the roles stored in `ref` when each model call is made."""
+
+    def __init__(
+        self,
+        model: ScriptedModel,
+        store: MemoryTranscripts,
+        ref: TranscriptRef,
+        *,
+        fail_once: Sequence[tuple[UUID, int]] = (),
+    ) -> None:
+        super().__init__(model, fail_once=fail_once)
+        self.store, self.ref = store, ref
+        self.seen: list[list[str]] = []
+
+    async def call(
+        self, request: ModelRequest, *, on_stream_event: StreamEventCallback | None = None
+    ) -> CheckpointedCall:
+        self.seen.append(roles(self.store.messages(self.ref)))
+        return await super().call(request, on_stream_event=on_stream_event)
+
+
+async def test_tool_results_are_stored_before_the_next_call_and_only_once() -> None:
+    """A chat shows its tools done as soon as they finish, not once Claude's next
+    response is stored (FEEDBACK_R2_PLAN decision 5); a retry sends the stored results."""
+    chat = conversation()
+    ctx = turn_context(
+        world_id=WORLD,
+        turn=1,
+        turn_id=turn_id(1),
+        opening=opening("Find an XRD lab and a holder."),
+        role="internal",
+        transcript=chat,
+    )
+    steps = {
+        (1, 0): [use("search_network", "toolu_s0"), use("search_network", "toolu_s1")],
+        (1, 1): [say("Two labs fit.")],
+    }
+    store, executor = MemoryTranscripts(), Executor(role="internal")
+    model = Watching(
+        ScriptedModel(cassette(steps, role="internal")),
+        store,
+        chat,
+        fail_once=[(ctx.turn_id, 1)],
+    )
+
+    with pytest.raises(RuntimeError):
+        await run_turn(ctx, executor, model, transcript=store)
+    assert model.seen == [[], ["user", "assistant", "user"]]
+    assert store.messages(chat)[-1].content() == [
+        tool_result_block("toolu_s0", "search_network ok"),
+        tool_result_block("toolu_s1", "search_network ok"),
+    ]
+    appends = store.appends
+
+    outcome = await run_turn(
+        ctx.model_copy(update={"attempt": 2}), executor, model, transcript=store
+    )
+
+    assert outcome.final_text == "Two labs fit."
+    assert roles(store.messages(chat)) == ["user", "assistant", "user", "assistant"]
+    # The retry stored only the response.
+    assert store.appends == appends + 1
+    assert check_requests(model.requests) == []
+    assert unpaired(model.requests) == []
 
 
 class GuardOpensLater(Executor):
@@ -1079,8 +1176,9 @@ def test_echo_drops_blocks_before_the_last_fallback() -> None:
 
 # --- Property: any sequence of turns keeps the request contract ------------------------
 
-# How a representative's turn ends: a performative, a bare reply, a message followed by
-# text of its own, or a message followed by an empty response.
+# How a representative's turn ends: a performative, a bare reply (never sent; on the
+# first step the model is told so and stops), a message followed by text of its own, or
+# a message followed by an empty response.
 Ending = Literal["consult", "close", "reply", "send", "quiet"]
 # How a turn's ending step fails, if it does.
 Failure = Literal["none", "incomplete", "model_error", "tool_error"]
@@ -1131,6 +1229,8 @@ async def test_any_turn_sequence_keeps_the_request_contract(plan: list[Plan]) ->
         last: list[ScriptedBlock] = [say(f"Thinking aloud {turn}.")] if chatty else []
         if ending == "reply":
             last = [say(f"Reply {turn}.")]
+            if tools == 0:
+                steps[(turn, 1)] = []
         else:
             name, field = _ENDING_CALLS[ending]
             last.append(use(name, f"toolu_{turn}_end", **{field: f"Message {turn}"}))
@@ -1147,7 +1247,7 @@ async def test_any_turn_sequence_keeps_the_request_contract(plan: list[Plan]) ->
     store = MemoryTranscripts()
     owed: OwedResult | None = None
     ref = None
-    for turn, (notices, tools, ending, _, failure) in enumerate(turns, start=1):
+    for turn, (notices, _, ending, _, failure) in enumerate(turns, start=1):
         if owed is not None and owed.content is None:
             owed = owed.model_copy(update={"content": f"Answer {turn}"})
         ctx = turn_context(
@@ -1171,8 +1271,8 @@ async def test_any_turn_sequence_keeps_the_request_contract(plan: list[Plan]) ->
         outcome = await run_turn(ctx, executor, model, transcript=store)
         if ending in ("reply", "send", "quiet"):
             assert (outcome.stop, outcome.owed) == ("end_turn", None)
-            # A reply after the turn's own tool results answers them: it isn't sent.
-            sent = ending != "reply" or tools == 0
+            # Plain text is never sent.
+            sent = ending != "reply"
             assert [effect.kind for effect in outcome.effects] == ["message_sent"] * sent
         else:
             assert (outcome.stop, outcome.performative) == ("performative", ending)

@@ -24,6 +24,10 @@ Harmony is a tool that lives inside Claude, so the web client is a close clone o
 
 Density: 13–14px UI text, 16–17px assistant text, generous line height (1.6). Hover states are a light tint (`#EFEDE5`); the selected sidebar row has the same tint with rounded 8px corners.
 
+**Harmony's type scale** (round 2, decision 16d; `web/src/theme/tokens.css`): `text-ui-xs` 12px for meta and timestamps, `text-ui-sm` 13px for secondary lines and hints, `text-ui` 14px for UI text and buttons, `text-ui-title` 15px for card titles, `text-ui-md` 16px, and `text-prose` 16px for serif messages and drafts. The rebuilt surfaces (the request view, the cards, the chat's outreach card) use it; the repo-wide sweep comes later.
+
+**Harmony's colour rule** on the request view and the cards: black and white is what can reach the other org; amber is your team (a comment, its box while typing); blue is your own Claude (an Edit, "Tell Claude", what Claude rewrote). An edited field's ring is neutral, never blue.
+
 ## 2. App shell
 
 Ref: [home, Pro](https://mobbin.com/screens/d72b17b4-df91-4813-8e5d-a04d20041570), [home, Welcome](https://mobbin.com/screens/dc0671c0-a055-45bd-92dc-42cadf7c1934), [dark](https://mobbin.com/screens/66e2902a-c536-4bff-8d86-689b26dfd2ee), [collapsed sidebar](https://mobbin.com/screens/508e971b-a955-4b68-9d5f-63576b9e3166)
@@ -34,9 +38,10 @@ Ref: [home, Pro](https://mobbin.com/screens/d72b17b4-df91-4813-8e5d-a04d20041570
 - Group 2: **Chats**, **Projects**, **Artifacts**, **Code**. Harmony adds **Requests** here, with a count badge, and **Network** (see §7, §8).
 - "Starred" and "Recents" section labels (muted, 12px) with conversation titles truncated with an ellipsis; a hover shows a `…` menu.
 - **Harmony** lists requests the way Claude lists recent chats: in the expanded sidebar, above Recents and in the same scroll area, two more sections in the same label style:
-  - **Needs you:** every item waiting on the viewer. Two lines per row: a warning dot and the title, then the counterparty in muted text; an unread dot on the right. A requester-side question opens its chat.
+  - **Needs you:** every item waiting on the viewer. Two lines per row: the title, then the counterparty in muted text. The section already says it needs you, so the row's one dot, on the right, means unread. A requester-side question opens its chat.
   - **Recent requests:** the viewer's other request threads, newest activity first, at most 10, then an "All requests" row that opens `/requests`. One line per row, the title; the counterparty is in the tooltip. Rows always open the request view.
   - The collapsed rail keeps only the Requests badge.
+- **Width:** Harmony is desktop only, down to about 900px; there are no phone layouts. Below 900px the sidebar is the rail whatever the stored choice, and opening it lays it over the page until a link, the scrim or Escape closes it.
 - Bottom: avatar circle (initials), name, plan line ("Pro plan" → for us, the org name, e.g. "Henderson Lab"), a download icon, and an up/down chevron that opens the account menu.
 
 **Top bar** (inside a chat): the chat title with a chevron dropdown on the left, **Share** button on the right ([chat](https://mobbin.com/screens/c7ef4781-6ed2-4ac8-a41c-fe50a1271628)). On the home screen, only a small icon at top right.
@@ -61,7 +66,7 @@ Ref: [tool use + question card](https://mobbin.com/screens/9f5be565-9c27-40d3-9c
 - **User message:** right-aligned pill, `--bg-user-bubble`, sans, max ~70% width.
 - **Assistant message:** no bubble, serif body, markdown (bold, bullet lists, headings). Under it: icon row (copy, thumbs up, thumbs down, retry), visible on hover.
 - **Tool activity line:** muted one-liner above the answer, e.g. "Used Slack integration, loaded tools ›" or "Ascertained connection status and sought clarification ›". Click to expand into the tool calls.
-  - **Harmony:** "Searched the Harmony network · 14 organizations ›", "Checked request status ›".
+  - **Harmony:** one step reads as its label and outcome after "·" ("Searched the Harmony network · 2 possible fits of 14 ›"); several name what was searched ("Searched the network for 2 needs and your records ›"), with a repeated step named once with its count. Expanded, each step is its label and outcome, with what it searched for (the need, or the query) on a second, smaller line.
 - **Tool result card:** bordered box with an icon, title and right-aligned meta. Example: "Connector search · 10 connectors", then a body line listing the connectors.
   - **Harmony:** a **Harmony Network Request card** that shows the recipients, each one's status (Messaged / Replied / Needs human at Northlake / Closed) with the latest line or, once closed, our side's summary, and an "Open in Requests" link. It updates live from SSE.
 - **Streaming indicator:** the orange spark alone on a line (animated).
@@ -70,14 +75,15 @@ Ref: [tool use + question card](https://mobbin.com/screens/9f5be565-9c27-40d3-9c
   - numbered option rows (rounded, hover tint, → on the focused row);
   - a final "Something else" free-text row with a **Skip** button;
   - a keyboard hint footer ("↑↓ to navigate · Enter to select · Esc to skip").
-  - **Harmony uses this exact pattern for the `send_network_request` approval:**
-    - the card's heading reads "Harmony Network Request" (the same heading on the status card and the auto card, so the region's name never changes), and the request's own title is the body's first line;
-    - title "Send this request to 2 organizations?";
-    - the brief as free text, and the recipients with their screening fit and reason ("Screened 34 orgs: 3 strong, 4 possible");
-    - options "Send", "Send to Northlake only", "Edit brief…";
-    - typing in the "Something else" row (or the composer) counts as rejecting with feedback, as in Claude Code;
-    - long text (the brief, the recipient names, each recipient's ask) is clamped with "View more" / "View less", never an inner scroll.
-  - **The auto card** (a chat set to send without review): the same "Harmony Network Request" heading, no buttons, and one line by status: "Sending…", "Sent without review", or "Not sent: {reason}". The request status card follows as usual.
+  - **Harmony doesn't use this pattern for the `send_network_request` approval** (round 2, decision 8; `docs/mockups/round2/outreach.html`). The approval is an **inline card** at the end of the chat: the request view's decision card in the chat's words.
+    - **Head:** "Harmony Network Request" (the same heading on the status card and the auto card, so the region's name never changes), a "Waiting for you" pill and a fold chevron; then the request's own title, "To Northlake and Ridgeline", and how they were chosen ("Claude screened 14 organizations and picked 2").
+    - **Brief** ("· Claude works from this in every conversation"), then **Who gets it** ("Untick to leave one out"): each recipient with a tick, its **Subject**, read-only ("Northlake sees this as written"), and its **Ask** ("· Claude works from this with Northlake only").
+    - The brief and each ask are edited where they stand: a click puts the caret in the text, which grows with it and never clamps or scrolls inside. A changed part reads "edited by you" with **Undo my edits**; a part Claude rewrote reads "rewritten by Claude ‹ 2 of 2 ›".
+    - **Foot:** **Decline** on the left, **Approve and send** on the right, and under them what approving does ("Starts a conversation with Northlake and Ridgeline · ⌘↵", with ", with your edits" when changed). ⌘↵ approves only with focus in the card. **Decline** opens a small step, "Don't send this request", with an optional reason captioned "Only Claude in this chat sees this. No organization hears about it."
+    - While live turns are stopped, the budget strip sits on the card ("Nothing goes out until the budget is back").
+    - While the card is out of view, a **Review** strip above the composer names it ("Send this request to 2 organizations?") and scrolls to it. The composer's placeholder reads "What should Claude do differently?": a message typed there turns the card down: the card folds to an "Earlier version" row, the message shows as the member's, and Claude reads it as feedback.
+    - **Once decided** it folds to one line: "Sent" with "Sent to Northlake and Ridgeline · 9:12 AM" ("…Ridgeline, with your edits · 9:12 AM" when the member changed the wording) and "Show what was sent", or "Declined" with "Not sent" and the member's reason. A card a message turned down, or a newer draft replaced, is one quiet row: "Earlier version of this request · not sent · Show".
+  - **The auto card** (a chat set to send without review): the same "Harmony Network Request" heading, no buttons, and a pill by status: "Sending…", "Sent without review", or "Not sent" with the reason. The request status card follows as usual.
 - **Inline question card** (Harmony): when our representative consults and the question is routed to this member, a card appears in the origin chat with the question, the organization it came from, and an answer box; once resolved, it shows the answer. For Alex, that's Ridgeline asking which seal material the holder needs. Answering releases the answer to that one thread.
 - There are no compare-offers or accept cards. Prices and terms arrive as messages, and internal Claude summarizes them in prose.
 - **Notify banner:** "Want to be notified when Claude responds? [Notify] ×" in a tinted strip above the composer. Reuse it for "Responses from the network will appear here as they arrive."
@@ -105,9 +111,9 @@ Ref: [General](https://mobbin.com/screens/8fa0bf04-4ef2-4478-96f7-0db85c19abfd),
 - **Settings:**
   - serif "Settings" title;
   - left sub-nav (General, Account, Privacy, Billing, Usage, Capabilities, Connectors, Claude Code, Claude in Chrome Beta) with a tinted selected row;
-  - the content column uses 15px bold section headings, two-column inputs with rounded borders, a select, a textarea, blue toggles, a hairline divider between sections, and Cancel plus a black "Save changes".
+  - the content column uses 15px bold section headings (Customize keeps them; the round-2 type scale doesn't apply there yet), two-column inputs with rounded borders, a select, a textarea, blue toggles, a hairline divider between sections, and Cancel plus a black "Save changes".
 - **Customize:**
-  - a second-level sidebar (← Customize, Skills, Connectors), a list column, and a detail pane;
+  - a second-level sidebar (← Customize, Skills, Connectors), a list column, and a detail pane. **Harmony** shows the second-level sidebar only from 1280px wide (round 2, decision 16c); below that the list column carries the way back ("←" before "Harmony");
   - the connector detail has a "Tool permissions" section: groups ("Interactive tools 1", "Read-only tools 11") with an "Always allow ⌄" dropdown, and per-tool rows with a 3-way icon segmented control (allow ✓ / ask ✋ / block ⊘).
 - **Harmony:**
   - Add a **Harmony** entry under Customize (org admins edit; other members view) with these sections, in the Settings content-column style:
@@ -136,25 +142,29 @@ Ref: [Linear inbox](https://mobbin.com/screens/8337813e-f0dd-4415-8a29-87c114b04
 Requests behave like chats: the sidebar lists them (§2), `/requests` is a full list page, and a request opens full width. There is no list column beside the open request and no always-on properties rail.
 
 - **List page (`/requests`):** like the Chats page. A serif page title, search, an All / Inbound / Outbound filter, and five sections: **Needs you**, **With your team** (an item open for a teammate, e.g. after a reassign), **Claude is handling**, **Shared with you**, **Done**. Each row shows the title, then "counterparty · status · age" in muted text, and an unread dot.
-- **Request view (`/requests/:threadId`):**
-  - **Header:** the short title, "with {counterparty}", a status pill ("Needs your answer", "Reply needs your review", "Needs Raj", "Claude is handling", "Checking with the team", "Waiting on {counterparty}", "Closed", "Expired", "Shared by Raj", "Stopped") and a **Details** button. On a phone the pill is only its dot, so the title fits.
-  - **Transcript:** chat-style, in a 768px column. Each message has an avatar, "Claude for Northlake · 8:38 AM" and a serif body. Both sides are agents, so neither gets a bubble, and both are left-aligned. A message over 12 lines is clamped with "View more".
-  - **Our side's rows:** a consult is one line, "Our Claude asked the team · only Henderson Lab sees this", with a lock and the full question behind the chevron; a release is one line, with the detail behind the chevron; a note shows in full, its author's avatar and "Raj Patel · Internal note · 7:42 AM" over the body in a dashed box; while a side is writing, its avatar and "Claude for Ridgeline is writing…", or our side's streamed text in the message style. A close is a "Closed" row; a stopped thread shows a banner such as "Stopped: the demo's live budget ran out."
-  - **Decision card,** inline after the last row, scrolling with it (never docked, no inner scroll):
-    1. an eyebrow: "Claude needs your answer before replying to Henderson Lab", or "Claude wants to send this to Henderson Lab", naming the assignee when it isn't the viewer ("Claude needs Raj's answer before replying to Henderson Lab");
+- **Request view (`/requests/:threadId`)** (round 2: `docs/mockups/round2/composer.html`, `docs/design/EDIT.md` §8.3, `docs/design/REOPEN.md` §8):
+  - **Header:** the short title, "with {counterparty}", a status pill and a **Details** button. The pill is one of "Needs your answer", "Reply needs your review", "Waiting on Raj" (an item for a teammate), "Claude is handling", "Checking with the team", "Waiting on {counterparty}", "Shared by Raj" and "Closed". However the conversation ended it reads "Closed"; there is no "Expired" or "Stopped". The pill keeps its width: "with {counterparty}" gives way first, then the title truncates (decision 16b).
+  - **Transcript:** chat-style, in a 768px column. Each message has an avatar, "Claude for Northlake · 8:38 AM" and a serif body, in full, with no clamp. Both sides are agents, so neither gets a bubble, and both are left-aligned. A message a person approved or wrote says so ("Approved by Helen"). A close is a centred divider, "Claude for Northlake closed the conversation · 8:40 AM".
+  - **Our side's rows** (only our org sees them; each says "only Northlake sees this"):
+    - a **comment**, in amber: "Raj Patel · comment · 7:42 AM" over the body, with its @mentions highlighted. No Claude reads it;
+    - an **Edit**, in blue: "Raj told Claude what to do differently", the instruction quoted, then how it went (Claude rewriting, the new draft, "See guidance", or why it failed with "Try again");
+    - a **decision**: "Helen approved the answer", "Helen declined Claude's message" with the reason quoted and "Claude may pass this reason on to Henderson Lab.", or "Claude answered without a teammate";
+    - a **Closed row** per run that ended: "Closed · Oct 29 · {why}" ("both sides went quiet", "Northlake closed it", "Claude closed it", "nothing was sent", or why it was stopped), with our side's summary of that run under it ("Claude for Northlake's summary. Only Northlake sees it."). The latest carries **Reopen**, or a line saying why it can't be reopened, or why Reopen waits ("Claude is still wrapping up this conversation.", or the budget line). Reopen opens a small blue prompt in its place, "What should Claude pick up?", captioned "Claude writes the next message, following your usual review settings. Only Northlake sees what you typed.", with Cancel and **Reopen**;
+    - a **reopen row**: "Raj is reopening the conversation", then "reopened" or "tried to reopen" with Try again, quoting what was typed; the counterparty's reads "Henderson Lab reopened the conversation";
+    - the **last row** says whose move it is, steadily: "Waiting for Henderson Lab to reply" from the moment our message lands until theirs does, whatever their Claude is doing (decision 2); "Waiting on Raj" while a teammate's item is open; "Checking Northlake's records…" while our answerer works; or our Claude's streamed text in the message style while it writes. The other side never shows as writing, and nor does ours once the conversation has ended (its last turn only writes our summary).
+  - **Decision card,** inline after the last row, scrolling with it (never docked, no inner scroll; its foot sticks while the card is taller than the view):
+    1. an eyebrow: "Claude needs your answer before replying to Henderson Lab", or "Claude wants to send this to Henderson Lab", naming the assignee when it isn't the viewer ("Claude needs Raj's answer before replying to Henderson Lab", "… · Raj reviews"), with **Reassign** on the right;
     2. a title: the one-line question, or "Send this reply to Henderson Lab?";
-    3. **Why it came to you:** why a person is needed ("Reserve slots aren't in what you share"), then "Routed to you: you run instrument scheduling" with **Reassign**, or "Sent to you as Northlake's default assignee";
-    4. **Draft reply:** serif text with a revision pager; Edit turns it into a textarea that grows to its content;
-    5. **Looked at:** "public calendar · price list · Raj's note", one line that expands to the tool-activity lines in the chat style ("Searched Northlake's records · reserve XRD ›");
-    6. "Claude's reasoning" (collapsed), and "Edit what you share with Henderson Lab".
-  - **One composer** at the bottom, in the chat composer's style:
-    - no open item: "Add an internal note… Use @ to bring in a teammate", with **Add note**;
-    - an open item, empty: **Decline**, **Edit**, **Approve and send** (⌘↵);
-    - an open item, with text: **Decline**, **Add note**, and **Redraft** for a question or **Send back to Claude** for a held message (text with an @mention offers only **Add note**);
-    - **Decline** sets any typed note aside and switches the composer to "The reason Claude can give Henderson Lab (optional)…", with Cancel (which restores the note) and **Decline**, captioned "Claude may pass this reason on to Henderson Lab · Esc to cancel";
-    - a caption: "Approving sends this reply to Henderson Lab only · ⌘↵ to approve" ("Edited · " in front while the draft is edited, and no "· ⌘↵ to approve" while text is typed), "Approving answers for Raj · sends this reply to Henderson Lab only" when the viewer isn't the assignee, or "Only Northlake sees notes".
-  - **Details** (a right panel, closed by default and remembered per viewer; below 820px a sheet that always starts closed): Share, "What our representative saw", the properties (Status, Assignee, Counterparty, Expires) and the activity log ("Claude drafted a reply · 2m", "Helen released the answer · 1m").
-  - "with {counterparty}" in the header hides when the transcript column is narrower than 512px (beside an open Details panel, or on a phone). A Stopped banner replaces the Closed or Expired one.
+    3. a muted reason line when something more than Ask mode stopped it ("Reserve slots aren't in what you share");
+    4. **Draft reply** (or "Claude's message"): the whole draft in serif, edited where it stands by clicking the text ("Click the text to change the wording"). Its label reads "rewritten by Claude ‹ 2 of 2 ›" after an Edit, and "edited by you" with **Undo my edits** after a change. While an unsent Edit waits in the box, the draft is marked in blue ("Claude rewrites this when you tell it"); while Claude rewrites it, "Claude is rewriting…", dimmed and locked;
+    5. **Looked at:** one line ("public calendar · price list") that expands to one row per tool call;
+    6. "Edit what you share with Henderson Lab" (an admin) or "See what you share with Henderson Lab";
+    7. the foot: **Decline** on the left and **Approve and send** on the right, nothing else. Under them, what approving does ("Claude replies to Henderson Lab with this answer · ⌘↵", "Sends this message to Henderson Lab as shown · ⌘↵") and, on a held message, "Ask mode with Henderson Lab · Change" (opens Customize › Autonomy). ⌘↵ approves only with focus in the card. Approve waits while Claude rewrites, and both wait while the budget strip shows on the card. **Decline** opens a small step in the foot's place with a required reason: "Decline to answer", captioned "Claude tells Henderson Lab you can't answer, and may pass on your reason.", or "Decline this message", captioned "Claude won't send this message. It may write another, which comes back to you first. Henderson Lab may see your reason."
+  - **One box** at the bottom, in the chat composer's style, with a **Comment | Edit** switch in its bottom bar. It starts in Comment and goes back to it after each Edit, and Enter sends what's in it, never approving.
+    - **Comment:** "Comment for your team… Use @ to bring someone in", amber while typing, with **Add comment** and the caption "Only Northlake sees comments. Claude doesn't read them." An @mention shares the thread with that teammate; the mention menu lists the org's members.
+    - **Edit:** "What should Claude do differently?", blue, with **Tell Claude** and the caption "Claude rewrites the draft and follows this for the rest of the conversation. Only Northlake sees it." (or, with no draft waiting, "Claude follows this from its next message in this conversation."). Mentions are for comments. Edit is off on a closed conversation ("Reopen the conversation to tell Claude what to pick up"); an Edit typed but not sent when the conversation closes moves to the Reopen prompt, which holds it while Claude wraps up. Tell Claude is off while the budget stops live turns.
+  - **Details** (a right panel, closed by default and remembered per viewer; below 820px of view a sheet over the transcript that always starts closed): Share, "What our representative saw" (its prompt, the notices, "Guidance from your side" by version, and the released answers), **Guidance Claude follows** (the current guidance, "Version 2 · from Raj's edit · 9:14 AM", and "Claude reads this at its next turn" or "Claude has read this"; "See guidance" opens it), the properties (Status, Assignee, Counterparty, and Closes, Closed or Reopened) and the activity log ("Claude drafted an answer · 2m", "Raj added a comment · 1m").
+  - "with {counterparty}" in the header hides when the view is narrower than 512px (beside an open Details panel), and when the pill already names them ("Waiting on Henderson Lab").
 
 ## 8. Network view (Harmony surface)
 
@@ -172,11 +182,11 @@ A live lens over the current world, built with React Flow:
 - **Edges:** an edge appears when a thread opens and animates (moving dash) while a turn is in flight. The edge label carries the latest line, truncated ("Kalrez adds $85 to the holder").
 - **Side panel** (Cofounder), opened by clicking a node:
   - the org's name, kind and screening fit;
-  - threads with this org (status, latest line, who's waiting). A closed thread shows the closer's summary to the closer's own org and "Closed" to everyone else;
+  - threads with this org (status, latest line, who's waiting). A closed thread shows the viewer's own side's closing summary, else why it ended, naming the org that closed it ("Northlake closed it"); an ended edge's label is that summary, else "Closed: {why}", else "Closed", and a thread the viewer can't open has no label. There is no "Expired";
   - "Act as Helen" to jump into that org's inbox when it needs a human.
 - **Header strip:**
   - the request picker (which Harmony Network Request to show);
-  - counts ("3 orgs · 2 threads · 1 active · 1 closed");
+  - counts ("3 orgs · 2 threads · 1 active · 1 closed"), shown once the header is 640px wide; the picker's title gives way before them;
   - a world badge.
 
 ## 9. Modals, popups, toasts
@@ -196,7 +206,8 @@ Ref: [Export data modal](https://mobbin.com/screens/bbabc6b5-8534-45d8-bdca-a19c
   - Walkthrough (show suggested message, highlight suggested recipients);
   - Model and spend, read-only: which model each role runs on, and the session's live budget. Nothing here switches models.
 - **Passcode page** (before the app loads; served by the server, so it isn't a Claude screen): the canvas color, a serif "Harmony" heading, one password field, an "Open" button, and inline errors: "That passcode isn't right." / "Too many attempts. Try again in N minutes."
-- **Toast:** a small white pill at top right with an ⓘ icon, text and ×. Use it for "Northlake replied", "Switched to Dr. Helen Ward" and "Demo reset".
+- **Toast:** a small white pill at top right with an ⓘ icon, text and ×. Use it for "Northlake replied", "Switched to Dr. Helen Ward" and "Demo reset". When another tab switches account, this tab follows in place; if that dropped unsaved Customize edits here, the toast says so ("Your unsaved Customize changes were dropped when you switched to Raj Patel in another tab.").
+- **Not-found pages** (round 2, `docs/mockups/round2/switching.html`): a chat or request the acting member can't open says whose it is, with a demo-chrome **Switch to Alex** (one per org, to the first person there who can open it) that lands back on it as them: "This chat is Alex Chen's" ("Chats belong to the person who started them. You're acting as …"), or "Raj can't open this request" with who it's between and who at each org can open it. An id this world doesn't have reads "This chat isn't in this demo" ("It's from before a reset or an earlier visit. Nothing from that demo carries over."), with "Go to your chats" or "Go to your requests".
 
 ## 10. Out of scope (popup on click)
 

@@ -4,7 +4,7 @@
  * header's counts.
  */
 import type { BudgetState } from "../app/budget";
-import { stoppedLine } from "../chat/failureCopy";
+import { reasonLine } from "../requests/format";
 import { shortOrgName } from "./format";
 import type { NetworkEdge, NetworkNode, ParticipantStatus, ThreadState, WorldLens } from "./types";
 
@@ -47,27 +47,42 @@ export function edgeStyle(state: ThreadState): EdgeStyle {
   return EDGE[state];
 }
 
-const EXPIRED: StatusStyle = { label: "Expired", tone: "muted", pulse: false };
+/**
+ * Why an ended thread ended, naming the org that closed it (shortened) when `parties`
+ * (requester first) say who that was.
+ */
+function endedLine(edge: NetworkEdge, parties: readonly string[], budget: BudgetState): string | null {
+  const [requester, responder] = parties.length === 2 ? parties : [];
+  const closer = edge.closed_by === "requester" ? requester : edge.closed_by === "responder" ? responder : undefined;
+  // A stop always has its reason, even from a server that doesn't say how the run ended.
+  const endReason = edge.end_reason ?? (edge.stop_reason ? "stopped" : null);
+  return reasonLine(
+    { endReason, stopReason: edge.stop_reason ?? null },
+    closer === undefined ? null : shortOrgName(closer),
+    budget,
+  );
+}
 
 /**
- * What an ended thread says: the viewer's own side's closing summary, else why the
- * system stopped it (LIVE_DEMO_PLAN 3.5), read against the budget's state now. A
- * stopped thread has a summary only when the other side refused: ours is written in
- * the last turn that follows.
+ * What an ended thread says: the viewer's own side's closing summary, else why it ended
+ * (REOPEN.md §2.1), a stop read against the budget's state now. A stopped thread has a
+ * summary only when the other side refused: ours is written in the last turn that follows.
+ * `parties` as for `edgeLabel`.
  */
-export function closingLine(edge: NetworkEdge, budget: BudgetState): string | null {
-  return edge.close_summary ?? (edge.stop_reason ? stoppedLine(edge.stop_reason, budget) : null);
+export function closingLine(edge: NetworkEdge, parties: readonly string[], budget: BudgetState): string | null {
+  const line = edge.close_summary ?? endedLine(edge, parties, budget);
+  return line === null ? null : line.charAt(0).toUpperCase() + line.slice(1);
 }
 
 /**
  * What an edge says (UI_REFERENCE.md §8): the thread's latest line while it runs, and
- * once it ends the viewer's own side's closing summary, else "Closed" with why the
- * system stopped it, else just that it ended (`closingLine`). A thread the viewer can't open has no line,
- * so its color says it alone (null).
+ * once it ends the viewer's own side's closing summary, else "Closed: {why}", else just
+ * "Closed". A thread the viewer can't open has no line, so its color says it alone (null).
  *
- * The line names its sender ("Northlake Characterization Core: Nov 4 works."); the
- * edge has room for little, so a sender among `parties` (the edge's two orgs) is
- * shortened to "Northlake: Nov 4 works.".
+ * `parties` are the edge's two orgs' names, requester first, when the viewer knows
+ * both. The line names its sender ("Northlake Characterization Core: Nov 4 works."); the
+ * edge has room for little, so a sender among them is shortened to "Northlake: Nov 4
+ * works.", and so is the org that closed the thread.
  */
 export function edgeLabel(edge: NetworkEdge, parties: readonly string[], budget: BudgetState): string | null {
   if (!EDGE[edge.state].ended) {
@@ -76,14 +91,14 @@ export function edgeLabel(edge: NetworkEdge, parties: readonly string[], budget:
     return line === null || sender === undefined ? line : `${shortOrgName(sender)}${line.slice(sender.length)}`;
   }
   if (edge.close_summary !== null) return edge.close_summary;
-  if (edge.stop_reason) return `${PARTICIPANT.closed.label}: ${stoppedLine(edge.stop_reason, budget)}`;
-  return edge.state === "expired" ? EXPIRED.label : PARTICIPANT.closed.label;
+  const why = endedLine(edge, parties, budget);
+  return why === null ? PARTICIPANT.closed.label : `${PARTICIPANT.closed.label}: ${why}`;
 }
 
 /**
  * A thread's status in the participant vocabulary (REVISION_UNSTRUCTURED.md §9): its
  * recipient's, as the recipient's pill shows it. Without it (a recipient the viewer
- * isn't shown), the thread's own state stands in.
+ * isn't shown), the thread's own state stands in, and however it ended it reads Closed.
  */
 export function threadStatus(state: ThreadState, recipient: ParticipantStatus | null): StatusStyle {
   if (recipient !== null) return PARTICIPANT[recipient];
@@ -93,9 +108,8 @@ export function threadStatus(state: ThreadState, recipient: ParticipantStatus | 
     case "awaiting_principal":
       return PARTICIPANT.needs_human;
     case "closed":
-      return PARTICIPANT.closed;
     case "expired":
-      return EXPIRED;
+      return PARTICIPANT.closed;
   }
 }
 

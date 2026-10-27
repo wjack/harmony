@@ -11,19 +11,33 @@ import {
   NORTHLAKE_GO_AHEAD_ID,
   NORTHLAKE_THREAD_ID,
   OUTREACH_CARD_ID,
+  REDRAFT_CARD_ID,
+  REDRAFT_MESSAGE,
+  redraftBrief,
   REQUEST_ID,
   RIDGELINE_GO_AHEAD_ID,
   SEAL_QUESTION_ID,
+  SENT_REPLY,
   TURN,
 } from "../fixtures/chat";
 import { WORLD_ID } from "../fixtures/shell";
 import { summarize } from "./activity";
-import { briefGist, editedText, screenedLine } from "./brief";
+import { editedText, screenedLine } from "./brief";
 import { realCalendar } from "../demo/worldClock";
 import { formatSince } from "./format";
-import { committedSteps, pendingCard, settledMessages, toBlocks, type OptimisticMessage } from "./items";
+import { committedSteps, pendingCard, settledMessages, toBlocks, wasReplaced, type OptimisticMessage } from "./items";
 import { chatDeltaOf, concernsConversation, concernsRequest, watchedIds } from "./live";
-import { approveBody, hasEdits, initialDraft, outreachTitle } from "./outreachDraft";
+import {
+  approveBody,
+  BRIEF_PART,
+  hasClearedPart,
+  hasEdits,
+  initialDraft,
+  outreachTitle,
+  partVersions,
+  showVersion,
+  shownVersion,
+} from "./outreachDraft";
 import { outreachRecipients } from "./recipients";
 import { applyDelta, longestOverlap, visibleText, type CommittedStep } from "./stream";
 import type { CardRecipient, OutreachCardItem, ToolActivityItem, UserTextItem } from "./types";
@@ -38,6 +52,7 @@ describe("toBlocks", () => {
       "thinking_summary",
       "tool_activity",
       "tool_activity",
+      "tool_activity",
     ]);
   });
 
@@ -48,7 +63,6 @@ describe("toBlocks", () => {
       "activity",
       "assistant",
       "outreach",
-      "activity",
       "request",
       "assistant",
       "question",
@@ -57,6 +71,21 @@ describe("toBlocks", () => {
       "activity",
       "assistant",
     ]);
+  });
+
+  it("folds a draft a message replaced to an earlier version, under the message that asked for it", () => {
+    const items = conversationAt(initialState("drafted", { rejected: { with: "message", text: REDRAFT_MESSAGE } })).items;
+    const blocks = toBlocks(items);
+    expect(blocks.slice(3).map((block) => block.kind)).toEqual(["earlier", "user", "assistant", "outreach"]);
+    const message = blocks[4];
+    expect(message?.kind === "user" && message.item.text).toBe(REDRAFT_MESSAGE);
+  });
+
+  it("keeps a declined card as its own record, which nothing replaced", () => {
+    const declined = { with: "decline", text: null } as const;
+    const blocks = toBlocks(conversationAt(initialState("drafted", { rejected: declined })).items);
+    expect(blocks.at(-1)?.kind).toBe("outreach");
+    expect(blocks.some((block) => block.kind === "earlier")).toBe(false);
   });
 
   it("puts the reply actions on the last text before each member message", () => {
@@ -76,7 +105,12 @@ describe("pendingCard", () => {
 
   it("is null once the card is answered", () => {
     expect(pendingCard(conversationAt(initialState("sent")))).toBeNull();
-    expect(pendingCard(conversationAt({ ...initialState("drafted"), feedback: "Not Ridgeline" }))).toBeNull();
+    expect(pendingCard(conversationAt(initialState("drafted", { rejected: { with: "decline", text: "Not now" } })))).toBeNull();
+  });
+
+  it("finds Claude's redraft once a message replaced the first card", () => {
+    const detail = conversationAt(initialState("drafted", { rejected: { with: "message", text: REDRAFT_MESSAGE } }));
+    expect(pendingCard(detail)?.card_id).toBe(REDRAFT_CARD_ID);
   });
 
   it("never asks for review of a card the chat is sending without review", () => {
@@ -149,6 +183,45 @@ describe("the outreach card's ticks", () => {
   });
 });
 
+describe("a redraft", () => {
+  const items = conversationAt(initialState("drafted", { rejected: { with: "message", text: REDRAFT_MESSAGE } })).items;
+  const cards = items.filter((item): item is OutreachCardItem => item.type === "outreach_card");
+  const [first, redraft] = cards as [OutreachCardItem, OutreachCardItem];
+  const [northlake, , calder] = cardRecipients as [CardRecipient, CardRecipient, CardRecipient];
+
+  it("tells a card a message replaced from a declined one, by how it was rejected", () => {
+    expect(wasReplaced(first)).toBe(true);
+    expect(wasReplaced({ ...first, rejected_with: "decline" })).toBe(false);
+    expect(wasReplaced({ ...first, status: "superseded", rejected_with: null })).toBe(true);
+  });
+
+  it("keeps each part's wordings oldest first, counting a part Claude didn't change once", () => {
+    const versions = partVersions(items, redraft);
+    expect(versions.brief).toEqual([brief, redraftBrief]);
+    expect(versions.asks[northlake.org.id]).toHaveLength(2);
+    expect(versions.asks[calder.org.id]).toEqual([calder.ask]);
+    // The first card had no earlier draft.
+    expect(partVersions(items, first).brief).toEqual([brief]);
+  });
+
+  it("pages a part to an earlier wording, which then goes as the member's edit", () => {
+    const versions = partVersions(items, redraft);
+    const paged = showVersion(initialDraft(redraft), versions, BRIEF_PART, 0);
+    expect(shownVersion(versions.brief, paged, BRIEF_PART)).toEqual({ index: 0, text: brief });
+    expect(paged.brief).toBe(brief);
+    expect(approveBody(redraft, paged).brief).toBe(brief.trim());
+    expect(shownVersion(versions.brief, initialDraft(redraft), BRIEF_PART).index).toBe(1);
+  });
+
+  it("holds the send while the brief, or a ticked organization's ask, is cleared", () => {
+    expect(hasClearedPart(redraft, initialDraft(redraft))).toBe(false);
+    expect(hasClearedPart(redraft, { ...initialDraft(redraft), brief: " " })).toBe(true);
+    expect(hasClearedPart(redraft, { ...initialDraft(redraft), asks: { [northlake.org.id]: "" } })).toBe(true);
+    // Calder isn't ticked: its ask doesn't go out, so clearing it holds nothing.
+    expect(hasClearedPart(redraft, { ...initialDraft(redraft), asks: { [calder.org.id]: "" } })).toBe(false);
+  });
+});
+
 describe("settledMessages", () => {
   const items = conversationAt(initialState("drafted")).items;
   const first = items[0];
@@ -192,7 +265,7 @@ describe("settledMessages", () => {
   });
 
   describe("a message that answered a card", () => {
-    const rejected = conversationAt({ ...initialState("drafted"), feedback: "Leave Ridgeline out" }).items;
+    const rejected = conversationAt(initialState("drafted", { rejected: { with: "message", text: "Leave Ridgeline out" } })).items;
     const cardIndex = rejected.findIndex((item) => item.type === "outreach_card");
     const before = rejected[cardIndex - 1]?.id ?? null;
 
@@ -277,7 +350,7 @@ describe("streaming", () => {
   it("reads committed steps per turn", () => {
     const items = conversationAt(initialState("sent")).items;
     expect(committedSteps(items, TURN.send).map((committed) => committed.markdown)).toEqual([
-      expect.stringMatching(/^Sent to Northlake/),
+      SENT_REPLY,
     ]);
   });
 });
@@ -308,29 +381,40 @@ describe("staysPinned", () => {
 });
 
 describe("summarize", () => {
-  const tool = (label: string, status: ToolActivityItem["status"], detail: string | null = null): ToolActivityItem => ({
-    id: label,
+  const tool = (
+    label: string,
+    status: ToolActivityItem["status"],
+    { name = "search_network", detail = null, outcome = null }: { name?: string; detail?: string | null; outcome?: string | null } = {},
+  ): ToolActivityItem => ({
+    id: `${label}:${detail ?? ""}`,
     at: "2026-10-26T10:00:00Z",
     type: "tool_activity",
-    tool: "search_network",
+    tool: name,
     label,
     detail,
     status,
+    outcome,
     turn_id: "t",
   });
+  const need = (detail: string, outcome: string | null = null) =>
+    tool("Searched the Harmony network", "done", { detail, outcome });
+  const records = tool("Searched your organization's knowledge", "done", { name: "search_org_knowledge", detail: "budget" });
 
-  it("names the running step", () => {
-    expect(summarize([tool("Searched knowledge", "done"), tool("Searching the network", "running")])).toEqual({
-      text: "Searching the network",
+  it("names the running step by its running label", () => {
+    expect(summarize([records, tool("Searching the Harmony network…", "running")])).toEqual({
+      text: "Searching the Harmony network…",
       running: true,
       failed: false,
     });
   });
 
-  it("leads with what Claude did on the network once done, not its thinking", () => {
-    const items = conversationAt(initialState("drafted")).items.slice(1, 4) as Parameters<typeof summarize>[0];
+  it("names the searches by their needs, with the organization's records", () => {
+    const items = conversationAt(initialState("drafted")).items.slice(1, 5) as Parameters<typeof summarize>[0];
     expect(items.some((item) => item.type === "thinking_summary")).toBe(true);
-    expect(summarize(items).text).toBe("Searched Henderson Lab's knowledge, searched the Harmony network");
+    expect(summarize(items).text).toBe("Searched the network for 2 needs and your records");
+    expect(summarize([need("XRD"), need("XRD")]).text).toBe("Searched the network twice");
+    expect(summarize([need("XRD"), need("A holder"), need("XRD")]).text).toBe("Searched the network 3 times");
+    expect(summarize([need("XRD"), records]).text).toBe("Searched the network and your records");
   });
 
   it("says what it thought in a step without tools, unless the reply opens with the same words", () => {
@@ -342,24 +426,22 @@ describe("summarize", () => {
     ).toBe("Thought it through");
   });
 
-  it("shows one step with its detail, several joined", () => {
-    expect(summarize([tool("Searched the network", "done", "14 organizations")]).text).toBe(
-      "Searched the network · 14 organizations",
+  it("shows one step with its outcome, never its detail", () => {
+    expect(summarize([need("XRD on 12 powders", "1 strong, 2 possible of 14")]).text).toBe(
+      "Searched the Harmony network · 1 strong, 2 possible of 14",
     );
-    expect(
-      summarize([tool("Searched the network", "done"), tool("Sent the request", "done"), tool("Checked", "error")]),
-    ).toEqual({ text: "Searched the network, sent the request and 1 more step", running: false, failed: true });
+    expect(summarize([need("XRD on 12 powders")]).text).toBe("Searched the Harmony network");
   });
 
-  it("names a repeated step once, with how many times it ran", () => {
-    const search = tool("Searched the Harmony network", "done", "14 organizations");
-    expect(summarize([search, { ...search, id: "again", detail: "9 organizations" }]).text).toBe(
-      "Searched the Harmony network twice",
-    );
-    expect(
-      summarize([tool("Searched knowledge", "done"), search, search, search, tool("Checked", "done"), tool("Read", "done")])
-        .text,
-    ).toBe("Searched knowledge, searched the Harmony network 3 times and 2 more steps");
+  it("joins the searches with the other steps, a repeated one named once with its count", () => {
+    const checked = tool("Checked on the request", "done", { name: "get_request_status" });
+    const read = tool("Read a document", "error", { name: "read_document" });
+    expect(summarize([need("XRD"), need("A holder"), records, checked, checked, read])).toEqual({
+      text: "Searched the network for 2 needs and your records, checked on the request twice and 1 more step",
+      running: false,
+      failed: true,
+    });
+    expect(summarize([checked, checked, read]).text).toBe("Checked on the request twice, read a document");
   });
 });
 
@@ -368,12 +450,6 @@ describe("the brief", () => {
     expect(editedText(brief, brief)).toBeNull();
     expect(editedText(brief, `\n${brief}  \n`)).toBeNull();
     expect(editedText(brief, "   ")).toBeNull();
-  });
-
-  it("previews as one run of plain text", () => {
-    expect(briefGist("Title line\n\nNeeds **XRD** by `Nov 6`:\n- one\n2. two\n")).toBe(
-      "Title line. Needs XRD by Nov 6: one. two.",
-    );
   });
 
   it("sends the member's version, trimmed", () => {

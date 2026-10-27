@@ -51,7 +51,7 @@ EXPECTED: dict[str, frozenset[str]] = {
             "instructions",
             "member_profiles",
             "routing_prompt",
-            "notes",
+            "guidance",
             "review",
             "request",
             "thread_quoted",
@@ -59,7 +59,33 @@ EXPECTED: dict[str, frozenset[str]] = {
             "question",
         }
     ),
-    "consult_redraft": frozenset({"org_name", "why", "draft", "instruction"}),
+    "consult_redraft": frozenset(
+        {"org_name", "member_first", "why", "draft_heading", "draft", "instruction"}
+    ),
+    "steer_guidance": frozenset(
+        {
+            "org_name",
+            "counterparty_name",
+            "side_line",
+            "member_first",
+            "guidance",
+            "instruction",
+            "waiting",
+            "reopen",
+        }
+    ),
+    "held_rewrite": frozenset(
+        {
+            "org_name",
+            "counterparty_name",
+            "side_line",
+            "member_first",
+            "thread_quoted",
+            "guidance",
+            "message",
+            "instruction",
+        }
+    ),
     "sharing_check": frozenset({"org_name", "counterparty_name", "sharing", "question", "answer"}),
     "screener": frozenset({"need", "org_slug", "summary", "review_stats"}),
 }
@@ -157,13 +183,24 @@ def test_internal_claude_writes_one_brief_and_an_ask_per_organization() -> None:
     assert "give every limit per organization, in its ask, never as a combined figure" in text
 
 
+def test_internal_claude_has_nothing_to_check_right_after_a_send() -> None:
+    """Decision 7: the chat hears when something needs the member and when every
+    conversation has ended, so Claude neither checks nor promises to check back."""
+    text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
+    assert (
+        "Right after a request goes out there's nothing to check, and no need to promise "
+        "to check back: you're told here when something needs x and when every "
+        "conversation has ended." in text
+    )
+
+
 def test_internal_claude_knows_either_send_mode_from_the_same_prompt() -> None:
     """Mode-neutral (3.10): the prompt's bytes never depend on the chat's setting."""
     text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
     assert "Usually x approves first" in text
     assert "In a chat set to send without review it goes out at once" in text
-    assert "The result says which." in text
-    assert "Send one request per call." in text
+    assert "The result says which, and what x changed." in text
+    assert "Send one request per call: one need is one request" in text
 
 
 def test_the_representative_sends_freely_and_consults_for_facts() -> None:
@@ -174,25 +211,40 @@ def test_the_representative_sends_freely_and_consults_for_facts() -> None:
 
 
 def test_the_representative_waits_by_ending_its_turn_never_by_closing() -> None:
-    """3.13 E1, E3: `close` is for good, and a message is read exactly as written."""
+    """3.13 E1, E3: `close` ends the conversation, and a message is read exactly as
+    written. Not "for good": a member can reopen it (decision 15)."""
     text = render("representative", dict.fromkeys(placeholders("representative"), "x"))
     assert "You never need `close` to wait." in text
-    assert "ends the conversation for good" in text
+    assert "`close` ends the conversation for both sides" in text
+    assert "for good" not in text
     assert "They read the text exactly as written" in text
     assert "never send notes about the conversation" in text
 
 
-def test_the_representative_knows_bare_text_is_only_a_fallback() -> None:
-    """Sent only before any message, and only when the turn brought something to
-    answer (`TurnContext.bare_text_sends`)."""
+def test_the_representative_consults_before_it_replies() -> None:
+    """Decision 1: once a turn has sent, the move is the counterparty's, so a consult
+    waits for the next turn (and `consult` refuses one after a send)."""
+    values = dict.fromkeys(placeholders("representative"), "x")
+    values["counterparty_name"] = "Northlake"
+    text = render("representative", values)
+    assert (
+        "`consult` asks your own side. Consult before you reply: once you've sent a message "
+        "this turn, it's Northlake's move, so ask at the start of your next turn, after "
+        "theirs." in text
+    )
+    requester = render("side_requester", dict.fromkeys(placeholders("side_requester"), "x"))
+    assert "consult before you reply, or at the start of your next turn" in requester
+    assert "Once you've sent a message this turn, it's their move." in requester
+    assert "report" not in requester
+
+
+def test_the_representative_knows_plain_text_is_never_sent() -> None:
+    """Section 5 bug 2: bare text is never sent (`runtime.BARE_TEXT_NOT_SENT`)."""
     values = dict.fromkeys(placeholders("representative"), "x")
     values["counterparty_name"] = "Henderson Lab"
     text = render("representative", values)
-    assert "Plain text is only a fallback" in text
-    assert (
-        "when you answer what the turn brought with plain text alone, before calling any "
-        "tool, that text is sent to Henderson Lab as your message" in text
-    )
+    assert "Only `send_message` reaches Henderson Lab" in text
+    assert "fallback" not in text
 
 
 def test_the_answerer_proposes_a_route_for_every_draft() -> None:
@@ -206,6 +258,14 @@ def test_the_answerer_proposes_a_route_for_every_draft() -> None:
     assert "with its own `route` and `short_question`" in redraft
 
 
+def test_no_claude_reads_comments() -> None:
+    """E3: the answerer's prompt has no notes section; comments are for teammates."""
+    text = template_path("consult").read_text()
+    assert "{notes}" not in text
+    assert "Internal notes" not in text
+    assert "an internal record)" in text
+
+
 def test_the_answerer_says_where_an_answer_beyond_the_description_comes_from() -> None:
     """In `rationale`, which the reviewer reads: `answer` may be released as written."""
     text = template_path("consult").read_text()
@@ -216,8 +276,9 @@ def test_the_answerer_says_where_an_answer_beyond_the_description_comes_from() -
 
 
 def test_the_answerer_asks_for_a_person_only_where_r4_6_says() -> None:
-    """Commitments, and records that don't answer: what may be shared is the sharing
-    check's to judge, so a draft touching it still reaches the check."""
+    """Commitments only: what may be shared is the sharing check's to judge, so a draft
+    touching it still reaches the check, and a gap in the records goes in the answer
+    (section 5 bug 3: Haiku asked for a person on every consult)."""
     text = template_path("consult").read_text()
     [rule] = [line for line in text.splitlines() if line.startswith("- `needs_human`")]
     for trigger in (
@@ -225,7 +286,7 @@ def test_the_answerer_asks_for_a_person_only_where_r4_6_says() -> None:
         "agreeing a price outside the published list",
         "waiving a fee",
         "booking a reserve slot",
-        "the records don't answer the question",
+        "A gap in the records isn't a decision",
     ):
         assert trigger in rule
     assert not [word for word in ("priority", "client", "exception") if word in rule]
@@ -262,3 +323,30 @@ def test_the_sharing_check_judges_each_orgs_own_description() -> None:
     text = template_path("sharing_check").read_text()
     for borrowed in ("Northlake", "reserve slot", "another client", "a discount"):
         assert borrowed not in text, borrowed
+
+
+def test_the_guidance_writer_never_sees_the_thread_or_what_the_org_shares() -> None:
+    """EDIT.md §3.3: it writes from the members' words alone."""
+    assert not placeholders("steer_guidance") & {
+        "rep_parts",
+        "thread_quoted",
+        "sharing",
+        "instructions",
+        "draft",
+        "message",
+    }
+
+
+def test_the_answerer_reads_guidance_that_never_widens_what_it_may_share() -> None:
+    text = render("consult", {key: f"<<{key}>>" for key in placeholders("consult")})
+    section = text[text.index("# What your teammates told the representative") :]
+    assert "<<guidance>>" in section
+    assert "never changes what" in section
+    assert "notes" not in placeholders("consult")
+
+
+def test_the_representative_prompt_describes_the_guidance_block() -> None:
+    text = render("representative", {key: f"<<{key}>>" for key in placeholders("representative")})
+    assert "`<guidance>` block that Harmony writes" in text
+    after = text[text.index("<<instructions>>") :]
+    assert "<guidance>" in after

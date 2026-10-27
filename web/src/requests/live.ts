@@ -4,8 +4,7 @@
  * The dispatcher caches each entity snapshot under `entity(type, id)`, but the inbox
  * and the thread view are composed server-side views (sections, drafts, what our
  * representative saw), so a relevant snapshot refetches them instead of patching them.
- * Token deltas drive the "is typing" row, and a failed redraft frees the panel waiting
- * on it; neither is cached.
+ * Token deltas drive our representative's "is typing" row, which isn't cached.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { use, useEffect, useState } from "react";
@@ -23,6 +22,8 @@ const THREAD_ENTITY_TYPES: ReadonlySet<string> = new Set([
   "escalation_draft",
   "internal_note",
   "network_request",
+  "steer",
+  "rep_guidance",
 ]);
 
 /** The thread an entity belongs to, when its snapshot says so. */
@@ -68,52 +69,27 @@ export function useRequestsLive(threadId: string | undefined): void {
   }, [dispatcher, queryClient, threadId]);
 }
 
-/**
- * The redraft revs of `escalationId` that the worker reported it wrote no draft for
- * (`escalation.redraft_failed`), so the panel stops waiting on them at once.
- */
-export function useFailedRedrafts(escalationId: string): ReadonlySet<number> {
-  const dispatcher = use(DispatcherContext);
-  const [failed, setFailed] = useState<{ escalationId: string; revs: ReadonlySet<number> }>({
-    escalationId,
-    revs: new Set(),
-  });
-
-  useEffect(() => {
-    if (dispatcher === null) return;
-    return dispatcher.onEnvelope(({ event }) => {
-      if (event.type !== "escalation.redraft_failed" || event.escalation_id !== escalationId) return;
-      setFailed((current) => ({
-        escalationId,
-        revs: new Set([...(current.escalationId === escalationId ? current.revs : []), event.draft_rev]),
-      }));
-    });
-  }, [dispatcher, escalationId]);
-
-  // Revs from a previous item mean nothing for this one.
-  return failed.escalationId === escalationId ? failed.revs : NONE;
-}
-
-const NONE: ReadonlySet<number> = new Set();
-
 const ENDED: ReadonlySet<unknown> = new Set(["closed", "expired"]);
+
+/** Snapshots that end our turn's writing: what it sent, or the team it went to ask. */
+const TURN_RESULTS: ReadonlySet<string> = new Set(["thread_message", "consult", "escalation"]);
 
 /**
  * Whether `envelope` ends the "is typing" row in `threadId`: the committed message
- * replaces the streamed text, and a thread that ended has no turn still running.
+ * replaces the streamed text, a consult or an item for the team means our Claude is
+ * waiting on us now, and a thread that ended has no turn still running.
  */
 export function endsTyping(envelope: EventEnvelope, threadId: string): boolean {
   const { event } = envelope;
   if (event.type !== "entity.snapshot") return false;
-  if (event.entity_type === "thread_message") return event.data.thread_id === threadId;
+  if (TURN_RESULTS.has(event.entity_type)) return event.data.thread_id === threadId;
   return event.entity_type === "thread" && event.entity_id === threadId && ENDED.has(event.data.state);
 }
 
 export interface Typing {
   threadId: string;
-  orgId: string;
   turnId: string;
-  /** Our own representative's streamed text; empty for the counterparty's (we see only that it types). */
+  /** Our representative's streamed text so far; empty until its first delta. */
   text: string;
 }
 
@@ -121,14 +97,23 @@ export interface Typing {
 // call; past this, the row is stale (the turn failed or moved on).
 const TYPING_TIMEOUT_MS = 20_000;
 
-/** Who is writing in `threadId` right now, from `stream.typing` and `stream.delta`. */
-export function useTyping(threadId: string | undefined): Typing | null {
+/**
+ * Our representative writing in `threadId` right now, from `stream.typing` and
+ * `stream.delta`. The counterparty's typing is ignored: while the move is theirs the
+ * view says so in one steady line, whatever their Claude is doing.
+ */
+export function useTyping(threadId: string | undefined, ourOrgId: string | undefined): Typing | null {
   const dispatcher = use(DispatcherContext);
   const [typing, setTyping] = useState<Typing | null>(null);
 
   useEffect(() => {
-    if (dispatcher === null || threadId === undefined) return;
+    if (dispatcher === null || threadId === undefined || ourOrgId === undefined) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // The worker flushes a turn's last delta, and may send a typing heartbeat, after the
+    // turn's message is committed, and the two travel apart; once the committed result
+    // is in, that turn's stream would only bring back a row repeating its tail.
+    let shown: string | null = null;
+    let ended: string | null = null;
     const clearLater = () => {
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -137,19 +122,20 @@ export function useTyping(threadId: string | undefined): Typing | null {
     };
 
     const offStream = dispatcher.onStream((event) => {
-      if (event.thread_id !== threadId) return;
+      if (event.thread_id !== threadId || event.org_id !== ourOrgId) return;
+      if (event.turn_id === ended) return;
+      shown = event.turn_id;
       switch (event.type) {
         case "stream.typing":
           setTyping((current) =>
             current?.turnId === event.turn_id
               ? current
-              : { threadId, orgId: event.org_id, turnId: event.turn_id, text: "" },
+              : { threadId, turnId: event.turn_id, text: "" },
           );
           break;
         case "stream.delta":
           setTyping((current) => ({
             threadId,
-            orgId: event.org_id,
             turnId: event.turn_id,
             text: current?.turnId === event.turn_id ? current.text + event.text : event.text,
           }));
@@ -161,7 +147,9 @@ export function useTyping(threadId: string | undefined): Typing | null {
       clearLater();
     });
     const offEnvelope = dispatcher.onEnvelope((envelope) => {
-      if (endsTyping(envelope, threadId)) setTyping(null);
+      if (!endsTyping(envelope, threadId)) return;
+      ended = shown;
+      setTyping(null);
     });
 
     return () => {
@@ -169,7 +157,7 @@ export function useTyping(threadId: string | undefined): Typing | null {
       offEnvelope();
       if (timer !== null) clearTimeout(timer);
     };
-  }, [dispatcher, threadId]);
+  }, [dispatcher, threadId, ourOrgId]);
 
   // State from a previous thread is stale the moment the thread changes.
   return typing?.threadId === threadId ? typing : null;

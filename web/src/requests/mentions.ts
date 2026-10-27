@@ -1,5 +1,5 @@
 /**
- * What an `@mention` in an internal note is, by the server's own rule (`parse_mentions`
+ * What an `@mention` in a comment is, by the server's own rule (`parse_mentions`
  * in `domain/notes.py`), so the composer, the transcript and the fixtures agree with
  * what actually shares a thread: a lowercase slug after an `@` that doesn't follow a
  * word character or another `@` (so an email address isn't one). Only a slug that names

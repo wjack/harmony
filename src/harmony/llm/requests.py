@@ -74,6 +74,9 @@ ROLE_PROFILES: Final[Mapping[tuple[ModelRole, Tier], RoleProfile]] = MappingProx
         ("representative", "background"): RoleProfile(HAIKU_5_5, "low"),
         ("answerer", "featured"): RoleProfile(OPUS_5_5, "medium"),
         ("answerer", "background"): RoleProfile(HAIKU_5_5, "medium"),
+        # Single no-tools calls the size of the answerer's (EDIT.md §7).
+        ("steer", "featured"): RoleProfile(OPUS_5_5, "medium"),
+        ("steer", "background"): RoleProfile(HAIKU_5_5, "medium"),
         ("sharing_check", "featured"): RoleProfile(HAIKU_5_5, "low"),
         ("sharing_check", "background"): RoleProfile(HAIKU_5_5, "low"),
         ("synthesizer", "featured"): RoleProfile(OPUS_5_5, "high"),

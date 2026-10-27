@@ -1,9 +1,10 @@
 /**
- * The one-line summary of a turn's tool use and thinking, Claude style: "Searched the
- * Harmony network · 14 organizations ›" for one step, "Searched the Harmony network
- * twice, checked request status ›" for several, a repeated step named once with its
- * count. The tools lead, since they are what Claude did on the network; a step with
- * none says what it thought, unless the reply after it opens with the same words.
+ * The one-line summary of a turn's tool use and thinking, Claude style: one step reads
+ * as its label and outcome ("Searched the Harmony network · 2 possible fits of 14 ›");
+ * several name what was searched ("Searched the network for 2 needs and your records")
+ * and then the other steps, a repeated one named once with its count. The tools lead,
+ * since they are what Claude did on the network; a step with none says what it
+ * thought, unless the reply after it opens with the same words.
  */
 import type { ActivityItem } from "./items";
 import type { ToolActivityItem } from "./types";
@@ -16,8 +17,11 @@ export interface ActivitySummary {
 
 const MAX_JOINED = 2;
 
+/** The searches the summary names together ("Searched the network … and your records"). */
+const SEARCHES: ReadonlySet<string> = new Set(["search_network", "search_org_knowledge"]);
+
 function toolLine(item: ToolActivityItem): string {
-  return item.detail === null || item.detail === "" ? item.label : `${item.label} · ${item.detail}`;
+  return item.outcome === null || item.outcome === "" ? item.label : `${item.label} · ${item.outcome}`;
 }
 
 interface Step {
@@ -51,6 +55,21 @@ function firstSentence(text: string): string {
   return (match?.[1] ?? line).replace(/\.$/, "");
 }
 
+/**
+ * "Searched the network for 2 needs and your records": the network searches, by what
+ * they looked for ("twice" when it was the same need again), with the organization's
+ * own records when Claude searched those too. Null without a network search.
+ */
+function searchPhrase(tools: readonly ToolActivityItem[]): string | null {
+  const network = tools.filter((tool) => tool.tool === "search_network");
+  if (network.length === 0) return null;
+  const needs = new Set(network.map((tool) => tool.detail?.trim() ?? ""));
+  const distinct = needs.size === network.length && !needs.has("");
+  const count = network.length > 1 && distinct ? ` for ${String(network.length)} needs` : times(network.length);
+  const records = tools.some((tool) => tool.tool === "search_org_knowledge") ? " and your records" : "";
+  return `Searched the network${count}${records}`;
+}
+
 /** `reply`: the text that follows the line, if any. */
 export function summarize(items: readonly ActivityItem[], reply: string | null = null): ActivitySummary {
   const tools = items.filter((item): item is ToolActivityItem => item.type === "tool_activity");
@@ -67,14 +86,19 @@ export function summarize(items: readonly ActivityItem[], reply: string | null =
   }
   if (rest.length === 0) return { text: toolLine(first), running: false, failed };
 
-  const grouped = steps(tools);
-  const shown = grouped
+  const search = searchPhrase(tools);
+  const others = search === null ? tools : tools.filter((tool) => !SEARCHES.has(tool.tool));
+  const phrases: Step[] = [
+    ...(search === null ? [] : [{ label: search, count: 1 }]),
+    ...steps(others).map((step) => ({ label: `${step.label}${times(step.count)}`, count: step.count })),
+  ];
+  const shown = phrases
     .slice(0, MAX_JOINED)
-    .map((step, index) => `${index === 0 ? step.label : lowerFirst(step.label)}${times(step.count)}`)
+    .map((phrase, index) => (index === 0 ? phrase.label : lowerFirst(phrase.label)))
     .join(", ");
-  const more = grouped.slice(MAX_JOINED).reduce((sum, step) => sum + step.count, 0);
+  const more = phrases.slice(MAX_JOINED).reduce((sum, phrase) => sum + phrase.count, 0);
   return {
-    text: more > 0 ? `${shown} and ${more} more ${more === 1 ? "step" : "steps"}` : shown,
+    text: more > 0 ? `${shown} and ${String(more)} more ${more === 1 ? "step" : "steps"}` : shown,
     running: false,
     failed,
   };

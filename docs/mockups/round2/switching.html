@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switching accounts</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400&display=swap">
+<style>
+  /* Tokens from web/src/theme/tokens.css, on the proposed type scale (sizing-proposal.css):
+     12, 13, 14, 15 medium, 16 serif. Static page: no scripts. */
+  :root {
+    --surface-0: #faf9f5; --surface-1: #f0eee6; --surface-2: #ffffff; --surface-sidebar: #f5f4ef;
+    --border: #e8e6dc; --border-strong: #d9d6ca;
+    --text: #141413; --text-secondary: #3d3d3a; --text-muted: #73726c; --text-faint: #a3a198;
+    --fill-accent: #d97757; --fill-control: #efede5; --fill-primary: #141413; --on-primary: #fff;
+    --demo-bg: #1f1e1d; --demo-border: #3d3c38; --demo-text: #e9e7df; --demo-muted: #9b998f;
+    --sans: Inter, system-ui, sans-serif; --serif: "Source Serif 4", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-1); color: var(--text); font: 14px/20px var(--sans); }
+  .page { max-width: 1120px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font: 500 16px/24px var(--sans); margin: 0 0 4px; }
+  .lede { color: var(--text-muted); margin: 0 0 24px; max-width: 760px; }
+
+  .state { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 24px; align-items: start; margin-bottom: 40px; }
+  @media (max-width: 1000px) { .state { grid-template-columns: minmax(0, 1fr); } }
+  .state > h3 { grid-column: 1 / -1; margin: 0 0 -12px; font: 500 14px/20px var(--sans); color: var(--text-secondary); }
+  .explain { color: var(--text-secondary); font-size: 13px; line-height: 18px; }
+  .explain h2 { font: 500 14px/20px var(--sans); margin: 0 0 6px; color: var(--text); }
+  .explain p { margin: 0 0 10px; }
+  .explain .was { color: var(--text-muted); border-top: 0.5px solid var(--border-strong); padding-top: 10px; }
+
+  /* App frame */
+  .app { border: 0.5px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-0); }
+  .demobar { background: var(--demo-bg); color: var(--demo-text); height: 32px; padding: 0 12px; display: flex; gap: 12px; align-items: center; font-size: 13px; }
+  .demobar .tag { border: 0.5px solid var(--demo-border); border-radius: 4px; padding: 0 5px; font-size: 11px; line-height: 16px; letter-spacing: .08em; color: var(--demo-muted); }
+  .demobar .muted { color: var(--demo-muted); }
+  .body { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 340px; }
+  @media (max-width: 640px) { .body { grid-template-columns: minmax(0, 1fr); } .side { display: none; } }
+
+  .side { border-right: 0.5px solid var(--border); background: var(--surface-sidebar); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .brand { font: 20px/28px var(--serif); padding: 0 8px 10px; }
+  .nav { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; color: var(--text-secondary); }
+  .nav i { font-size: 18px; color: var(--text-muted); }
+  .nav.on { background: var(--fill-control); color: var(--text); }
+  .group { padding: 16px 8px 4px; font-size: 12px; line-height: 16px; color: var(--text-muted); }
+  .item { padding: 6px 8px; border-radius: 8px; }
+  .item .t { display: flex; gap: 8px; align-items: center; }
+  .item .t span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .item .t b { width: 6px; height: 6px; border-radius: 3px; background: var(--fill-accent); flex: none; }
+  .item .o { font-size: 13px; line-height: 18px; color: var(--text-muted); }
+
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px 24px; text-align: center; }
+  .empty .ic { width: 40px; height: 40px; border-radius: 10px; background: var(--fill-control); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 20px; margin-bottom: 4px; }
+  .empty .title { font: 500 15px/22px var(--sans); }
+  .empty .why { color: var(--text-muted); max-width: 380px; }
+  .empty .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+  .empty .note { color: var(--text-faint); font-size: 12px; line-height: 16px; max-width: 380px; margin-top: 8px; }
+
+  .b { display: inline-flex; align-items: center; gap: 6px; font: 14px/20px var(--sans); height: 32px; padding: 0 12px; border-radius: 8px; border: 0.5px solid var(--border-strong); background: var(--surface-2); color: var(--text); white-space: nowrap; }
+  .b.demo { background: var(--demo-bg); color: var(--demo-text); border-color: var(--demo-border); }
+  .b i { font-size: 16px; }
+
+  .toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--fill-primary); color: var(--on-primary); border-radius: 10px; padding: 8px 12px; font-size: 13px; line-height: 18px; display: flex; gap: 8px; align-items: center; white-space: nowrap; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+  .main { position: relative; }
+  .list { padding: 20px 24px; }
+  .list h2 { font: 500 15px/22px var(--sans); margin: 0 0 12px; }
+  .row { display: flex; gap: 12px; align-items: baseline; padding: 10px 0; border-top: 0.5px solid var(--border); }
+  .row .t { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .o { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Switching accounts (revised)</h1>
+  <p class="lede">After a switch, every open tab moves to the same section for the new person, so you never land on someone else's chat. If you do reach an item the current person can't open (a pasted link, Back), the page says whose it is and offers to switch. Everyone in the demo is an admin now, so there's no view-only state to design.</p>
+
+  <!-- 1. The switch itself: the tab follows -->
+  <section class="state">
+    <h3>1 · Alex switches to Helen from his chat: the tab follows</h3>
+    <div class="app">
+      <div class="demobar"><span class="tag">DEMO</span><span><span class="muted">Acting as</span> Dr. Helen Ward <span class="muted">· Northlake</span></span></div>
+      <div class="body">
+        <div class="side">
+          <div class="brand">Claude</div>
+          <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+          <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+          <div class="nav on"><i class="ti ti-arrows-exchange"></i>Requests</div>
+          <div class="group">Needs you</div>
+          <div class="item"><div class="t"><span>XRD and SEM/EDS for 14 powders</span><b></b></div><div class="o">Henderson Lab</div></div>
+        </div>
+        <div class="main">
+          <div class="list">
+            <h2>Requests</h2>
+            <div class="row"><span class="t">XRD and SEM/EDS for 14 powders</span><span class="o">Henderson Lab · needs you</span></div>
+            <div class="row"><span class="t">Rush SEM slot enquiry</span><span class="o">Vantage Materials · waiting on you</span></div>
+          </div>
+          <div class="toast"><i class="ti ti-arrows-exchange"></i>Switched to Dr. Helen Ward · Northlake</div>
+        </div>
+      </div>
+    </div>
+    <aside class="explain">
+      <h2>Every tab follows</h2>
+      <p>Alex was on his own chat. After the switch, this tab goes to Helen's Requests, and so does every other open tab, instead of reloading in place on a page Helen can't see.</p>
+      <p><b>As built:</b> a tab on someone's chat lands on the home page (<code>/</code>), and a tab on a request lands on Requests; any other page stays where it is. Tabs follow in place, without a reload.</p>
+      <p>The Needs-you row has one unread dot, on the right, like Recents.</p>
+      <p class="was">Before: a second tab's reload could beat this tab's navigation, so the tab reloaded on Alex's chat as Helen and said "This chat isn't here". The row also had two near-identical dots.</p>
+    </aside>
+  </section>
+
+  <!-- 2. A chat that belongs to someone else in this world -->
+  <section class="state">
+    <h3>2 · Helen opens Alex's chat (a pasted link, or Back)</h3>
+    <div class="app">
+      <div class="demobar"><span class="tag">DEMO</span><span><span class="muted">Acting as</span> Dr. Helen Ward <span class="muted">· Northlake</span></span></div>
+      <div class="body">
+        <div class="side">
+          <div class="brand">Claude</div>
+          <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+          <div class="nav on"><i class="ti ti-message-circle"></i>Chats</div>
+          <div class="nav"><i class="ti ti-arrows-exchange"></i>Requests</div>
+          <div class="group">Needs you</div>
+          <div class="item"><div class="t"><span>XRD and SEM/EDS for 14 powders</span><b></b></div><div class="o">Henderson Lab</div></div>
+        </div>
+        <div class="empty">
+          <div class="ic"><i class="ti ti-lock"></i></div>
+          <div class="title">This chat is Alex Chen's</div>
+          <div class="why">Chats belong to the person who started them. You're acting as Dr. Helen Ward at Northlake.</div>
+          <div class="acts"><span class="b demo"><i class="ti ti-arrows-exchange"></i>Switch to Alex</span><span class="b">Go to your chats</span></div>
+          <div class="note">The switch button is demo chrome, styled like the demo bar. The product would only say the chat isn't available.</div>
+        </div>
+      </div>
+    </div>
+    <aside class="explain">
+      <h2>Say whose it is</h2>
+      <p>The page names the owner and offers a one-click switch. It shows no title or content from the chat.</p>
+      <p class="was">Before: "This chat isn't here", with no way forward.</p>
+    </aside>
+  </section>
+
+  <!-- 3. A request thread between two other orgs -->
+  <section class="state">
+    <h3>3 · Helen opens a Henderson–Ridgeline request</h3>
+    <div class="app">
+      <div class="demobar"><span class="tag">DEMO</span><span><span class="muted">Acting as</span> Dr. Helen Ward <span class="muted">· Northlake</span></span></div>
+      <div class="body">
+        <div class="side">
+          <div class="brand">Claude</div>
+          <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+          <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+          <div class="nav on"><i class="ti ti-arrows-exchange"></i>Requests</div>
+          <div class="group">Needs you</div>
+          <div class="item"><div class="t"><span>XRD and SEM/EDS for 14 powders</span><b></b></div><div class="o">Henderson Lab</div></div>
+        </div>
+        <div class="empty">
+          <div class="ic"><i class="ti ti-lock"></i></div>
+          <div class="title">Helen can't open this request</div>
+          <div class="why">It's between Henderson Lab and Ridgeline Fabrication. Alex Chen and Prof. Maya Henderson at Henderson Lab, and Dana Okafor at Ridgeline, can open it.</div>
+          <div class="acts"><span class="b demo"><i class="ti ti-arrows-exchange"></i>Switch to Alex</span><span class="b demo"><i class="ti ti-arrows-exchange"></i>Switch to Dana</span><span class="b">Go to your requests</span></div>
+        </div>
+      </div>
+    </div>
+    <aside class="explain">
+      <h2>Name the two sides</h2>
+      <p>One switch per org, to the first person there who can open it. At most three names.</p>
+      <p class="was">Before: "This thread isn't visible to you… and to admins", which was wrong for Dana (an admin, of another org) and shown even for ids that exist nowhere.</p>
+    </aside>
+  </section>
+
+  <!-- 4. An id from an earlier world -->
+  <section class="state">
+    <h3>4 · A link from before a reset</h3>
+    <div class="app">
+      <div class="demobar"><span class="tag">DEMO</span><span><span class="muted">Acting as</span> Dr. Helen Ward <span class="muted">· Northlake</span></span></div>
+      <div class="body">
+        <div class="side">
+          <div class="brand">Claude</div>
+          <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+          <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+          <div class="nav on"><i class="ti ti-arrows-exchange"></i>Requests</div>
+          <div class="group">Needs you</div>
+          <div class="item"><div class="t"><span>XRD and SEM/EDS for 14 powders</span><b></b></div><div class="o">Henderson Lab</div></div>
+        </div>
+        <div class="empty">
+          <div class="ic"><i class="ti ti-history"></i></div>
+          <div class="title">This request isn't in this demo</div>
+          <div class="why">It's from before a reset or an earlier visit. Nothing from that demo carries over.</div>
+          <div class="acts"><span class="b">Go to your requests</span></div>
+        </div>
+      </div>
+    </div>
+    <aside class="explain">
+      <h2>Different cause, different words</h2>
+      <p>An id that isn't in this world gets its own message, so it never reads as a permissions problem.</p>
+    </aside>
+  </section>
+</div>
+</body>
+</html>

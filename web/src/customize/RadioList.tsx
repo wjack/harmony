@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { cx } from "../shell/ui";
+
 export interface RadioOption<T extends string> {
   value: T;
   label: string;
@@ -19,20 +21,31 @@ interface RadioListProps<T extends string> {
   disabled: boolean;
 }
 
-/** Radio rows in a bordered list box, the way Claude's modals list choices. */
+/**
+ * Radio rows in a bordered list box, the way Claude's modals list choices. Disabled, it
+ * drops the white box and the black dot, so a viewer reads the choice without being
+ * invited to change it.
+ */
 export function RadioList<T extends string>({ name, label, value, options, onChange, disabled }: RadioListProps<T>) {
   return (
     <div
       role="radiogroup"
       aria-label={label}
-      className="divide-y divide-border overflow-hidden rounded-menu border border-border bg-surface"
+      aria-disabled={disabled || undefined}
+      className={cx(
+        "divide-y divide-border overflow-hidden rounded-menu border border-border",
+        disabled ? "bg-transparent" : "bg-surface",
+      )}
     >
       {options.map((option) => {
         const checked = option.value === value;
         return (
           <label
             key={option.value}
-            className="flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors has-[:disabled]:cursor-default hover:bg-canvas has-[:disabled]:hover:bg-surface"
+            className={cx(
+              "flex items-start gap-3 px-4 py-3 transition-colors",
+              disabled ? "cursor-default" : "cursor-pointer hover:bg-canvas",
+            )}
           >
             <input
               type="radio"
@@ -47,16 +60,22 @@ export function RadioList<T extends string>({ name, label, value, options, onCha
             />
             <span
               aria-hidden
-              className={
+              className={cx(
+                "mt-0.5 size-4 shrink-0 rounded-full peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40",
                 checked
-                  ? "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40"
-                  : "mt-0.5 size-4 shrink-0 rounded-full border border-border-strong bg-surface peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40"
-              }
+                  ? cx("flex items-center justify-center", disabled ? "bg-muted" : "bg-primary")
+                  : cx("border", disabled ? "border-border" : "border-border-strong bg-surface"),
+              )}
             >
               {checked && <span className="size-1.5 rounded-full bg-surface" />}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2 text-sm leading-5 font-medium text-ink">
+              <span
+                className={cx(
+                  "flex items-center gap-2 text-sm leading-5 font-medium",
+                  disabled ? "text-secondary" : "text-ink",
+                )}
+              >
                 {option.icon !== undefined && <span className="shrink-0 text-secondary">{option.icon}</span>}
                 {option.label}
                 {option.tag}

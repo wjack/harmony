@@ -377,6 +377,30 @@ entries:
             "within_sharing": true,
             "reason": "Only a price, a seal option and a lead time from Ridgeline's price list, which its sharing description covers."
           }
+  # Dana's Edit on Ridgeline's side, its first steer: "Let's not give the Kalrez
+  # option". Its guidance; and, with Ridgeline set to Ask so the quote waits for her,
+  # the answerer's rev 2 of it. `harmony run --edit ridgeline:henderson:N:...` (no item)
+  # plays the guidance alone.
+  - match: {org: ridgeline, role: steer, thread: "henderson.ridgeline", turn: 1, step: 0}
+    content:
+      - type: text
+        text: '{"guidance": "Don''t propose the Kalrez seal option."}'
+  - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 8}
+    content:
+      - type: thinking
+        thinking: No Kalrez option, so the holder alone with its standard Viton seals.
+      - type: text
+        text: |-
+          {
+            "answer": "The airtight powder transfer holder for a Bruker D8 dome mount, aluminum body, is $240 with its standard Viton seals. The lead time is 4 business days, so ordered today it ships by Fri Oct 30, ahead of Nov 3.",
+            "needs_human": false,
+            "needs_human_reason": null,
+            "route": {
+              "assignees": [{"member": "dana", "why": "you handle quotes and scheduling"}]
+            },
+            "rationale": "The standard holder from the price list without the Kalrez option, as Dana asked, at the standard 4-business-day lead time.",
+            "short_question": "Quote Henderson Lab $240 for the holder with standard seals, shipping Oct 30?"
+          }
   # Turn 3 opens with the released answer.
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 3, step: 0}
     content:

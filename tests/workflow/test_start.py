@@ -177,3 +177,40 @@ async def test_a_failed_start_leaves_no_record(
         )
     assert await count_rows(db_sessionmaker, WorldWorkflow, world_id) == 0
     await first.terminate()
+
+
+async def test_a_closed_id_starts_again_and_carries_its_memo(
+    temporal_env: WorkflowEnvironment, db_sessionmaker: Sessionmaker
+) -> None:
+    """Reopen starts a thread's next run under the id its last run closed on (the SDK's
+    `ALLOW_DUPLICATE`), naming the attempt in the memo (REOPEN.md §4.1)."""
+    client = temporal_env.client
+    world_id = await create_world(db_sessionmaker)
+    workflow_id = world_workflow_id(world_id, "thread", "t1")
+    async with main_worker(client, db_sessionmaker):
+        first = await start_world_workflow(
+            client,
+            db_sessionmaker,
+            ParkedWorkflow.run,
+            "1",
+            world_id=world_id,
+            workflow_id=workflow_id,
+        )
+        await first.signal(ParkedWorkflow.release)
+        assert await first.result() == "1"
+
+        again = await start_world_workflow(
+            client,
+            db_sessionmaker,
+            ParkedWorkflow.run,
+            "2",
+            world_id=world_id,
+            workflow_id=workflow_id,
+            memo={"reopen_steer_id": "s1"},
+        )
+        described = await again.describe()
+        assert described.run_id != first.result_run_id
+        assert described.status == WorkflowExecutionStatus.RUNNING
+        assert await described.memo_value("reopen_steer_id", None) == "s1"
+        await again.terminate()
+    assert await count_rows(db_sessionmaker, WorldWorkflow, world_id) == 1

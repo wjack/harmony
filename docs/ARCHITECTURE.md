@@ -67,7 +67,8 @@ Context scope, network-attached identity and the blocking consult (formerly "blo
 | **Release by mode** | `release.decide` applies the org's mode for this counterparty (§2.3). *Ask*: never without a person. *Auto*: when the answerer says no person is needed and the sharing check passes. *Skip*: when the answerer says no person is needed. Anything else becomes an inbox item with the reason. A teammate's approval releases that answer to that one thread; there are no scopes. | Internal facts reaching a counterparty without a person or the check deciding |
 | **Network-attached identity** | The counterparty is fixed when a bilateral thread starts, and its network-verified identity is written into the representative's frozen system prompt. Counterparty text arrives inside a code-written delimiter, and any body line shaped like the identity statement is escaped. The instructions say identity is stated only in the system prompt. | Impersonation, including a forged "verified sender" block |
 | **Blocking consult** | While a consult is open, the thread is in `awaiting_principal` and no representative turn runs. The released answer opens that side's next turn. Under *Ask*, each outbound message is held the same way. Representative calls set `disable_parallel_tool_use`, so tools run one at a time. | The counterbench failure where the owner was notified but the reply had already gone out |
-| **Untrusted inbound** | Counterparty-derived content reaches internal Claude only as `tool_result` content (`get_request_status`) or, for a consult, as the representative's question inside a quoted block. The answerer's tools only read its own org's records, and its output leaves only through release by mode. The sharing check never sees the records. The system channel carries only code-written notes such as "Thread T updated". The network-run synthesizer reads quoted, truncated per-org excerpts and has no tools. | Injection traveling back through the firewall into the org's full context, or out of it through a tool |
+| **Edit guidance** | A member's Edit ("What should Claude do differently?") never reaches the representative as typed. The `steer` call (no tools) rewrites it as guidance from members' words only: the instruction and the current guidance, with no brief, sharing text, records, thread or counterparty text. Code then rejects guidance that adds a number, date, email, link or name none of those words hold (the fact check). Guidance is versioned and append-only (`rep_guidance`), and reaches the representative as a quoted, code-written block in a user message (§2.2). The answerer reads the current guidance too, labelled as never widening what may be shared. No Claude reads comments. | A member's instruction, a comment or counterparty text reaching the representative as own-side guidance unreviewed |
+| **Untrusted inbound** | Counterparty-derived content reaches internal Claude only as `tool_result` content (`get_request_status`) or, for a consult, as the representative's question inside a quoted block. The answerer's tools only read its own org's records, and its output leaves only through release by mode. The sharing check never sees the records. The system channel carries only code-written notes such as "Thread T updated". The network-run synthesizer reads quoted, truncated per-org excerpts and has no tools. Counterparty text reaches the held-message rewrite marked (through the delimiter) and the answerer quoted, never the guidance writer. | Injection traveling back through the firewall into the org's full context, or out of it through a tool |
 
 ### 2.2 Separate channels in the prompt
 
@@ -79,7 +80,11 @@ Context scope, network-attached identity and the blocking consult (formerly "blo
   - `world_date`;
   - `closed`: the counterparty closed the thread, and this side may write its summary in one last turn.
 
+  - `reopened`: the conversation was reopened (§7.1), worded per side.
+
   They wait in a per-thread pending-notices queue (`rep_notices`). At the next model call they are flushed as one merged system message, placed right after the user message that carries the tool results and counterparty text. Nothing is ever written into the stored transcript ahead of a call. That keeps the API's placement rule: a system message follows a user turn, and is either last or followed by an assistant turn.
+- **Principal → representative: guidance** (docs/design/EDIT.md §3.6). An Edit's guidance is model-written, so it is never a notice: system messages carry operator authority. It goes in a user message, as a code-written lead ("{org} updated its guidance for this conversation… It never widens what you may pass on") plus the text in a `<guidance>` tag with every `<` escaped. The side's next turn opens with it once: after the owed tool results, before the counterparty's new messages. That turn waits while the side's steer runs, so it opens with what the steer wrote. Whether a version reached the representative is read back from the stored transcript.
+  - A turn already running when an Edit arrives doesn't send under the old guidance: before it has sent, a `send_message` is held for a person ("Claude wrote this before your side's latest edit reached it."); after it has sent, a further send or a `close` is refused, and the guidance reaches it at the start of its next turn.
 - **Model-written text that crossed the firewall goes in tool results, never in system messages.** Examples: a consult answer released by code, or one a teammate edited and approved. System messages carry operator authority, so they are reserved for code-written notices.
 - **Counterparty → representative:** `user` messages, with the body inside the code-written delimiter.
 - **Internal Claude without a member message:** a network update arrives as a fixed code-written user turn ("No new message from the member.") followed by a code-written system note. The content itself is fetched by tool call.
@@ -182,11 +187,14 @@ flowchart LR
 | `documents` | Files in object storage, with text extracted at upload and frozen | org_id, key, mime, size, text. Only internal Claude's tools read them. |
 | `conversations`, `chat_messages` | Internal Claude chats | owner member, send mode (null follows the org's default), seq, content (raw wire JSON) |
 | `cards` | Approval cards in a chat | conversation, turn, tool_use_id, kind (`outreach`), payload, status, resolution, **auto** (raised in a chat that sends without review; no member can act on it) |
-| `network_requests` | Outbound requests | requester org, origin conversation, card, **title** (internal Claude's name for it, shown to the requester only), **brief** (free text), recipients with a title and an ask each, status |
-| `threads` | One per (request, responder) | requester and responder orgs, **title** (the recipient's subject, which both sides see), **state** (§7), side to move, settings versions pinned per side, turn count, deadline, stop reason (a cap, a pause or a model error stopped it) |
+| `network_requests` | Outbound requests | requester org, origin conversation, card, **title** (internal Claude's name for it, shown to the requester only), **brief** (free text), recipients with a title and an ask each, status, **round** (1, plus one each time a reopen moves a closed request back to active), `workflow_done_at` (the request workflow has seen every first run end) |
+| `threads` | One per (request, responder) | requester and responder orgs, **title** (the recipient's subject, which both sides see), **state** (§7), side to move, settings versions pinned per side, turn count, deadline, stop reason (a cap, a pause or a model error stopped it), **end_reason** (`closed` / `quiet` / `unsent` / `turn_limit` / `deadline` / `stopped`), `closed_by` (the side whose representative ended it), `ended_at`, **run** (1, then one more per reopen), `run_finished_at` (the current run's last activity ran) |
+| `thread_runs` | One per run of a thread (§7.1); a seeded thread has none | thread, run, started_at, deadline, max turns, who reopened it (member, org, side, steer), `start_seq`; once ended: state, end_reason, closed_by, stop_reason, ended_at, both sides' archived close summaries, the carry, finished_at |
 | `thread_messages` | What crosses the network | seq, from_org, **kind** (`message` / `close`), body, **provenance** (`agent` / `agent_approved` / `human`), authoring or approving member |
 | `thread_access` | Which members can see a thread | thread_id, member_id, reason (`routed` / `shared` / `admin`), shared_by, question |
-| `internal_notes` | Org-only discussion on a thread | thread_id, author (member or internal Claude), body, mentions |
+| `internal_notes` | Comments: org-only discussion on a thread, which no Claude reads (§10) | thread_id, author (member or internal Claude), body, mentions |
+| `steers` | A member's Edit or Reopen text: an instruction to the side's own Claude (§7) | thread, side, seq, **kind** (`edit` / `reopen`), author, body, the waiting item and the member's unsaved wording of it, status (`working` / `done` / `failed`), the guidance and draft outcomes, failure reason |
+| `rep_guidance` | Versioned, append-only guidance per (thread, side) | version, text (empty withdraws it), the steer that wrote it |
 | `rep_sessions` | One per (thread, side) | frozen system and tools bytes, model, **close summary** (this side's own; never sent to the counterparty) |
 | `rep_notices` | Pending-notices queue | thread, side, seq, kind, text, flushed in turn |
 | `rep_transcript` | A representative's wire transcript | (thread, side, seq), role, raw wire JSON |
@@ -213,8 +221,9 @@ flowchart LR
 |---|---|---|---|
 | **Internal Claude** | Everything in the org, plus the member's chat | `search_org_knowledge`, `read_document`, `search_network(need)`, `send_network_request(brief, recipients)` (renders the outreach approval card), `get_request_status` | Opus 5.5 · medium · adaptive, `display: "updates"` |
 | **Representative** | Its frozen system prompt (§2.2), notices, the thread | `send_message(text)`, `consult(question)`, `close(summary)`. The same tools for every org. | Featured: Opus 5.5 · medium. Background: Haiku 5.5 · low |
-| **Consult answerer and router** (internal Claude for the consulting org, as a short tool loop) | The org's context, member profiles, the routing prompt, internal notes on the thread, the thread so far as quoted data, the representative's question (quoted), the counterparty and the sharing description(s) that apply | `search_org_knowledge` and `read_document`, read-only. The loop ends in a structured draft: answer, `needs_human` with a reason, route (assignees plus a one-line reason, used only when a person is needed), rationale | Featured: Opus 5.5 · medium. Background: Haiku 5.5 · medium |
+| **Consult answerer and router** (internal Claude for the consulting org, as a short tool loop) | The org's context, member profiles, the routing prompt, the current guidance for this thread (labelled as never widening sharing; no comment), the thread so far as quoted data, the representative's question (quoted), the counterparty and the sharing description(s) that apply | `search_org_knowledge` and `read_document`, read-only. The loop ends in a structured draft: answer, `needs_human` with a reason, route (assignees plus a one-line reason, used only when a person is needed), rationale | Featured: Opus 5.5 · medium. Background: Haiku 5.5 · medium |
 | **Sharing check** (single call) | Only the applicable sharing description(s), the question and the draft answer. Never the org's records. | None; structured output: `within_sharing` and a reason | Haiku 5.5 · low |
+| **Steer** (two single calls per Edit, docs/design/EDIT.md §3.3 and §3.5) | `write_guidance`: only members' words (the instruction and the current guidance) and code-written names. `rewrite_held`: the thread (counterparty text delimited), the current guidance, the held message and the instruction | None. `write_guidance` returns the guidance, which code checks (§2.1, Edit guidance); `rewrite_held` returns the new wording, which a person approves. A waiting consult draft is rewritten by the answerer instead | Featured: Opus 5.5 · medium. Background: Haiku 5.5 · medium |
 | **Synthesizer** (single call, P3) | The requester's own close summaries and quoted, truncated per-org excerpts | None; structured output (the plan) | Opus 5.5 · high |
 | **Screener** (single calls) | One org's public summary, its review statistics and the need | Structured output: fit and a one-line reason (§6) | Haiku 5.5 · low · thinking disabled |
 
@@ -225,7 +234,7 @@ flowchart LR
    - **Otherwise** it becomes an escalation routed by the answerer's `route` (§10), with the reason ("Why this needs you").
      - On the responder side, this is an inbox item.
      - On the requester side, it's an inline card in the origin chat, which is how Ridgeline's seal-material question reaches Alex.
-3. A member approves (as drafted or edited), asks Claude to redraft with an instruction, declines, takes over or reassigns. An approved answer returns as the `consult` tool result, released to that thread only. To make something shareable from now on, the member edits the sharing description; the inbox links to it ("Edit what you share with Henderson Lab").
+3. A member approves (as drafted or edited), tells Claude what to do differently (an Edit: Claude rewrites the draft and follows the guidance for the rest of the conversation, §7), declines, takes over or reassigns. An approved answer returns as the `consult` tool result, released to that thread only. To make something shareable from now on, the member edits the sharing description; the inbox links to it ("Edit what you share with Henderson Lab").
 
 **Model-conditional request builders.** In development, `MODEL_OVERRIDE` runs every role on Haiku 5.5 (Opus 5.5 until 2026-10-26), while production runs Opus for featured orgs, so builders are per model, not per role:
 - Never send `thinking: {type: "disabled"}` to Opus 5.5; it returns a 400.
@@ -236,14 +245,15 @@ flowchart LR
 - Contract tests assert these per model at no cost (§15).
 
 **Turn protocol.**
-- Message bodies are open-domain free text. A representative's turn is a normal tool loop: it may send several messages, consult, then send again. The turn ends when the model stops calling tools or calls `close`. There is no one-performative-per-turn rule.
-- `tool_choice` is `auto` with `disable_parallel_tool_use: true`, so tools run one at a time and transcripts stay deterministic. A bare text reply with no tool call maps to `send_message`.
+- Message bodies are open-domain free text. A representative's turn is a normal tool loop: it may consult before it sends, then send several messages. Once it has sent a message it's the counterparty's move, so a later `consult` in that turn is refused (`CONSULT_AFTER_SEND`: "Not asked: your message already went out… Ask your side at the start of your next turn."), which also says not to close. `harmony run` counts both slips (`consults_after_send`, `closes_after_refused_consult`). The turn ends when the model stops calling tools or calls `close`. There is no one-performative-per-turn rule.
+- `tool_choice` is `auto` with `disable_parallel_tool_use: true`, so tools run one at a time and transcripts stay deterministic. Only `send_message` reaches the counterparty: plain text never does. A first call answered in plain text alone is told once that it wasn't sent (`runtime.BARE_TEXT_NOT_SENT`), and an empty first answer is asked once more (`runtime.EMPTY_NUDGE`) before the turn ends quietly.
 - `consult` stops the turn until an answer is released.
 - Under *Ask*, `send_message` is held as an `outbound_review` and stops the turn. `close` is never held: only its empty marker crosses.
   - Approve, or approve with edits: the message is sent and the counterparty moves next.
   - Decline: nothing is sent, and the same side moves again with the refusal as the tool result.
   - Take over: the member's own text goes out with `human` provenance.
-- `close(summary)` ends the thread for both sides.
+- `close(summary)` ends the conversation for both sides, until someone reopens it (§7.1).
+  - It is refused while the counterparty has sent no message in this run (`NOT_REPLIED`: "To wait for their reply, end your turn: stop calling tools. `close` ends the conversation."). The guard counts only messages since the run started (`RepToolScope.run_start_seq`), so the side that reopened writes first and hears back before it can close.
   - The summary is stored on the closer's side only and is never sent to the counterparty. The `close` message that crosses the network has an empty body.
   - The other side gets a code-written `closed` notice and one last turn, in which only its own `close` (its summary) takes effect.
 - Messages carry provenance `agent`, `agent_approved` (released or edited by a teammate) or `human` (a teammate took over).
@@ -252,13 +262,14 @@ flowchart LR
   - 16 turns per thread, both sides together;
   - a deadline that bounds every wait, a person's included.
 
-  A thread that reaches the turn cap or the deadline ends `expired`.
+  A thread that reaches the turn cap or the deadline ends `expired`. Every surface shows it as Closed, with the reason from `end_reason` (§7).
 
 **Streaming.** Featured-org turns stream with `eager_input_streaming` on `send_message` and `consult`, so the text being sent appears as it is written. Tool inputs are validated against the schema before they run. Background-org turns don't stream tokens.
 
 **Checkpointed activities** (one activity runs a turn's whole tool loop):
 - Before each model call, the activity looks up a stored response for (turn_id, step_idx) and reuses it instead of calling again.
 - The raw `get_final_message()` JSON is inserted with `ON CONFLICT DO NOTHING` in its own transaction before any post-processing. A delivered `thread_message` is never updated.
+- A step's tool results are stored as soon as its tool calls have run, before the next model call, so a chat shows its tools done while Claude reads the results. A retried call sends the results already stored. Nothing is written ahead of a call: the opening and the notices are stored together with the response of the call that sent them.
 - The answerer's tool loop and the sharing check are checkpointed the same way, each under its own turn ID per consult.
 - `RetryPolicy(maximum_attempts=3)`. A 400, budget exhaustion or a retired world raises a non-retryable error.
 - The SDK runs with `max_retries=1`, and `start_to_close` is larger than the SDK timeout × 2.
@@ -333,22 +344,23 @@ flowchart LR
 | Workflow | ID | Responsibility |
 |---|---|---|
 | `ConversationWorkflow` | `w:{world}:conv:{id}` | Entity workflow per internal chat, started with signal-with-start. Drains everything pending into one turn; a member's message comes first. Thread status changes and inline questions become UI cards from events, with no model call. Only a request's `closed` update, sent once every thread has ended, wakes a turn, in which internal Claude summarizes in prose. Continues-as-new only when idle (after `all_handlers_finished`) and passes the pending queue forward. |
-| `NetworkRequestWorkflow` | `w:{world}:req:{id}` | Started by the API after the outreach card is approved, as a **top-level** workflow, not a child of the conversation. Starts a child `ThreadWorkflow` per recipient through a sliding window of active children. Once every thread has ended, it marks the request `closed` and tells the conversation. There is no fan-in, comparison or acceptance step. |
-| `ThreadWorkflow` | `w:{world}:thread:{id}` | The thread state machine. |
+| `NetworkRequestWorkflow` | `w:{world}:req:{id}` | Started by the API after the outreach card is approved, as a **top-level** workflow, not a child of the conversation. Starts a child `ThreadWorkflow` per recipient through a sliding window of active children. It follows each thread's first run only. Once every first run has ended it calls `end_round(from_workflow=True)`, which closes the request and tells the conversation unless a reopened thread is still live; that thread's own tail closes it later (§7.1). There is no fan-in, comparison or acceptance step. |
+| `ThreadWorkflow` | `w:{world}:thread:{id}` | The thread state machine, one run per execution. A reopen starts a new run under the same id (`record_reopen`, `write_guidance`, `begin_reopen`, …); every run ends with `finish_run`, and a run after the first calls `end_round` itself. Edits are its `steer` Update. |
 | `ReplayWorkflow` | `w:{world}:replay` | Re-emits a recording in ticks (one timer per tick, emitting every event due in it), with chapter markers and idle gaps compressed. Continues-as-new when suggested. |
 | `RetireWorldWorkflow` | `retire:{world}` | Retires a world (below). Carries no `WorldId` search attribute, so it never matches its own query. |
 
 **ThreadWorkflow states:**
 - `active(side)`: the requester's representative opens, and when a side's turn ends, the other side moves with every message sent since its last turn.
 - `awaiting_principal(side, escalations)`: a consult or a held message waits for its own side.
-- Terminal: `closed` (a side called `close`) and `expired` (the turn cap or the deadline). A thread ends only in a terminal state.
+- Terminal: `closed` (a side called `close`, or a refusal, a spent budget or a model error stopped it) and `expired` (the turn cap, the deadline, two quiet turns, or nothing crossed). Every end also stores `end_reason` (`closed`, `quiet`, `unsent`, `turn_limit`, `deadline` or `stopped`), `closed_by` and `ended_at`, and records the run in `thread_runs`. A run ends only in a terminal state. A terminal thread can be reopened as a new run under the same workflow id, private part first (§7.1).
 
 **No intake check.** The responder's representative reads every inbound brief and decides what to do: reply, consult or close. There are no inbound filters.
 
 **Escalation resolution is a Temporal Update with a validator.**
 - The validator rejects the Update unless the escalation is open on this thread and the resolving member belongs to the escalation's org. The workflow then applies the resolution and writes it through an activity `WHERE status = 'open'`, and the API returns the result to the UI.
 - Resolutions are keyed by escalation ID, so a duplicate is harmless.
-- Drafts carry their own `draft_rev`, and a resolution is pinned to one. **Redraft** is also an Update: the answerer drafts again with the member's instruction, and the UI shows "draft updated".
+- Drafts carry their own `draft_rev`, and a resolution is pinned to one, held messages included.
+- **Edit is the `steer` Update** (docs/design/EDIT.md §3), the only way a member tells Claude what to do differently; it replaced Redraft and the held message's `revise`. The validator refuses a steer while that side's last one is still running (`SteerRunning`, with who sent it) or on an ended thread (`ThreadClosed`). The workflow records the steer, then runs in parallel `write_guidance` (the new guidance, §2.1) and, when an item waits, a rewrite of its draft: the answerer redrafts a consult answer with the instruction, and `rewrite_held` rewrites a held message in place. `settle_steer` records the outcomes. One steer per side at a time, and an Edit never starts a turn: the side's next turn waits for it and opens with the guidance (§2.2).
 - **Reassign** is also an Update. It moves the item and its `thread_access` to another member and leaves the escalation open. It records nothing for learning.
 
 ```mermaid
@@ -391,8 +403,18 @@ sequenceDiagram
   4. No batch jobs: Temporal Cloud allows one per namespace.
   5. Every world workflow has a 24 h execution timeout as a backstop. It spans the whole continue-as-new chain, so a long-lived workflow (Conversation, Replay) ends 24 h after its first start at the latest.
   6. The admin wipe is a loop of single-world retirements.
-- **Deploys:** a world created under another build SHA (or another `MODEL_OVERRIDE`: worlds pin to `Settings.world_build`) is forked fresh on the next visit and the old one retired, so a deploy never replays live workflows on changed code. `workflow.patched()` is used only for a change that must reach live workflows. CI runs `Replayer` over saved walkthrough histories.
+- **Deploys:** a world created under another build SHA (or another `MODEL_OVERRIDE`: worlds pin to `Settings.world_build`) is forked fresh on the next visit and the old one retired, so a deploy never replays live workflows on changed code. Reopen relies on this: no thread from before a deploy is reopened on the new code, so its migration has no backfill (§7.1). `workflow.patched()` is used only for a change that must reach live workflows. CI runs `Replayer` over saved walkthrough histories.
 - **Temporal UI links** appear only in local dev (`:8233`). The hosted demo shows an in-app history drawer from `fetch_history()` instead, because Temporal Cloud's UI needs a login.
+
+### 7.1 Reopen
+
+docs/design/REOPEN.md §4 and §6 have the detail; the code names are `src/harmony/domain/reopens.py` and `src/harmony/temporal/reopen.py`.
+- **Who may reopen.** Any member who can see the thread, from either party, without the other side agreeing; the text is required. `reopens.reopen_offer` decides per viewer, in order: no `thread_runs` row (seeded history) is `blocked`/`history`, with no button; a run that hasn't finished within `WRAP_UP_GRACE` (10 min) of ending is `wrapping_up`; then `blocked` for `limit` (`MAX_REOPENS` = 2), `refused` (the other side's Claude declined to continue), `they_closed` (the other side closed a run this side reopened) and `not_asked` (a responder before the requester has written); otherwise `allowed`.
+- **The private part runs first.** `POST /api/threads/{id}/reopen` records the text as a steer of kind `reopen` and starts a new run of the same `ThreadWorkflow` id (`start_reopen`; a closed id starts again under `ALLOW_DUPLICATE`, with the steer id in the memo). The run calls `record_reopen`, then `write_guidance` while the thread is still Closed. Only when the guidance was `updated` does `begin_reopen` reopen it, in one transaction: the run row, both sides' summaries archived, the thread active, stale `closed` and `reopened` notices dropped, one `reopened` notice per side, the steer done, and a closed parent request back to active as round + 1. Any other outcome settles the steer as failed and changes nothing anyone else can see: no notice, no live pill, no new round.
+- **The new run** carries the turn numbers, delivered seq, consult counts and owed tool results forward (`ThreadCarry`), and gets a fresh 16 turns and 20 h deadline. The reopening side moves first, its turn opening with the new guidance, under its org's usual review settings. The close guard counts only this run's messages (§5).
+- **The tail of every run** owes the closing results, cancels tasks and settles steers. Run 1 then signals the request workflow, as before. A later run calls `end_round` itself and, when that closes the request, `notify_conversation` with the round. `finish_run` is the last activity of every run: it writes the run's row and carry, then `run_finished_at`, which turns Reopen on in open views.
+- **Closing the request** goes through one locked domain function, `requests.end_round`. The request workflow's tail calls it with `from_workflow=True` once every first run has ended; a reopened run's tail calls it after its own end. It closes the request only when the workflow is done and no thread is live, so whichever runs last closes it. The conversation dedupes by (request, round), so the requester's chat hears each round once ("has ended again").
+- **No backfill.** Reopen relies on worlds forking per build (§7, Deploys): every thread a visitor can reach after a deploy is seeded (not reopenable) or ran on the new code.
 
 ## 8. Realtime
 
@@ -412,7 +434,7 @@ sequenceDiagram
   - Connections are budgeted explicitly: web pool + worker pool + one LISTEN per web process, under the plan's 100.
 - **Token streaming.**
   - Deltas are coalesced to about 200 ms and published from one autocommit notify connection per worker. The payload carries (world, org, thread, turn, attempt), so the API filters without a query.
-  - Deltas go only to members of the **producing org** who can see the thread, plus the network lens. The counterparty sees "Claude for Northlake is typing…" and receives text only from the committed `thread_message` event.
+  - Deltas go only to members of the **producing org** who can see the thread, plus the network lens. The counterparty never sees the other side writing: its last row reads "Waiting for Northlake to reply", and it receives text only from the committed `thread_message` event.
   - Deltas are sent only for turns with a subscriber: featured orgs, or a thread open in the inspector.
   - Deltas aren't persisted. A retried attempt's partial stream is discarded.
 - **Scopes:**
@@ -420,7 +442,10 @@ sequenceDiagram
   - Member events (routed to you, shared with you, @mentioned) reach that member.
   - The network view gets world-scope events. It's explicitly a demo lens that sees both sides, and is labeled that way in the UI.
   - **Demo events** are a separate, payload-free type (`{type, org_slug, entity_id}`). They drive the demo bar's cross-account alerts ("Northlake has 1 item needing approval → switch to Helen") and the walkthrough, and are never applied to the query cache.
-- **Act-as and streams.** A stream is bound to the member it opened under. Act-as bumps the session epoch, and the server closes that session's streams. The client then clears the TanStack Query cache and reopens from a fresh snapshot cursor. A `BroadcastChannel` reloads the visitor's other tabs.
+- **Act-as and streams.** A stream is bound to the member it opened under. Act-as bumps the session epoch, and the server closes that session's streams. The client then clears the TanStack Query cache and reopens from a fresh snapshot cursor.
+  - **Other tabs follow in place,** with no reload, which would race the switching tab's own navigation. A `BroadcastChannel` carries `{type: 'member_changed', sessionId, epoch, memberId}`; a tab that hears of an epoch it hasn't seen takes a fresh snapshot and rebuilds, and so does a tab that hears from another session, or that has no session. A tab whose session is gone forgets its epoch, so a new session's first switch still counts.
+  - `dispatcher.onMemberChanged` listeners hear of a switch first. A tab that didn't make the switch leaves the previous member's own page (a chat, a request) for its section, replacing the URL, before the new member renders. Unsaved Customize edits are dropped with a toast ("Your unsaved Customize changes were dropped when you switched to {name} in another tab.", §11.4).
+  - The only reload left is for `locked`: when the passcode gate refuses a request, the other tabs reload and lock too.
 - **Stale epochs.** The stream URL carries the snapshot's epoch (`/api/events?after=<cursor>&epoch=<epoch>`), and the server refuses a stream for any other epoch with 409. A reset, a fork or an act-as in the other lens world moves the epoch without an event this stream may see; the browser's automatic reconnect is then refused, and the client takes a fresh snapshot: the same epoch reopens from the last seq with the cache kept, a newer one rebuilds as for an act-as.
 - **Scale path:** everything goes through an `EventBus` interface, so replacing NOTIFY with Redis pub/sub or Streams is one class.
 
@@ -459,21 +484,22 @@ The unstructured revision removed the Files and knowledge, Standing permissions,
 - **Requester-side escalations** (a counterparty asks something the brief doesn't cover, or proposes terms that need the member's go-ahead) render as an inline card in the origin chat. They resolve through the same Update as the inbox.
 - **Thread access.** A thread is open to its routed members, members it has been shared with, and admins. It isn't open org-wide by default, because threads can carry client-confidential details.
 - **Sharing a thread with a teammate.** Anyone with access can share a thread with a teammate, optionally with a question (@mention). The teammate is notified, and the thread appears under **Shared with you** in their inbox.
-- **Internal notes.** Members and internal Claude discuss a thread in notes that only the org can see. They're never visible to the representative or the counterparty. The answerer reads them when it redrafts. A note's content reaches the representative only inside an answer someone releases.
-- **The decision card** sits inline after the last row of the request view's transcript (§12) and scrolls with it. It shows:
-  - an eyebrow saying whose answer Claude needs, or what it wants to send, and to whom;
+- **Comments.** Members discuss a thread in comments that only the org can see (`internal_notes`; internal Claude adds one only when it couldn't write a closing summary). No Claude reads them: not the representative, the answerer, the steer calls or the counterparty. What a member wants Claude to do goes through Edit instead (§7). `POST /threads/{id}/notes` takes `as_member_id`, like every write from the request view, and answers 409 `member_changed` first when the tab's member is stale.
+- **The decision card** sits inline after the last row of the request view's transcript (§12) and scrolls with it; its foot sticks while the card is taller than the view. It shows:
+  - an eyebrow saying whose answer Claude needs, or what it wants to send, and to whom, with **Reassign**;
   - a short title: the answerer's `short_question` for a consult, or "Send this reply to {them}?" for a held message;
-  - "Why it came to you": the answerer's or the sharing check's reason, then "Routed to you: {why}" with **Reassign**, or the default-assignee line;
-  - the draft reply, editable;
+  - the reason it waits (the answerer's, the sharing check's, or a held message's), left out when it's only *Ask* mode;
+  - the whole draft, edited in place, with "‹ n of m ›" between Claude's rewrites and "Undo my edits";
   - "Looked at", one line that expands to internal Claude's tool activity;
-  - Claude's reasoning (collapsed), and a link to edit what the org shares with that organization.
-- **One composer** at the bottom of the request view replaces the action list and the separate note box:
-  - With an open item and nothing typed, it offers **Decline**, **Edit** and **Approve and send** (⌘↵).
-  - Typed text becomes **Redraft** for a consult, or **Send back to Claude** for a held message, beside **Add note** and **Decline**. Send back is the `revise` action: our representative gets the text as an instruction it must not pass on, never as releasable text.
-  - **Decline** is its own step, with a reason the counterparty may read. It sets typed note text aside (Cancel restores it); note text is never reused as that reason.
-  - With no open item, the composer adds internal notes, and an @mention shares the thread.
+  - a link to edit (or, for a non-admin, see) what the org shares with that organization;
+  - a foot with only **Decline** and **Approve and send** (⌘↵). For a held message, the foot says which mode holds it, with a Change link to Autonomy.
+- **One box** at the bottom of the request view, with a **Comment | Edit** switch. It starts in Comment and returns to it after each Edit.
+  - **Comment** adds a comment for the team; an @mention shares the thread. "Only {org} sees comments. Claude doesn't read them."
+  - **Edit** ("What should Claude do differently?", **Tell Claude**) records a steer (§7): Claude rewrites the waiting draft, if there is one, and follows the new guidance for the rest of the conversation. Edit is off while the side's last steer runs and on a closed thread, where Reopen takes its place (§7.1).
+  - **Decline** is the card's own step, with a required reason the counterparty may read. Typed box text is never reused as that reason.
+  - Enter submits the box and never approves the card.
   - The API still accepts `take_over` (the reply labeled as from a person); the request view doesn't offer it.
-- **"What our representative saw."** In the request view's Details, it shows the parts of that representative's frozen prompt: the public summary, the instructions, the sharing description, the brief and this recipient's own ask on the requester side, and the counterparty's verified identity. It also shows the notices Harmony sent it since (a changed setting, mode or sharing description replaces what the prompt says), and every answer released to it, with who released it and when. Both are read from its stored transcript, so a result the thread ended before giving isn't listed. Nothing else from its own side ever entered its context.
+- **"What our representative saw."** In the request view's Details, it shows the parts of that representative's frozen prompt: the public summary, the instructions, the sharing description, the brief and this recipient's own ask on the requester side, and the counterparty's verified identity. It also shows the notices Harmony sent it since (a changed setting, mode or sharing description replaces what the prompt says), the guidance its side gave it ("Guidance from your side", each version it received), and every answer released to it, with who released it and when. Both are read from its stored transcript, so a result the thread ended before giving isn't listed. Nothing else from its own side ever entered its context.
 - **Concurrency.** A resolution is a Temporal Update validated against the escalation's state (§7). A second resolver sees "Resolved by Helen 10 seconds ago" instead of a double send.
 - **Priority.** Items are sorted by how long the counterparty has waited.
 
@@ -517,16 +543,19 @@ There are no passwords.
 - The session holds the acting member per world, and switching accounts is `POST /api/session/act-as`. It checks that the member belongs to the session's world and bumps the epoch (§8).
 - Every endpoint authorizes by the acting member's org, role and thread access, so switching accounts really does change what the API returns: the firewall applies to the UI too, not just to agents.
 - The switcher lives in the bottom-left account menu, where the Claude app has its profile menu, grouped as *Featured* and *All network members*.
+- **Other tabs follow a switch in place** (§8). A tab showing the previous member's own chat or request leaves it for its section.
+- **A link the acting member can't open** (a chat that is someone else's, a request between other orgs, or one from before a reset) shows a not-found page that says whose it is and offers to switch to them. It reads `GET /api/demo/whose?chat=<id>` or `?thread=<id>`, which is demo chrome (§11.4): names and orgs only, never a title, content or state, and only for ids in the session's own live world. For a chat it names the owner; for a thread, the requester's then the responder's people who can open it (admins, then `thread_access` rows), at most 3. Any other id is a 404 like an unknown one, and neither or both parameters a 422.
 
 ### 11.4 Demo bar and demo controls
 
 - **The passcode page** comes before everything. One master passcode (`ACCESS_CODE`) gates the whole app: a default-deny middleware lets through only the health check, the gate's own page and unlock, and operator routes carrying the admin secret (§14). The page is served by the server, not the SPA, so the cast and story in the bundle never load before unlock. It has a heading, one password field, an Open button and inline errors ("That passcode isn't right." / "Too many attempts. Try again in N minutes."). Unlocking sets the `harmony_gate` cookie for 14 days; the account menu's "Lock Harmony" clears it. Rotating the passcode locks every cookie out, while sessions, worlds and budget lineages survive.
-- **Demo bar:** a slim bar above the cloned UI, styled differently, so demo controls are never confused with the product. It holds the Demo controls button, the acting account, the world date, the live budget ("Live · $7.40 left", or the state line when a cap is spent or live models are paused, §14), Reset, Fast-forward and walkthrough progress.
+- **Demo bar:** a slim bar above the cloned UI, styled differently, so demo controls are never confused with the product. It holds the Demo controls button, the acting account, the world date, the live budget ("Live · $7.40 left", or the state line when a cap is spent or live models are paused, §14), Reset, Fast-forward and walkthrough progress. The budget and Reset are pinned right. When the bar runs short of room, the labels drop in order ("World date", "Acting as", the org's full name for its short name, the org, the "Demo controls" label), and the bar never scrolls sideways.
 - **Demo controls modal:** opens on first visit and can be reopened from the demo bar or the account menu.
   - It explains the network in 30 seconds and introduces the cast.
   - It has three entry points: **Try the suggested request** (as Alex), **Explore freely**, **Network view**.
   - Reset, the account switcher and a read-only "Model and spend" section also live here. Nothing here asks for a code: the passcode page already gated the app, and the hosted app is live only.
 - **Cross-account alerts:** demo events drive a toast and a demo-bar chip such as "Northlake needs a human → switch to Helen". One click acts as that member and opens the item.
+- **Unsaved edits across a switch.** Customize's `LeaveGuard` reports unsaved edits to the demo's unsaved store as source `customize`. A switch made in another tab drops them and says so in a toast (§8).
 - **Not available:** a `useUnavailable()` hook connects every sidebar and menu item outside scope ([UI_REFERENCE.md §10](UI_REFERENCE.md)) to one dialog.
 
 ### 11.5 Walkthrough: a suggestion, not a script
@@ -564,7 +593,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - `Messaged`;
   - `Replied`;
   - **`Needs human`**, which names the member and the waiting time and shows an "Act as" button;
-  - `Closed`. The closer's summary is visible only to its own org; everyone else sees "Closed". An `expired` thread also shows as Closed.
+  - `Closed`. The closer's summary is visible only to its own org; everyone else sees "Closed: {why}", the reason from `end_reason` ("both sides went quiet", "Northlake closed it"). An `expired` thread also shows as Closed; no surface says "Expired". A reopened thread is live again.
   - The header counts orgs, threads, active threads and closed threads.
 - **Canvas:** a React Flow graph with the requester at the left or center and responders by category: characterization, synthesis, computation, fabrication, data holders, funders. Edges are threads colored by status, labeled with the latest line, with pulses for messages. Suggested recipients (§11.5) get a ring and a tag. The graph fills the canvas at a readable zoom, and the side panel doesn't dominate.
 - **Inspector:** a selected thread is shown from both sides. Each side shows its messages and what its representative saw: the parts of its frozen prompt and the answers released to it.
@@ -596,18 +625,19 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 
 ```
 /                     New chat (greeting, composer, suggested-message chip)
-/chat/:id            Claude desktop clone: chat, tool cards (outreach approval as an ask-user card, inline counterparty questions, live request status)
+/chat/:id            Claude desktop clone: chat, tool cards (the inline outreach card, inline counterparty questions, live request status)
 /chats               Chat history list
 /requests            Harmony Network Requests list page: search, All / Inbound / Outbound, and Needs you · With your team · Claude is handling · Shared with you · Done
-/requests/:threadId  Request view, full width: chat-style transcript, inline decision card (§10), one composer for notes and decisions, Details panel (Share, "What our representative saw", properties, activity)
+/requests/:threadId  Request view, full width: chat-style transcript with Closed and Reopen rows, inline decision card (§10), one Comment | Edit box, Details panel (Share, "Guidance Claude follows", "What our representative saw", properties, activity)
 /customize/harmony   Harmony settings (§9): Public profile · Instructions · Sharing · Autonomy · Team & routing
 /network             Network view (desk world by default; big run via a switch)
 ```
 
 - **Sidebar:** New chat · Search\* · Customize · Chats · **Requests** (badge) · **Network** · Projects\* · Artifacts\* · Code\* · **Needs you** · **Recent requests** · Recents · account menu with the account switcher. Items marked \* open the not-available dialog. Needs you lists every item waiting on the viewer; Recent requests lists their other request threads, newest first, at most 10, then "All requests". Requests open full width, as chats do; there is no separate inbox column.
 - **A chat's send mode** (send without review, §14) is set from the composer's + menu with `PATCH /api/conversations/{id} {send_without_confirmation}`, where null follows the org's default; a new chat carries the composer's choice in `POST /api/conversations`.
-- **Look and feel** replicate the Claude app from the Mobbin references in [UI_REFERENCE.md](UI_REFERENCE.md): its tokens, serif assistant text, composer, tool-activity lines, ask-user card, settings layout and account menu. Harmony's own surfaces borrow Linear's inbox and Railway's canvas, restyled in Claude's tokens.
-- **One EventSource per tab**, bound to the current world and member, feeds a dispatcher. The dispatcher patches the TanStack Query cache from versioned snapshots and drives toasts and badges. Demo events drive the walkthrough engine and the demo bar. On act-as, the dispatcher resets (§8).
+- **Look and feel** replicate the Claude app from the Mobbin references in [UI_REFERENCE.md](UI_REFERENCE.md): its tokens, serif assistant text, composer, tool-activity lines, settings layout and account menu. Harmony's own surfaces borrow Linear's inbox and Railway's canvas, restyled in Claude's tokens.
+- **One EventSource per tab**, bound to the current world and member, feeds a dispatcher. The dispatcher patches the TanStack Query cache from versioned snapshots and drives toasts and badges. Demo events drive the walkthrough engine and the demo bar. On act-as, the dispatcher rebuilds in place, in every tab (§8).
+- **Desktop only,** down to about 900 px wide. Below 900 px the sidebar is a rail that opens over the page; Customize shows its section column only from 1280 px. There are no phone layouts ([UI_REFERENCE.md](UI_REFERENCE.md)).
 
 ## 13. Infrastructure and deployment
 
@@ -716,6 +746,12 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - no knowledge item or document body ever appears in a representative request, except inside a released consult answer;
   - the representative's frozen prompt holds only its five parts (§2.1), and "What our representative saw" matches the request bytes;
   - the sharing check's request never contains an org record outside the draft it judges.
+  - no model request of any role (representative, answerer, steer, sharing check) holds a comment's body, for random comments from both sides (`test_no_model_request_holds_a_comment`).
+- **Edit and Reopen firewall checks** (docs/design/EDIT.md §9, REOPEN.md §10; example tests, not Hypothesis properties):
+  - the guidance writer's prompt has no thread, brief, sharing text or instructions, and guidance that adds a number, date, email, link or name nobody typed is rejected (`test_steer_facts.py`);
+  - guidance reaches the representative once, as a quoted block before the counterparty's words, with the same bytes on every attempt; "What our representative saw" lists the versions its transcript carries;
+  - in the scripted story, a member's Edit or Reopen text reaches only its own side's guidance writer, and the counterparty learns only that the conversation was reopened.
+- **Removed concepts** (`tests/unit/test_removed_r2.py`): `/redraft`, `"revise"`, `redraft_failed`, the notes section of the answerer's prompt, the clamp and the old cards' names, and the string literal `"Expired"` under `web/src` appear nowhere they shouldn't.
 - **Prompt-shape tests** (no spend):
   - consecutive request bodies for a (thread, side) are byte-prefix extensions of each other (the skill's `prefix_diff.py`);
   - no `role:"system"` message ever sits in an illegal position;
@@ -745,9 +781,12 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - a settings change mid-thread (tightening applies at the next decision);
   - an Update on a resolved escalation is rejected;
   - `close` gives the other side one last turn;
-  - a request closes once every thread has ended, and wakes internal Claude once.
+  - a request closes once every thread has ended, and wakes internal Claude once;
+  - every end stores its `end_reason`; a reopen runs its private part first, and one that fails changes nothing shared; a reopened run's tail closes the request in a new round (`end_round`), and runs after the first never signal the request workflow;
+  - an Edit's steer refuses a second steer on that side and an ended thread, and a turn already running holds or refuses sends after it.
+  - A closed workflow id starts again (`ALLOW_DUPLICATE`), against `temporal server start-dev` rather than the time-skipping server.
   - Retirement runs against `start_local` with search attributes, because the time-skipping server has no List API.
-  - CI runs `Replayer` over saved histories.
+  - CI runs `Replayer` over saved histories: `tests/fixtures/histories/r2/`, recorded by this build after `redraft` and `revise` were removed (older recordings were deleted).
 - **Grep test:** no references to offers, grants, holding messages, countersigning, approval limits, knowledge visibility, inbound filters or routing corrections remain in `src/`, `web/src/`, `migrations/`, `scenarios/` or `tests/`. Unrelated meanings, such as directory visibility and Temporal's visibility API, are exempt.
 - **Scripted model:** `ScriptedModel` plays fixed tool calls per (org, turn) and records each request body, so end-to-end tests and the Playwright smoke test run in CI deterministically and for free.
 - **Budget tests:** concurrent reservations never exceed the cap, alerts fire exactly once per threshold, a missing ledger fails closed, and a partial stream is settled.
@@ -846,6 +885,15 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
   - **"Harmony Network Request" (3.12)** in user-facing text; code identifiers keep their names.
   - **Click-through fixes (3.13):** no `close` before the counterparty has written; an empty final response ends a turn; a per-recipient ask and title; a `revise` action for held messages; a `suggested` flag for default ticks; a short question and a why per assignee; the model label from `SessionView.internal_model`; titles stored for requests and threads.
   - **Models for testing (3.14):** every local live run uses Haiku 5.5; the production mix is checked once, locally, before deploy, and `harmony run` re-prices the lineage peak at production prices.
+
+- **Feedback round 2** ([FEEDBACK_R2_PLAN.md](FEEDBACK_R2_PLAN.md), 2026-10-26; designs [EDIT.md](design/EDIT.md) and [REOPEN.md](design/REOPEN.md)):
+  - **Turns:** a representative consults before it sends; a consult after a send is refused, and it asks at the start of its next turn (§5).
+  - **Edit replaces Redraft and `revise`:** one Comment | Edit box; Edit is the `steer` Update, and the representative follows versioned guidance (§2.1, §2.2, §7). No Claude reads comments (§10). The decision card has only Decline and Approve and send, with the draft edited in place.
+  - **Closed, with a reason, and Reopen:** `expired` stays internal; every surface says Closed plus why. Either party can reopen a closed conversation, at most twice, as a new run with a fresh 16 turns and 20 h; the private part runs first (§7.1).
+  - **Everyone in the demo cast is an admin** ([SCENARIO.md](SCENARIO.md)); role behaviour is tested with a non-admin made in test fixtures.
+  - **The chat's outreach card** is inline, with ticks per recipient, the brief and asks edited in place, and an optional-reason Decline; the View more clamp (3.11) is gone.
+  - **Tabs follow a switch in place,** and a link the acting member can't open says whose it is (§8, §11.3).
+  - **Desktop only** down to about 900 px (§12).
 
 **Open:**
 1. **Closed:** the hosted demo's daily spend cap is $60 per UTC day, beside the lineage, client and global caps (§14).

@@ -20,7 +20,7 @@
  * member the way the API scopes it. Times are relative to when the module loads, so
  * "waiting 4m" reads as it would live.
  */
-import type { MemberDirectory, MemberRef, MemberView, OrgRef, SessionView } from "../api/types";
+import type { EndReason, MemberDirectory, MemberRef, MemberView, OrgRef, SessionView } from "../api/types";
 import type { FailureReason } from "../chat/failureCopy";
 import type { RequestStatusView } from "../chat/types";
 import type { NetworkEdge, NetworkNode, NetworkRequestRef, NetworkView, ParticipantStatus } from "../network/types";
@@ -178,6 +178,8 @@ function view(stage: Stage, reader: Reader): NetworkView {
       turn_count: sees(thread) ? thread.turns : null,
       close_summary: reader === null ? null : (thread.summaries?.[reader.org.id] ?? null),
       stop_reason: thread.stopReason ?? null,
+      end_reason: endReason(thread),
+      closed_by: endReason(thread) === "closed" ? "responder" : null,
       last_activity_at: minutesAgo(thread.minutes),
     }),
   );
@@ -194,6 +196,13 @@ function view(stage: Stage, reader: Reader): NetworkView {
       closed: edges.filter((edge) => ENDED.has(edge.state)).length,
     },
   };
+}
+
+/** How a thread's run ended: both sides going quiet (as a seeded expired thread reads), a stop or a close. */
+function endReason(thread: Thread): EndReason | null {
+  if (thread.state === "expired") return "quiet";
+  if (thread.state !== "closed") return null;
+  return thread.stopReason === undefined ? "closed" : "stopped";
 }
 
 function storyThread(

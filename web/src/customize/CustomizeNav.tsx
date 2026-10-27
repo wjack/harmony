@@ -33,22 +33,35 @@ function NavItem({
   );
 }
 
+/**
+ * From this width the window has room for Customize's own column beside the list and a
+ * pane of at least 640px; below it the list carries the way back.
+ */
+export const CUSTOMIZE_NAV = "(min-width: 1280px)";
+
+/** Leaves Customize for the app: the "←" before "Customize", or before "Harmony" without that column. */
+export function BackFromCustomize() {
+  const navigate = useNavigate();
+  return (
+    <IconButton
+      label="Back"
+      size="sm"
+      onClick={() => {
+        void navigate("/");
+      }}
+    >
+      <ArrowLeft size={16} strokeWidth={1.75} />
+    </IconButton>
+  );
+}
+
 /** Customize's second-level sidebar: back, Skills, Connectors and Harmony (UI_REFERENCE.md §6). */
 export function CustomizeNav() {
-  const navigate = useNavigate();
   const unavailable = useUnavailable();
   return (
-    <nav aria-label="Customize" className="hidden w-[244px] shrink-0 flex-col border-r border-border px-2 pt-2.5 lg:flex">
+    <nav aria-label="Customize" className="flex w-[244px] shrink-0 flex-col border-r border-border px-2 pt-2.5">
       <div className="flex h-8 items-center gap-1.5">
-        <IconButton
-          label="Back"
-          size="sm"
-          onClick={() => {
-            void navigate("/");
-          }}
-        >
-          <ArrowLeft size={16} strokeWidth={1.75} />
-        </IconButton>
+        <BackFromCustomize />
         <span className="text-[15px] leading-5 font-semibold text-ink">Customize</span>
       </div>
       <ul className="mt-3 flex flex-col gap-px">

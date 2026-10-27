@@ -57,7 +57,7 @@ function Transcript({ controls }: { controls: boolean }) {
             setOpen((value) => !value);
           }}
         >
-          View more
+          Show details
         </button>
       </div>
       {!atBottom && <p>Scrolled up</p>}
@@ -95,7 +95,7 @@ function layout(height: number, tops: Readonly<Record<string, number>>) {
 it("stays where the member reads when what they unfolded would scroll away", () => {
   render(<Transcript controls={false} />);
   const view = layout(2000, { toggle: 500 });
-  fireEvent.click(screen.getByRole("button", { name: "View more" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show details" }));
   view.grow(600);
   expect(view.scrollTo).not.toHaveBeenCalled();
   expect(screen.getByText("Scrolled up")).toBeTruthy();
@@ -104,7 +104,7 @@ it("stays where the member reads when what they unfolded would scroll away", () 
 it("keeps the clamped text's own top, not its toggle's, in view", () => {
   render(<Transcript controls />);
   const view = layout(2000, { toggle: 500, clamped: 200 });
-  fireEvent.click(screen.getByRole("button", { name: "View more" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show details" }));
   // The toggle would stay in view, but the text it unfolds starts above it.
   view.grow(300);
   expect(view.scrollTo).not.toHaveBeenCalled();
@@ -113,7 +113,7 @@ it("keeps the clamped text's own top, not its toggle's, in view", () => {
 it("still follows the bottom when an unfold leaves its top in view, or when content grows on its own", () => {
   render(<Transcript controls={false} />);
   const view = layout(2000, { toggle: 500 });
-  fireEvent.click(screen.getByRole("button", { name: "View more" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show details" }));
   view.grow(300);
   expect(view.scrollTo).toHaveBeenCalledTimes(1);
   // A card's data arriving: nothing was unfolded.

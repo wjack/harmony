@@ -9,6 +9,8 @@ import { PlusMenu } from "./PlusMenu";
 import { SendModeChip, type SendModeProps } from "./SendMode";
 
 const MAX_TEXTAREA_PX = 320;
+/** The longest message the API takes (`MESSAGE_MAX_CHARS` in `api/routes/conversations.py`). */
+const MESSAGE_MAX_CHARS = 20_000;
 
 /** What a parent can do to the composer: put the cursor in it. */
 export interface ComposerHandle {
@@ -25,6 +27,8 @@ export interface ComposerProps extends SendModeProps {
   /** A message is on its way: the send button dims and Enter does nothing. */
   sending?: boolean;
   autoFocus?: boolean;
+  /** False while the budget strip sits on a waiting card instead: one strip shows at a time. */
+  budgetStrip?: boolean;
   onUnavailable: (feature: string) => void;
   ref?: Ref<ComposerHandle>;
   className?: string;
@@ -34,8 +38,8 @@ export interface ComposerProps extends SendModeProps {
  * Claude's composer: a white, 20px-radius card with the textarea on top and a row with
  * `+`, the model label and the send button (a voice icon while empty). Enter sends,
  * Shift+Enter starts a new line. While a spend cap stops live turns, a strip on top
- * says which, and nothing can be sent until the budget reads `ok` again (LIVE_DEMO_PLAN
- * 3.5); the draft stays.
+ * says which (unless a waiting card carries it), and nothing can be sent until the
+ * budget reads `ok` again (LIVE_DEMO_PLAN 3.5); the draft stays.
  */
 export function Composer({
   value,
@@ -45,6 +49,7 @@ export function Composer({
   variant = "reply",
   sending = false,
   autoFocus = false,
+  budgetStrip = true,
   onUnavailable,
   sendMode,
   onSendModeChange,
@@ -88,7 +93,7 @@ export function Composer({
 
   return (
     <div className={className}>
-      {blocked !== null && <BudgetStrip line={blocked} />}
+      {blocked !== null && budgetStrip && <BudgetStrip line={blocked} />}
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -102,6 +107,7 @@ export function Composer({
           value={value}
           autoFocus={autoFocus}
           disabled={blocked !== null}
+          maxLength={MESSAGE_MAX_CHARS}
           placeholder={placeholder}
           aria-label="Write your message to Claude"
           onChange={(event) => {
@@ -113,6 +119,10 @@ export function Composer({
             variant === "home" ? "min-h-[72px]" : "min-h-[52px]",
           )}
         />
+        {value.length >= MESSAGE_MAX_CHARS && (
+          // The textarea stops at the limit (a longer paste is cut), so say why.
+          <p className="px-[22px] text-ui-xs text-muted">Messages can be up to 20,000 characters.</p>
+        )}
         <div className="flex items-center gap-1 px-4 pt-1 pb-4">
           <PlusMenu onUnavailable={onUnavailable} sendMode={sendMode} onSendModeChange={onSendModeChange} />
           <div className="flex-1" />

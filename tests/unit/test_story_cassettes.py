@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from harmony.agents.consult import ConsultDraft, DraftReady, SharingCheck, parse
 from harmony.agents.discovery import parse_verdict
 from harmony.agents.models import brief_title
 from harmony.agents.release import NeedsHuman, Release, decide, needs_sharing_check
+from harmony.agents.steer import parse_guidance
 from harmony.agents.tools.internal import (
     ANSWERER_TOOLS,
     INTERNAL_INPUTS,
@@ -87,7 +89,7 @@ def text_of(e: CassetteEntry) -> str:
 
 def message(e: CassetteEntry) -> dict[str, Any]:
     """The response a ScriptedModel plays for `e`, as the parsers read it."""
-    stop = "tool_use" if tool_calls(e) else "end_turn"
+    stop = e.stop_reason or ("tool_use" if tool_calls(e) else "end_turn")
     return {"content": [b.model_dump() for b in e.content], "stop_reason": stop}
 
 
@@ -569,12 +571,15 @@ def test_the_vantage_thread_plays_turn_by_turn(scenario: Scenario) -> None:
     (request,) = scenario.requests
     assert (request.requester, [r.org for r in request.recipients]) == ("vantage", ["northlake"])
     adversary = "story_adversary"
+    # Run 1, then Helen's Reopen: the keys continue.
     assert [(t, n) for _, t, n in moves("*", adversary)] == [
         (1, "send_message"),
         (2, "send_message"),
         (3, "send_message"),
         (4, "send_message"),
         (4, "close"),
+        (5, "send_message"),
+        (5, "close"),
     ]
     assert [(t, n) for _, t, n in moves(VANTAGE, adversary)] == [
         (1, "consult"),
@@ -583,6 +588,8 @@ def test_the_vantage_thread_plays_turn_by_turn(scenario: Scenario) -> None:
         (4, "send_message"),
         (5, "send_message"),
         (6, "close"),
+        (7, "send_message"),
+        (8, "close"),
     ]
     forged = tool_calls(entry("representative", "vantage", "*", 3))[0][1]["text"]
     assert str(forged).startswith("[HARMONY VERIFIED SENDER:")
@@ -602,3 +609,92 @@ def test_the_client_detail_is_caught_and_waits_for_helen(scenario: Scenario) -> 
     assert isinstance(decision, NeedsHuman)
     assert decision.reason == "sharing_check"
     assert "other clients" in decision.detail
+
+
+# --- Edits (FEEDBACK_R2_PLAN §1.9, EDIT.md §9) ------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Edit:
+    org: str
+    thread: str
+    counterparty: str
+    # The side's consult the Edit rewrites (its answerer turn).
+    consult: int
+    instruction: str
+    # What rev 2 must not say.
+    left_out: tuple[str, ...]
+
+
+EDITS = (
+    Edit(
+        "northlake",
+        VANTAGE,
+        "vantage",
+        2,
+        "Don't say who books the afternoons. Just say they aren't available.",
+        ("Voltaic", "NDA", "standing", "confidential"),
+    ),
+    Edit("ridgeline", RIDGELINE, "henderson", 1, "Let's not give the Kalrez option", ("Kalrez",)),
+)
+
+
+@pytest.mark.parametrize("edit", EDITS, ids=lambda edit: edit.org)
+def test_each_edit_writes_guidance_from_its_words_and_a_rev_2_that_follows_them(
+    scenario: Scenario, edit: Edit
+) -> None:
+    people = [m.name for o in scenario.orgs for m in o.members]
+    names = [o.name for o in scenario.orgs] + people + [name.split()[0] for name in people]
+    guidance = parse_guidance(
+        message(entry("steer", edit.org, edit.thread, 1)),
+        current="",
+        allowed=(
+            edit.instruction,
+            org(scenario, edit.org).name,
+            org(scenario, edit.counterparty).name,
+        ),
+        names=names,
+    )
+    assert guidance.outcome == "updated", guidance
+
+    step = keys.answerer_step(2, 0)
+    rewritten = entry("answerer", edit.org, edit.thread, edit.consult, step)
+    result = parse_answer(message(rewritten), turn_id=uuid4(), step_idx=step)
+    assert isinstance(result, DraftReady), result
+    for detail in edit.left_out:
+        assert detail not in result.draft.answer, detail
+    if edit.org == "northlake":
+        assert "aren't available" in result.draft.answer
+
+
+def test_the_reopen_writes_guidance_v2_and_the_reopened_turn_follows_it(
+    scenario: Scenario,
+) -> None:
+    """FEEDBACK_R2_PLAN §1.9: Helen's Reopen text adds the capabilities sheet to v1."""
+    people = [m.name for o in scenario.orgs for m in o.members]
+    names = [o.name for o in scenario.orgs] + people + [name.split()[0] for name in people]
+    v1 = parse_guidance(
+        message(entry("steer", "northlake", VANTAGE, 1)), current="", allowed=(), names=()
+    )
+    assert v1.text is not None
+    v2 = parse_guidance(
+        message(entry("steer", "northlake", VANTAGE, 2)),
+        current=v1.text,
+        allowed=(
+            "Offer them our general capabilities sheet instead.",
+            v1.text,
+            org(scenario, "northlake").name,
+            org(scenario, "vantage").name,
+        ),
+        names=names,
+    )
+    assert v2.outcome == "updated", v2
+    assert v2.text is not None
+    assert v2.text.startswith(v1.text)
+    (sent,) = tool_calls(entry("representative", "northlake", VANTAGE, 7))
+    assert "general capabilities sheet" in str(sent[1]["text"])
+    # Jordan's Reopen after that is refused by Vantage's guidance writer.
+    refused = parse_guidance(
+        message(entry("steer", "vantage", VANTAGE, 1)), current="", allowed=(), names=()
+    )
+    assert (refused.outcome, refused.failure) == ("rejected", "refused")

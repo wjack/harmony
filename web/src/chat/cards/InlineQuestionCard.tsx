@@ -2,7 +2,7 @@ import { CircleAlert, MessageCircleQuestion } from "lucide-react";
 import { useId, useState } from "react";
 
 import { Button } from "../../shell/ui/Button";
-import { OrgAvatar, Pill } from "../parts";
+import { OrgAvatar, Pill, type PillTone } from "../parts";
 import type { InlineQuestionItem } from "../types";
 
 export interface InlineQuestionCardProps {
@@ -15,12 +15,17 @@ export interface InlineQuestionCardProps {
 }
 
 /** How a settled item reads: what the member did, and what the words under it are. */
-const SETTLED = {
+interface Settled {
+  pill: string;
+  tone: PillTone;
+  caption: string | null;
+}
+
+const SETTLED: Record<NonNullable<InlineQuestionItem["action"]>, Settled> = {
   approve: { pill: "Answered", tone: "success", caption: null },
   decline: { pill: "Declined", tone: "muted", caption: "Your note for the representative" },
   take_over: { pill: "You replied directly", tone: "success", caption: "What you sent" },
-  revise: { pill: "Sent back", tone: "muted", caption: "Your note for the representative" },
-} as const;
+};
 
 /**
  * A consult the member's own representative routed to them, in the chat the request
@@ -57,6 +62,8 @@ export function InlineQuestionCard({ item, busy, blocked, error, onAnswer }: Inl
           </Pill>
         ) : settled !== null ? (
           <Pill tone={settled.tone}>{settled.pill}</Pill>
+        ) : item.status === "resolved" ? (
+          <Pill tone="muted">Resolved</Pill>
         ) : (
           <Pill tone="muted">No longer needed</Pill>
         )}

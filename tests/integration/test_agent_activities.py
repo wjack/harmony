@@ -8,6 +8,8 @@ models built here:
   either direction, on new turns only; a retried call carries the same notice (3.10).
 - A representative's bare text after a code-written "nothing new" stays private, while
   text answering a message goes out (3.13 E3).
+- A consult after the turn sent a message is refused: the send is the turn's one effect
+  (FEEDBACK_R2_PLAN decision 1).
 - A background org's chat streams `stream.chat_delta` like a featured one's (3.1).
 - A request's end is noted to internal Claude once, however often a failed turn's
   updates are handed on.
@@ -33,10 +35,11 @@ from temporalio.testing import ActivityEnvironment
 
 from harmony.agents.keys import chat_key
 from harmony.agents.models import EscalationResolution
-from harmony.agents.runtime import MessageHeld, MessageSent, TurnIncomplete
+from harmony.agents.runtime import MessageHeld, MessageSent
 from harmony.db.models import (
     Card,
     ChatMessage,
+    Consult,
     Escalation,
     Event,
     Member,
@@ -505,12 +508,21 @@ async def test_a_closed_note_handed_on_after_a_failed_turn_goes_out_once(
 
 
 async def test_bare_text_after_nothing_new_stays_private(db_sessionmaker: Sessionmaker) -> None:
+    """Only `send_message` reaches the counterparty (section 5 bug 2). After "nothing
+    new", plain text ends the turn; answering their message, the model is told it wasn't
+    sent, and sends it."""
     sm = db_sessionmaker
     world_id = await seeded_world(sm)
     text = "We're still checking the Nov 4 slot."
+    send = ToolUseBlock(type="tool_use", name="send_message", input={"text": text})
     entries = _replies("northlake", "representative", THREAD, range(1, 2), text)
     entries.update(
-        dict([_entry("northlake", "representative", THREAD, 1, 1, ThinkingBlock(type="thinking"))])
+        dict(
+            [
+                _entry("northlake", "representative", THREAD, 1, 1, send),
+                _entry("northlake", "representative", THREAD, 1, 2, ThinkingBlock(type="thinking")),
+            ]
+        )
     )
 
     def agents() -> AgentActivities:
@@ -603,6 +615,53 @@ async def test_text_after_a_refused_close_is_never_sent_or_streamed(
     assert written == 0
 
 
+async def test_a_consult_after_a_send_is_refused_and_the_turn_ends_with_the_send(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    """Decision 1: Northlake replies, then consults in the same turn. The consult is
+    refused and writes nothing, so the turn's one effect is the message and Henderson
+    moves next; `harmony run` counts the refusal."""
+    sm = db_sessionmaker
+    world_id = await seeded_world(sm)
+    send = ToolUseBlock(
+        type="tool_use", name="send_message", input={"text": "Yes, we can run it by Nov 6."}
+    )
+    consult = ToolUseBlock(
+        type="tool_use", name="consult", input={"question": "Tell Helen we said yes."}
+    )
+    entries = dict(
+        [
+            _entry("northlake", "representative", THREAD, 1, 0, send),
+            _entry("northlake", "representative", THREAD, 1, 1, consult),
+            _entry("northlake", "representative", THREAD, 1, 2, TextBlock(type="text", text="Ok.")),
+        ]
+    )
+    turn = await _thread_turn(sm, world_id)
+
+    result = await _env().run(_agents(sm, _Recording(entries), _Publisher()).rep_turn, turn)
+
+    assert result.stop == "end_turn"
+    assert [type(effect) for effect in result.effects] == [MessageSent]
+    async with sm() as session:
+        thread = await session.get(Thread, (world_id, turn.thread_id))
+        assert thread is not None
+        assert thread.side_to_move == "requester"
+        bodies = await session.scalars(
+            select(ThreadMessage.body)
+            .where(ThreadMessage.world_id == world_id, ThreadMessage.thread_id == turn.thread_id)
+            .order_by(ThreadMessage.seq)
+        )
+        assert list(bodies)[1:] == ["Yes, we can run it by Nov 6."]
+        asked = await session.scalar(
+            select(func.count())
+            .select_from(Consult)
+            .where(Consult.world_id == world_id, Consult.thread_id == turn.thread_id)
+        )
+        assert asked == 0
+    checks = await engine_checks(sm, world_id, SCENARIO)
+    assert (checks.consults_after_send, checks.closes_after_refused_consult) == (1, 0)
+
+
 ACK: Final = "Understood. I won't send that."
 
 
@@ -625,7 +684,8 @@ async def test_text_after_a_declined_held_message_answers_nobody(
     """In Ask, a held message declined without a reason leaves nothing to answer: text
     that acknowledges it stays private, and an empty answer is a quiet turn, rather than
     asking Helen to decline a new held message again and again. A reason is what the
-    representative may say, so text after it is still a message, held for review."""
+    representative may say: text after it is never sent, and once told so the model
+    sends a message, held for review."""
     sm = db_sessionmaker
     world_id = await seeded_world(sm)
     async with sm() as session, session.begin():
@@ -642,6 +702,9 @@ async def test_text_after_a_declined_held_message_answers_nobody(
             _entry("northlake", "representative", THREAD, 2, 0, *answer),
         ]
     )
+    if holds:
+        sends = ToolUseBlock(type="tool_use", name="send_message", input={"text": reason})
+        entries.update([_entry("northlake", "representative", THREAD, 2, 1, sends)])
     agents = _agents(sm, _Recording(entries), _Publisher())
     opened = await _env().run(agents.rep_turn, first)
     (held,) = opened.effects
@@ -705,26 +768,31 @@ async def test_text_after_a_declined_held_message_answers_nobody(
 async def test_an_empty_answer_to_nothing_new_is_a_quiet_turn(
     db_sessionmaker: Sessionmaker, blocks: list[ScriptedBlock]
 ) -> None:
-    """The thread counts it as a silent turn (E3) instead of failing as a model error; an
-    empty answer to the counterparty's message still fails. Thinking alone says nothing,
-    and `harmony run`'s engine checks count it with the empty ones."""
+    """The thread counts it as a silent turn (E3). An empty answer to the counterparty's
+    message is asked once more (`EMPTY_NUDGE`), and a second empty answer is a quiet
+    turn too, not a model error (section 5 bug 1). Thinking alone says nothing, and
+    `harmony run`'s engine checks count it with the empty ones."""
     sm = db_sessionmaker
     world_id = await seeded_world(sm)
-    entries = dict([_entry("northlake", "representative", THREAD, 1, 0, *blocks)])
+    entries = dict(
+        _entry("northlake", "representative", THREAD, 1, step, *blocks) for step in (0, 1)
+    )
 
     quiet = await _env().run(
         _agents(sm, _Recording(entries), _Publisher()).rep_turn,
         await _thread_turn(sm, world_id, deliver_after_seq=1),
     )
-    with pytest.raises(TurnIncomplete):
-        await _env().run(
-            _agents(sm, _Recording(entries), _Publisher()).rep_turn,
-            await _thread_turn(sm, world_id),
-        )
+    # The nudged call sends the notices after the nudge, not after the input, so it
+    # can't extend the first call byte for byte: the real API only misses the cache.
+    nudged = await _env().run(
+        _agents(sm, _Recording(entries, strict_contract=False), _Publisher()).rep_turn,
+        await _thread_turn(sm, world_id),
+    )
 
     assert (quiet.stop, quiet.effects, quiet.owed) == ("end_turn", [], None)
+    assert (nudged.stop, nudged.next_step, nudged.effects) == ("end_turn", 2, [])
     checks = await engine_checks(sm, world_id, SCENARIO)
-    assert (checks.empty_turn_failures, checks.empty_end_turns_handled) == (1, 1)
+    assert (checks.empty_turn_nudges, checks.empty_end_turns_handled) == (1, 2)
 
 
 @pytest.mark.parametrize(
@@ -739,7 +807,7 @@ async def test_an_empty_answer_to_a_sent_card_ends_the_resumed_turn(
 ) -> None:
     """Resumed on its own card once the request went out, the turn has nothing it must
     answer; a rejection's typed feedback still needs a reply, so an empty answer to it
-    fails."""
+    is asked once more, and a second empty one ends the turn."""
     sm = db_sessionmaker
     world_id = await seeded_world(sm)
     conversation_id = await start_chat(sm, world_id)
@@ -763,21 +831,16 @@ async def test_an_empty_answer_to_a_sent_card_ends_the_resumed_turn(
     turn = _chat_turn(world_id, conversation_id, 1, card=resumed).model_copy(
         update={"turn_id": card.turn_id}
     )
-    agents = _agents(
-        sm, _Recording(dict([_entry("henderson", "internal", CHAT, 1, 1)])), _Publisher()
-    )
+    entries = dict(_entry("henderson", "internal", CHAT, 1, step) for step in (1, 2))
+    agents = _agents(sm, _Recording(entries), _Publisher())
 
-    if status == "rejected":
-        with pytest.raises(TurnIncomplete):
-            await _env().run(agents.internal_turn, turn)
-    else:
-        ended = await _env().run(agents.internal_turn, turn)
-        assert (ended.stop, ended.next_step, ended.effects) == ("end_turn", 2, [])
+    ended = await _env().run(agents.internal_turn, turn)
 
+    nudged = status == "rejected"
+    assert (ended.stop, ended.next_step, ended.effects) == ("end_turn", 2 + nudged, [])
     # `harmony run`'s engine checks split it the same way, though it came at step 1.
     checks = await engine_checks(sm, world_id, SCENARIO)
-    failed = status == "rejected"
-    assert (checks.empty_turn_failures, checks.empty_end_turns_handled) == (failed, not failed)
+    assert (checks.empty_turn_nudges, checks.empty_end_turns_handled) == (nudged, 1)
 
 
 # --- Streaming in every org (3.1) -----------------------------------------------------------

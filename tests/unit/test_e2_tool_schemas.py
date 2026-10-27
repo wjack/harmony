@@ -22,6 +22,7 @@ from harmony.agents.runtime import PerformativeName
 from harmony.agents.tools.internal import (
     ANSWERER_TOOLS,
     AUTO_SEND_MAX_RECIPIENTS,
+    GET_REQUEST_STATUS_TOOL,
     INTERNAL_INPUTS,
     INTERNAL_TOOLS,
     SEND_NETWORK_REQUEST_TOOL,
@@ -29,7 +30,15 @@ from harmony.agents.tools.internal import (
     RecipientInput,
     SendNetworkRequestInput,
 )
-from harmony.agents.tools.rep import CLOSE_TOOL, REP_INPUTS, REP_TOOLS, SEND_MESSAGE_TOOL
+from harmony.agents.tools.rep import (
+    CLOSE_TOOL,
+    CONSULT_AFTER_SEND,
+    CONSULT_TOOL,
+    NOT_REPLIED,
+    REP_INPUTS,
+    REP_TOOLS,
+    SEND_MESSAGE_TOOL,
+)
 from harmony.temporal.workflows.payloads import NetworkRequestInput
 
 TOOLS: Final = [(tool, REP_INPUTS) for tool in REP_TOOLS] + [
@@ -132,7 +141,18 @@ def test_the_request_tool_is_a_harmony_network_request_in_either_send_mode() -> 
     # Mode-neutral (3.10): the tool bytes never depend on the chat's setting.
     assert "in a chat set to send without review it goes out at once" in description
     assert "The result says which" in description
-    assert "Send one request per call." in description
+    assert "One need is one request" in description
+
+
+def test_the_status_tool_has_nothing_to_check_right_after_a_send() -> None:
+    """Decision 7. Not "only when asked": the duplicate guard points Claude at it."""
+    description = str(GET_REQUEST_STATUS_TOOL["description"])
+    assert (
+        "Right after a request goes out there's nothing to check, and no need to promise "
+        "to check back: you're told in the chat when something needs the member and when "
+        "every conversation has ended." in description
+    )
+    assert "only when" not in description
 
 
 def test_a_request_sent_without_review_opens_every_conversation_at_once() -> None:
@@ -143,11 +163,26 @@ def test_a_request_sent_without_review_opens_every_conversation_at_once() -> Non
 def test_the_representative_is_told_how_to_wait_and_what_a_message_is() -> None:
     """3.13 E1, E3."""
     close = str(CLOSE_TOOL["description"])
-    assert close.startswith("End the conversation for good, for both sides")
+    assert close.startswith("End the conversation for both sides")
     assert "Not for waiting: to wait for their reply, stop calling tools." in close
+    # A member can reopen a closed conversation (decision 15).
+    assert "for good" not in close
+    assert "for good" not in NOT_REPLIED
     send = str(SEND_MESSAGE_TOOL["description"])
     assert "They read the text exactly as written." in send
     assert "Never send notes about the conversation" in send
+
+
+def test_the_representative_consults_before_it_replies() -> None:
+    """Decision 1: a consult after a send is refused, and the tool says when to ask."""
+    consult = str(CONSULT_TOOL["description"])
+    assert (
+        "Consult before you reply: once you've sent a message this turn, it's the "
+        "counterparty's move, so ask at the start of your next turn, after theirs." in consult
+    )
+    refusal = CONSULT_AFTER_SEND.format(counterparty="Northlake")
+    assert refusal.startswith("Not asked: your message already went out, so it's Northlake's")
+    assert "Don't close. End your turn now: stop calling tools." in refusal
 
 
 def _objects(schema: Any) -> Iterator[dict[str, Any]]:

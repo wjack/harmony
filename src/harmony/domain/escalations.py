@@ -11,9 +11,10 @@ member of the escalation's org may resolve or reassign it (`NotInOrg`). Approvin
 releases the answer, or sends the message, to its one thread; nothing is remembered
 for other threads (§4.5).
 
-Drafts (`escalation_drafts`) carry their own `draft_rev`; a redraft ("Ask Claude to
-redraft") appends a rev and bumps `current_draft_rev` without touching the resolution.
-A redraft that writes no rev says so (`redraft_failed`), since nothing else would.
+Drafts (`escalation_drafts`) carry their own `draft_rev`; a steer's rewrite (an Edit)
+appends a rev and bumps `current_draft_rev` without touching the resolution. Rev 1 is
+what the answerer or the representative wrote (`first_draft`); a resolution names the
+rev the member saw (`resolved_draft`). A steer reports a rewrite that wrote nothing.
 
 Assignees come from `routing.apply_route` (the answerer's `route`, validated against
 the org's members), falling back to the org's default assignee. Assigning gives each
@@ -60,7 +61,6 @@ from harmony.events.schemas import (
     DemoNeedsHuman,
     EntitySnapshot,
     EventScope,
-    RedraftFailed,
     ThreadAccessChanged,
 )
 
@@ -343,18 +343,6 @@ async def cancel(uow: UnitOfWork, escalation_id: UUID, *, reason: str) -> Escala
     return escalation
 
 
-async def redraft_failed(uow: UnitOfWork, escalation_id: UUID, draft_rev: int) -> None:
-    """Tell the members who see the item that redraft `draft_rev` wrote nothing, so
-    they stop waiting for it (`RedraftFailed`). Nobody waits on a resolved or cancelled
-    item."""
-    escalation = await repo.get_required(uow.session, Escalation, uow.world_id, escalation_id)
-    if escalation.status != "open":
-        return
-    uow.add_event(
-        RedraftFailed(escalation_id=escalation_id, draft_rev=draft_rev), scope_of(escalation)
-    )
-
-
 def escalation_status(value: str) -> EscalationStatus:
     if value == "open" or value == "resolved" or value == "cancelled":
         return value
@@ -394,6 +382,11 @@ async def resolved_draft(
     if draft is None:
         raise ValueError(f"escalation {escalation.id} has no draft rev {rev}")
     return draft
+
+
+async def first_draft(session: AsyncSession, escalation: Escalation) -> EscalationDraft | None:
+    """Rev 1: what the answerer or the representative wrote, before any rewrite."""
+    return await session.get(EscalationDraft, (escalation.world_id, escalation.id, 1))
 
 
 async def current_draft(session: AsyncSession, escalation: Escalation) -> EscalationDraft | None:
@@ -523,11 +516,11 @@ __all__ = [
     "draft_entity_id",
     "drafts",
     "escalation_status",
+    "first_draft",
     "held_message_id",
     "locked",
     "open",
     "reassign",
-    "redraft_failed",
     "resolve",
     "resolved_draft",
     "route_of",

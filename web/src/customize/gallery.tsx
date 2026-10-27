@@ -1,7 +1,7 @@
 /** Customize → Harmony's gallery sections (/__gallery), over fixtures/customize.ts. */
 import { useSession } from "../app/queries";
 import { customizeRoutes, type CustomizeFixtureOptions } from "../fixtures/customize";
-import { members, orgs } from "../fixtures/shell";
+import { members, nonAdmin, orgs } from "../fixtures/shell";
 import type { MemberView } from "../api/types";
 import type { GallerySection } from "../gallery/types";
 import { ShellFrame } from "../shell/AppLayout";
@@ -70,9 +70,9 @@ export default [
   ),
   page(
     "Harmony settings: send without review, view only",
-    "Raj isn't an admin of Northlake: he sees the default and that he can change it for one chat, but not the setting itself.",
+    "Raj as a member rather than an admin (everyone in the demo is an admin; this is a fixture): he sees the default and that he can change it for one chat, but not the setting itself. The radio lists are muted.",
     "autonomy",
-    members.raj,
+    nonAdmin(members.raj),
     { patch: { send_without_confirmation: true } },
   ),
   page(
@@ -89,9 +89,16 @@ export default [
   ),
   page(
     "Harmony settings: view only",
-    "Alex isn't an admin of Henderson Lab, so every pane is read-only.",
+    "Alex as a member rather than an admin (a fixture): every pane is read-only, the fields are muted, and the note naming the admins stays pinned above the pane as it scrolls.",
     "profile",
-    members.alex,
+    nonAdmin(members.alex),
+  ),
+  page(
+    "Harmony settings: sharing, view only, from a request",
+    "Raj as a member, opened from \"See what you share with Henderson Lab\": a viewer can't trust them, so the pane doesn't suggest it.",
+    "sharing",
+    nonAdmin(members.raj),
+    { query: `&org=${orgs.henderson.id}` },
   ),
   page(
     "Harmony settings: save conflict",

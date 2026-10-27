@@ -210,7 +210,8 @@ async def _snapshot(session: AsyncSession, row: Snapshotable) -> EntitySnapshot:
     state = sa_inspect(row, raiseerr=True)
     if state.deleted or state.was_deleted or state.transient:
         raise ValueError(f"cannot snapshot a {type(row).__name__} that is not persisted")
-    columns = [attr.key for attr in state.mapper.column_attrs if attr.key != "world_id"]
+    omitted = row.snapshot_omits | {"world_id"}
+    columns = [attr.key for attr in state.mapper.column_attrs if attr.key not in omitted]
     unloaded = state.unloaded.intersection(columns)
     if unloaded:
         await session.refresh(row, attribute_names=sorted(unloaded))

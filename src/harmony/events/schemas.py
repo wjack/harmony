@@ -20,7 +20,7 @@ the union is exported into the OpenAPI document so the web client is typed end t
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -52,6 +52,8 @@ EntityType = Literal[
     "thread_message",
     "internal_note",
     "escalation_draft",
+    "steer",
+    "rep_guidance",
 ]
 ENTITY_TYPES: tuple[EntityType, ...] = (
     "org",
@@ -70,12 +72,18 @@ ENTITY_TYPES: tuple[EntityType, ...] = (
     "thread_message",
     "internal_note",
     "escalation_draft",
+    "steer",
+    "rep_guidance",
 )
 APPEND_ONLY_ENTITY_TYPES: tuple[EntityType, ...] = (
     "thread_message",
     "internal_note",
     "escalation_draft",
+    "rep_guidance",
 )
+# What an org tells its own Claude (EDIT.md §6 item 7): the network view's stream never
+# carries these, though it receives every other non-session scope.
+LENS_HIDDEN_ENTITY_TYPES: Final[tuple[EntityType, ...]] = ("steer", "rep_guidance")
 
 
 class _Payload(BaseModel):
@@ -223,16 +231,6 @@ class DemoNeedsHuman(DemoNotice):
         return self
 
 
-class RedraftFailed(_Payload):
-    """A redraft ("Ask Claude to redraft") ended without writing `draft_rev`: the
-    answerer's call failed or returned no draft. Scoped like its escalation, so the
-    members looking at the item stop waiting for that rev and can ask again."""
-
-    type: Literal["escalation.redraft_failed"] = "escalation.redraft_failed"
-    escalation_id: UUID
-    draft_rev: int = Field(ge=1)
-
-
 class HelloTick(_Payload):
     """Emitted by the P0 `HelloWorkflow` to prove the worker → outbox → SSE path."""
 
@@ -302,7 +300,6 @@ DurableEvent = Annotated[
     | EntitySnapshot
     | DemoNotice
     | DemoNeedsHuman
-    | RedraftFailed
     | HelloTick,
     Field(discriminator="type"),
 ]
@@ -323,7 +320,6 @@ HarmonyEvent = Annotated[
     | EntitySnapshot
     | DemoNotice
     | DemoNeedsHuman
-    | RedraftFailed
     | HelloTick
     | StreamDelta
     | StreamTyping
@@ -340,7 +336,6 @@ EventType = Literal[
     "entity.snapshot",
     "demo.notice",
     "demo.needs_human",
-    "escalation.redraft_failed",
     "hello.tick",
     "stream.delta",
     "stream.typing",

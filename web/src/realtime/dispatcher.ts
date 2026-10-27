@@ -17,12 +17,16 @@
  *   another world moves the epoch without an event this stream may see; the server ends
  *   the stream and refuses the browser's reconnect (409, the URL's `epoch` is stale), so
  *   it lands in the "gives up" path above and the fresh snapshot shows the new epoch.
- * - **Act-as** (`session.member_changed`, or a successful act-as in this tab): close the
- *   stream, tell the visitor's other tabs to reload, and take a fresh snapshot. The
+ * - **Act-as** (`session.member_changed`, a successful act-as or reset in this tab, or
+ *   another tab's word): close the stream, tell the visitor's other tabs, and take a
+ *   fresh snapshot. Every tab follows in place; none reloads, which would race the
+ *   switching tab's own navigation. `onMemberChanged` listeners hear of it first, so the
+ *   page can leave the previous member's own item before the new member renders. The
  *   previous member's cache stays up meanwhile, so the frame keeps showing them rather
  *   than an empty shell; it is cleared in the same synchronous step that primes the new
  *   snapshot and bumps `generation`, so nothing fetched during the switch survives it.
- *   The epoch makes this happen once per switch.
+ *   The session and its epoch make this happen once per switch. A tab whose session is
+ *   gone forgets its epoch, so a new session's first switch (epoch 1) is still news.
  * - **Locked** (the passcode gate refused a snapshot or any other request): terminal.
  *   Nothing retries, the cache goes, the visitor's other tabs reload (and so lock too),
  *   and the tab leaves for the passcode page, which brings it back once unlocked.
@@ -95,6 +99,20 @@ export interface RealtimeState {
   failures: number;
 }
 
+/** Who the session acts as after a switch, as the act-as response or event names it. */
+export interface SwitchedTo {
+  sessionId: string;
+  memberId: string;
+}
+
+/** A switch this tab is following, heard before it rebuilds as the new member. */
+export interface MemberChange {
+  epoch: number;
+  /** Null when only the epoch is known: a refused stream's snapshot showed it moved. */
+  memberId: string | null;
+}
+
+export type MemberChangeListener = (change: MemberChange) => void;
 export type DemoListener = (event: DemoEvent, envelope: EventEnvelope) => void;
 export type StreamListener = (event: StreamEvent, envelope: EventEnvelope) => void;
 export type EnvelopeListener = (envelope: EventEnvelope) => void;
@@ -106,8 +124,9 @@ export interface DispatcherOptions {
   /** A fresh snapshot to open the stream from; null when there is no session yet. */
   snapshot: () => Promise<StreamSnapshot | null>;
   openEventSource?: (url: string) => EventSourceLike;
-  /** Null where BroadcastChannel is unavailable; other tabs then aren't reloaded. */
+  /** Null where BroadcastChannel is unavailable; other tabs then hear only their streams. */
   openChannel?: (name: string) => ChannelLike | null;
+  /** Reloads the page: how a tab meets the passcode gate after another tab locked. */
   reload?: () => void;
   streamUrl?: (after: number | null, epoch: number | null) => string;
   /** Delay before retry number `attempt` (0-based) of a failed snapshot or stream. */
@@ -121,10 +140,12 @@ export interface DispatcherOptions {
 /** The visitor's tabs share this BroadcastChannel (same origin, so same session). */
 export const TAB_CHANNEL = "harmony.session";
 
-/** What one tab tells the others: the acting member changed under `epoch`. */
+/** What one tab tells the others: `sessionId`'s acting member changed under `epoch`. */
 export interface MemberChangedMessage {
   type: "member_changed";
+  sessionId: string;
   epoch: number;
+  memberId: string | null;
 }
 
 /** What one tab tells the others: Harmony is locked, so nothing they hold is usable. */
@@ -182,10 +203,12 @@ function leavePage(url: string): void {
 
 function parseTabMessage(data: unknown): TabMessage | null {
   if (typeof data !== "object" || data === null) return null;
-  const message = data as { type?: unknown; epoch?: unknown };
+  const message = data as { type?: unknown; sessionId?: unknown; epoch?: unknown; memberId?: unknown };
   if (message.type === "locked") return { type: "locked" };
-  if (message.type !== "member_changed" || typeof message.epoch !== "number") return null;
-  return { type: "member_changed", epoch: message.epoch };
+  const { sessionId, epoch, memberId } = message;
+  if (message.type !== "member_changed" || typeof sessionId !== "string" || typeof epoch !== "number") return null;
+  if (typeof memberId !== "string" && memberId !== null) return null;
+  return { type: "member_changed", sessionId, epoch, memberId };
 }
 
 function notify<A extends unknown[]>(listeners: Iterable<(...args: A) => void>, ...args: A): void {
@@ -212,6 +235,7 @@ export class RealtimeDispatcher {
   readonly #here: () => string;
   readonly #leave: (url: string) => void;
 
+  readonly #memberListeners = new Set<MemberChangeListener>();
   readonly #demoListeners = new Set<DemoListener>();
   readonly #lockListeners = new Set<LockListener>();
   readonly #streamListeners = new Set<StreamListener>();
@@ -269,16 +293,14 @@ export class RealtimeDispatcher {
 
   /**
    * The acting member changed under `epoch`: from `session.member_changed` on the
-   * stream, or from a successful act-as in this tab (whichever comes first).
+   * stream, or from a successful act-as or reset in this tab (whichever comes first).
+   * `to` names the session and member when the caller knows them; without it the
+   * change is taken to be in this tab's session.
    */
-  memberChanged(epoch: number): Promise<void> {
-    if (this.state.status === "locked") return Promise.resolve();
-    const current = this.state.epoch;
-    if (current !== null && epoch <= current) return Promise.resolve();
-    this.#set({ epoch });
-    const message: MemberChangedMessage = { type: "member_changed", epoch };
-    this.#channel?.postMessage(message);
-    return this.#reset();
+  memberChanged(epoch: number, to: SwitchedTo | null = null): Promise<void> {
+    const sessionId = to?.sessionId ?? this.state.sessionId;
+    if (!this.#isNews(sessionId, epoch)) return Promise.resolve();
+    return this.#announce(sessionId, epoch, to?.memberId ?? null);
   }
 
   /** Rebuild from a fresh snapshot without an identity change (the world was retired). */
@@ -305,6 +327,17 @@ export class RealtimeDispatcher {
     const message: LockedMessage = { type: "locked" };
     this.#channel?.postMessage(message);
     this.#leave(gatePath(this.#here()));
+  }
+
+  /**
+   * Called once per switch this tab follows, from whichever source reports it first,
+   * before the tab rebuilds: the previous member's cache and route are still up.
+   */
+  onMemberChanged(listener: MemberChangeListener): Unsubscribe {
+    this.#memberListeners.add(listener);
+    return () => {
+      this.#memberListeners.delete(listener);
+    };
   }
 
   /** Called as the tab locks, after the cache is cleared: for state kept outside it. */
@@ -338,6 +371,29 @@ export class RealtimeDispatcher {
   }
 
   // --- lifecycle ----------------------------------------------------------------------
+
+  /** Whether `epoch` in `sessionId` is a switch this tab hasn't followed yet. */
+  #isNews(sessionId: string | null, epoch: number): boolean {
+    const current = this.state;
+    if (current.status === "locked") return false;
+    // Epochs count within one session: another session's are all news.
+    return sessionId !== current.sessionId || current.epoch === null || epoch > current.epoch;
+  }
+
+  /** Follow a switch this tab heard of first, and tell the visitor's other tabs. */
+  #announce(sessionId: string | null, epoch: number, memberId: string | null): Promise<void> {
+    this.#set({ sessionId, epoch });
+    if (sessionId !== null) {
+      const message: MemberChangedMessage = { type: "member_changed", sessionId, epoch, memberId };
+      this.#channel?.postMessage(message);
+    }
+    return this.#follow(epoch, memberId);
+  }
+
+  #follow(epoch: number, memberId: string | null): Promise<void> {
+    notify(this.#memberListeners, { epoch, memberId });
+    return this.#reset();
+  }
 
   #reset(): Promise<void> {
     this.#closeSource();
@@ -375,7 +431,8 @@ export class RealtimeDispatcher {
       this.#queryClient.clear();
     }
     if (snapshot === null) {
-      this.#set({ status: "no-session", sessionId: null, lastSeq: null });
+      // The session is gone, and its epoch with it: a new session counts from 0 again.
+      this.#set({ status: "no-session", sessionId: null, epoch: null, lastSeq: null });
       return;
     }
     if (snapshot.cursor === null) {
@@ -438,21 +495,24 @@ export class RealtimeDispatcher {
     }
     if (run !== this.#run) return;
 
-    const { epoch, sessionId } = this.state;
-    if (snapshot !== null && snapshot.sessionId === sessionId && epoch !== null) {
-      if (snapshot.epoch === epoch) {
-        // Same session, same member: the cache is still valid and nothing is skipped.
-        snapshot.prime?.();
-        this.#open();
-        return;
-      }
-      if (snapshot.epoch > epoch) {
-        // A switch this stream couldn't report (another world's act-as, a reset).
-        await this.memberChanged(snapshot.epoch);
-        return;
-      }
+    if (snapshot === null) {
+      // No session any more: nothing cached belongs to anyone.
+      await this.#reset();
+      return;
     }
-    // No session any more, or a different one: nothing cached belongs to it.
+    const { epoch, sessionId } = this.state;
+    if (snapshot.sessionId === sessionId && snapshot.epoch === epoch) {
+      // Same session, same member: the cache is still valid and nothing is skipped.
+      snapshot.prime?.();
+      this.#open();
+      return;
+    }
+    if (this.#isNews(snapshot.sessionId, snapshot.epoch)) {
+      // A switch this stream couldn't report: another world's act-as, a reset, or a
+      // session started in another tab.
+      await this.#announce(snapshot.sessionId, snapshot.epoch, null);
+      return;
+    }
     await this.#reset();
   }
 
@@ -496,11 +556,14 @@ export class RealtimeDispatcher {
         this.#reload();
         return;
       }
-      // Another tab switched accounts. Unless this tab already handled that switch
-      // from its own stream, reload it: routes, drafts and caches all belong to the
-      // previous member.
-      const current = this.state.epoch;
-      if (current === null || message.epoch > current) this.#reload();
+      // Another tab heard of a switch first: follow it in place, as from this tab's
+      // own stream. One from another session (this tab's is gone, or was replaced)
+      // rebuilds from a fresh snapshot just the same, which reads the session the
+      // cookie names now.
+      const { sessionId, epoch, memberId } = message;
+      if (!this.#isNews(sessionId, epoch)) return;
+      this.#set({ sessionId, epoch });
+      void this.#follow(epoch, memberId);
     };
     this.#channel = channel;
   }
@@ -546,13 +609,10 @@ export class RealtimeDispatcher {
       // A conversation's text: the chat reads it off the envelope listeners (chat/live.ts).
       case "stream.chat_delta":
         return;
-      // For the escalation panel waiting on that rev, off the envelope listeners (requests/live.ts).
-      case "escalation.redraft_failed":
-        return;
       case "session.member_changed": {
         const { sessionId } = this.state;
         if (sessionId === null || event.session_id === sessionId) {
-          void this.memberChanged(event.epoch);
+          void this.memberChanged(event.epoch, { sessionId: event.session_id, memberId: event.member_id });
         }
         return;
       }

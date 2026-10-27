@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.db.models import Document, KnowledgeItem
 
+SEARCH_ORG_KNOWLEDGE: Final = "search_org_knowledge"
 READ_DOCUMENT: Final = "read_document"
+# How `search_org_knowledge`'s result starts when nothing matches; a chat's row then
+# reads "No matches".
+NO_MATCHES: Final = "Nothing in your organization's records matches"
 _PREFIXES: Final = ("kn:", "doc:")
 
 
@@ -70,4 +74,12 @@ def read_ids(calls: Iterable[tuple[str, JsonValue | None]]) -> set[UUID]:
     }
 
 
-__all__ = ["READ_DOCUMENT", "read_ids", "read_ref", "record_id", "titles"]
+__all__ = [
+    "NO_MATCHES",
+    "READ_DOCUMENT",
+    "SEARCH_ORG_KNOWLEDGE",
+    "read_ids",
+    "read_ref",
+    "record_id",
+    "titles",
+]

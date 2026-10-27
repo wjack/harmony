@@ -149,13 +149,17 @@ export function useApproveCard(conversationId: string) {
   });
 }
 
+/** Decline the waiting card: don't send it. A reason, if given, reaches only Claude in this chat. */
 export function useRejectCard(conversationId: string) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ cardId, feedback }: { cardId: string; feedback: string }) =>
+    mutationFn: ({ cardId, feedback }: { cardId: string; feedback: string | null }) =>
       unwrap(
-        api.POST("/api/cards/{card_id}/reject", { params: { path: { card_id: cardId } }, body: { feedback } }),
+        api.POST("/api/cards/{card_id}/reject", {
+          params: { path: { card_id: cardId } },
+          body: feedback === null ? {} : { feedback },
+        }),
       ),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.conversation(conversationId) }),
   });

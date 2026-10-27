@@ -10,12 +10,14 @@ review, the card's `auto_send_recipients`; else the suggested ones
 
 `status` is the per-recipient view the request status card and `GET /api/requests/{id}`
 show: each recipient's participant status, its thread, who it waits on, its latest
-line, why its thread stopped, and the requester side's close summary. The orgs the
-outreach card proposed but the request didn't go to follow, as `screened` with
-`sent` false (§10).
+line, how its thread ended (`end_reason`, `closed_by`, `stop_reason`), and the requester
+side's close summary. The orgs the outreach card proposed but the request didn't go to
+follow, as `screened` with `sent` false (§10).
 
 Participant status (REVISION_UNSTRUCTURED.md §9), from thread and escalation state:
-- `screened`: its thread hasn't opened yet, or it was screened and left out;
+- `screened`: no thread yet. With `sent` true the request went to it and its thread
+  waits for a free slot (`max_active_threads`); with `sent` false it was screened and
+  left out;
 - `messaged`: the thread is open and the responder hasn't written yet;
 - `replied`: the responder has written;
 - `needs_human`: an escalation on the thread is open (either side);
@@ -34,7 +36,8 @@ Owner: E4.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -68,7 +71,7 @@ from harmony.db.models import (
     Thread,
     ThreadMessage,
 )
-from harmony.db.models.choices import FailureReason, Fit, ThreadState
+from harmony.db.models.choices import EndReason, FailureReason, Fit, Side, ThreadState
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards
 from harmony.domain.threads import TERMINAL_STATES, requester_title
@@ -105,6 +108,10 @@ class RecipientStatus(_View):
     latest_line: str | None
     # The requester side's own close summary, once its representative wrote one.
     close_summary: str | None
+    # How its thread's current run ended (`closed` when a representative closed it), and
+    # which side closed it; None while it runs. Status, not content, so `scoped` keeps them.
+    end_reason: EndReason | None = None
+    closed_by: Side | None = None
     # Why its thread stopped early (a cap, the pause, a model error). Status, not
     # content, so `scoped` keeps it.
     stop_reason: FailureReason | None = None
@@ -197,17 +204,77 @@ async def create_from_card(
 
 
 async def set_status(uow: UnitOfWork, request_id: UUID, status: RequestStatus) -> NetworkRequest:
-    """Move the request to `status`; `closed` is final."""
-    request = await uow.session.get(
-        NetworkRequest, (uow.world_id, request_id), with_for_update=True, populate_existing=True
-    )
-    if request is None:
-        raise repo.NotFoundInWorld(NetworkRequest, uow.world_id, request_id)
+    """Move the request to `status`; `closed` is final here, and only a reopened thread
+    (`reopen`) starts its next round."""
+    request = await _locked(uow, request_id)
     if request.status in (status, "closed"):
         return request
     request.status = status
     await uow.session.flush()
     await _queue(uow, request)
+    return request
+
+
+async def reopen(uow: UnitOfWork, request_id: UUID) -> NetworkRequest:
+    """A thread of the request reopened (REOPEN.md §6.2): a closed request goes live
+    in its next round. One still live (its workflow running, or another thread already
+    reopened it) stays in its round."""
+    request = await _locked(uow, request_id)
+    if request.status != "closed":
+        return request
+    request.status = "active"
+    request.round += 1
+    await uow.session.flush()
+    await _queue(uow, request)
+    return request
+
+
+@dataclass(frozen=True)
+class RoundEnd:
+    """`end_round`'s answer: whether the request is closed, in which round."""
+
+    closed: bool
+    round: int
+    conversation_id: UUID | None
+
+
+async def end_round(uow: UnitOfWork, request_id: UUID, *, from_workflow: bool) -> RoundEnd:
+    """Close the request once nothing on it is live (REOPEN.md §6.3). The request
+    workflow calls it when it has seen every first run end (`from_workflow`); a
+    reopened run calls it when it ends. Whichever finds no live thread last closes the
+    request; before the workflow is done, the workflow closes it itself."""
+    request = await _locked(uow, request_id)
+    if from_workflow and request.workflow_done_at is None:
+        request.workflow_done_at = datetime.now(UTC)
+    elif request.workflow_done_at is None:
+        return RoundEnd(closed=False, round=request.round, conversation_id=request.conversation_id)
+    if request.status != "closed":
+        live = await uow.session.scalar(
+            select(Thread.id)
+            .where(
+                Thread.world_id == uow.world_id,
+                Thread.request_id == request_id,
+                Thread.state.not_in(TERMINAL_STATES),
+            )
+            .limit(1)
+        )
+        if live is not None:
+            await uow.session.flush()
+            return RoundEnd(
+                closed=False, round=request.round, conversation_id=request.conversation_id
+            )
+        request.status = "closed"
+        await uow.session.flush()
+        await _queue(uow, request)
+    return RoundEnd(closed=True, round=request.round, conversation_id=request.conversation_id)
+
+
+async def _locked(uow: UnitOfWork, request_id: UUID) -> NetworkRequest:
+    request = await uow.session.get(
+        NetworkRequest, (uow.world_id, request_id), with_for_update=True, populate_existing=True
+    )
+    if request is None:
+        raise repo.NotFoundInWorld(NetworkRequest, uow.world_id, request_id)
     return request
 
 
@@ -324,6 +391,8 @@ async def status(
                 ),
                 latest_line=latest.get(thread.id),
                 close_summary=summaries.get(thread.id),
+                end_reason=thread.end_reason,
+                closed_by=thread.closed_by,
                 stop_reason=thread.stop_reason,
                 last_activity_at=thread.last_activity_at,
             )
@@ -474,13 +543,16 @@ async def _queue(uow: UnitOfWork, request: NetworkRequest) -> None:
 __all__ = [
     "RecipientStatus",
     "RequestStatusView",
+    "RoundEnd",
     "WaitingOn",
     "chosen_recipients",
     "create_from_card",
     "default_recipients",
+    "end_round",
     "participant",
     "readable_threads",
     "recipients_of",
+    "reopen",
     "request_status",
     "scoped",
     "set_status",

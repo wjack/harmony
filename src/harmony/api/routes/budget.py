@@ -8,7 +8,8 @@ session's lineage); `daily_exhausted` (today's daily row, or the session's clien
 switch). A key counts as exhausted below `EXHAUSTED_BELOW_USD`, and a missing lineage
 or client row as a full cap. With hosted caps off it is `{live: false, state: "ok"}`.
 When several caps are spent, the widest is reported (`budget_pg.REFUSAL_ORDER`).
-The SPA refetches it on a `demo.notice` of kind `budget` and every 30 s while visible.
+The SPA refetches it on a `demo.notice` of kind `budget` (sent when a call is refused
+and when the operator pauses or resumes live models) and every 30 s while visible.
 
 It reads the rows only; the worker's reservation stays the one enforcement point, so
 a call can still be refused while this reads `ok` (calls in flight hold reservations).

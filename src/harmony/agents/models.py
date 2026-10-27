@@ -24,7 +24,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harmony.auth.views import OrgRef
-from harmony.db.models.choices import CardStatus, Fit
+from harmony.db.models.choices import CardRejectedWith, CardStatus, Fit
 
 __all__ = [
     "BRIEF_MAX_CHARS",
@@ -184,11 +184,9 @@ class ContextPart(_Model):
 #   declined, with `text` as the reason it may give.
 # - `take_over`: the member writes to the counterparty directly (`text`, provenance
 #   `human`); the escalation closes.
-# - `revise` (`outbound_review` only, `text` required): nothing is sent; the
-#   representative gets `text` as an instruction to rewrite the message, never as
-#   text it may pass on.
-# "Redraft" and "Reassign" are their own Updates (`Redraft`, `Reassignment`).
-EscalationAction = Literal["approve", "decline", "take_over", "revise"]
+# A member's Edit (a rewrite of the draft) is the Update `steer`, and "Reassign" is its
+# own Update (`Reassignment`).
+EscalationAction = Literal["approve", "decline", "take_over"]
 
 
 class EscalationResolution(_Model):
@@ -283,6 +281,9 @@ class CardResolution(_Model):
     # Settled by the workflow for a chat that sends without review, not by a member
     # (`member_id` is the chat's owner).
     auto: bool = False
+    # How a rejection came: the card's Decline, or a message typed while it was
+    # pending. None on approvals, and on rows and histories from before it existed.
+    rejected_with: CardRejectedWith | None = None
 
 
 # --- Chat items: the chat view model (GET /api/conversations/{id}) -------------------
@@ -326,13 +327,18 @@ class ThinkingSummaryItem(_ChatItem):
 
 
 class ToolActivityItem(_ChatItem):
-    """ "Searched the Harmony network · 14 organizations ›" (UI_REFERENCE §4)."""
+    """ "Searched the Harmony network · 2 possible fits of 14", over what it searched for
+    (UI_REFERENCE §4)."""
 
     type: Literal["tool_activity"] = "tool_activity"
     tool: str
+    # Present tense while it runs ("Searching the Harmony network…"), past once done.
     label: str
+    # What it worked on: the need or query searched for, the record read.
     detail: str | None
     status: ToolActivityStatus
+    # What it found, once done ("2 possible fits of 14"); None while running.
+    outcome: str | None
     turn_id: UUID | None
 
 
@@ -364,6 +370,9 @@ class OutreachCardItem(_ChatItem):
     screened: ScreenedCounts | None
     # Set once rejected with feedback / once approved.
     feedback: str | None
+    # How a member turned it down: its Decline, or a message typed while it waited
+    # (None unless a member rejected it).
+    rejected_with: CardRejectedWith | None
     request_id: UUID | None
     version: int
 

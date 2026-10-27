@@ -31,12 +31,12 @@ from harmony.api.routes.conversations import (
 )
 from harmony.api.routes.escalations import ResolveEscalation
 from harmony.api.routes.inbox import Inbox
-from harmony.api.routes.threads import ThreadDetail
-from harmony.api.routes.workspace import ThreadWorkspace
+from harmony.api.routes.threads import ReopenRequest, ReopenStarted, ThreadDetail
+from harmony.api.routes.workspace import AddSteer, ThreadWorkspace
 from harmony.auth.views import MemberDirectory, SessionView
 from harmony.config import Settings
 from harmony.domain.requests import RequestStatusView
-from harmony.temporal.workflows.payloads import CardResolved, EscalationResolved
+from harmony.temporal.workflows.payloads import CardResolved, EscalationResolved, SteerStarted
 from harmony.worlds.retirer import Retirer
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class HarmonyApi:
     async def approve_card(self, card_id: UUID, body: ApproveCard) -> CardResolved:
         return await self._call(CardResolved, "POST", f"/cards/{card_id}/approve", body)
 
-    async def reject_card(self, card_id: UUID, feedback: str) -> CardResolved:
+    async def reject_card(self, card_id: UUID, feedback: str | None) -> CardResolved:
         body = RejectCard(feedback=feedback)
         return await self._call(CardResolved, "POST", f"/cards/{card_id}/reject", body)
 
@@ -113,6 +113,12 @@ class HarmonyApi:
 
     async def thread(self, thread_id: UUID) -> ThreadDetail:
         return await self._call(ThreadDetail, "GET", f"/threads/{thread_id}")
+
+    async def steer(self, thread_id: UUID, body: AddSteer) -> SteerStarted:
+        return await self._call(SteerStarted, "POST", f"/threads/{thread_id}/steers", body)
+
+    async def reopen(self, thread_id: UUID, body: ReopenRequest) -> ReopenStarted:
+        return await self._call(ReopenStarted, "POST", f"/threads/{thread_id}/reopen", body)
 
     # --- Transport --------------------------------------------------------------------
 

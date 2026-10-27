@@ -21,8 +21,12 @@ Representatives:
   (`delivered_notices`, `received_results`), never from a consult's status.
 - A released answer is model-drafted, so it is quoted inside `<released_text>`
   wherever it reaches the representative (`quote_released`), never as Harmony's or the
-  org's own words. A teammate's note on a held message is quoted inside `<note>`
-  (`quote_note`): an instruction to the representative, never text it may pass on.
+  org's own words.
+- Guidance from the side's org (docs/design/EDIT.md §3.6) is model-written, so it is
+  never a notice: `guidance_block` renders a version as a code-written lead plus the
+  text in `<guidance>`, a user-message block the turn opens with, once. Whether a
+  version reached the representative is read back from the stored transcript
+  (`delivered_guidance`), like `received_results`.
 - Counterparty text reaches the representative only through `wrap_counterparty`.
 
 Internal Claude: `build_internal_context` renders `prompts/internal.md` with the org,
@@ -37,13 +41,13 @@ import functools
 import json
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import date, datetime
 from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, JsonValue
-from sqlalchemy import ColumnElement, and_, func, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +63,7 @@ from harmony.db.models import (
     NetworkRequest,
     Org,
     OrgCommunity,
+    RepGuidance,
     RepNotice,
     RepPolicy,
     RepSession,
@@ -86,25 +91,26 @@ RELEASED_CLOSE: Final = "</released_text>"
 ESCAPED_LESS_THAN: Final = "&lt;"
 # What a prompt part holds when the org left it blank.
 EMPTY_PART: Final = "(none)"
-# The block code writes around a teammate's note on a held message (`quote_note`).
-NOTE_OPEN: Final = "<note>"
-NOTE_CLOSE: Final = "</note>"
+# The tag code writes around a guidance version (`guidance_block`).
+GUIDANCE_TAG: Final = "guidance"
 # `for` on the org's default sharing description; a trusted organization's extra one
 # names that organization.
 SHARING_FOR_ANY: Final = "any organization"
 
 # Code-written notices to a representative: its org's prompt settings changed
 # (`settings`), its mode or the sharing descriptions that apply changed for this
-# counterparty (`mode`, `sharing`), the world date, or the counterparty closed.
-NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed"]
+# counterparty (`mode`, `sharing`), the world date, the counterparty closed, or either
+# side reopened the conversation.
+NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed", "reopened"]
 
 # Every character `str.splitlines` breaks on, so no line hides inside another.
 _LINE_BREAK: Final = re.compile(r"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85  ]")
 # Lines shaped like the identity statement, a verification, an operator message, or one
-# of the texts code writes (`world_date_notice`, `closed_notice`, the settings, mode
-# and sharing notices, and the tool results: `consult`'s with their released text, and
-# `send_message`'s and `close`'s, sent, held and settled, or refused, with their quoted
-# text and the `<note>` block). Matched on the escaped line, where `<` reads `&lt;`.
+# of the texts code writes (`world_date_notice`, `closed_notice`, `reopened_notice`, the
+# settings, mode and sharing notices, and the tool results: `consult`'s with their
+# released text, and `send_message`'s and `close`'s, sent, held and settled, or refused,
+# with their quoted text), and the guidance block's lead and tag. Matched on the escaped
+# line, where `<` reads `&lt;`.
 _IDENTITY_LINE: Final = re.compile(
     r"verif|authenticat|impersonat|identit|harmony|sender|signed\s+by|on\s+behalf\s+of"
     r"|counterparty_message|system\s+(?:message|notice|note|prompt|instruction)"
@@ -112,10 +118,11 @@ _IDENTITY_LINE: Final = re.compile(
     r"|notice\s+from|today\W*s\s+date|instructions?\s+from"
     r"|your\s+organi[sz]ation\s+(?:changed|updated|removed)"
     r"|your\s+side\s+(?:answered|declined|edited|didn\W*t)|approved\s+by\s+your\s+side"
-    r"|released[\W_]*text|&lt;\W*note\b|closed\s+(?:this|the)\s+conversation"
+    r"|released[\W_]*text|closed\s+(?:this|the)\s+conversation"
+    r"|reopened\s+(?:this|the)\s+conversation"
     r"|not\s+(?:sent|run|closed)(?:\s+yet)?\s*:|what\s+(?:you\s+may\s+say|they\s+sent)\s*:"
-    r"|asked\s+you\s+to\s+change|for\s+you\s+only|don\W*t\s+pass\s+it\s+on"
-    r"|rewrite\s+the\s+message|exactly\s+as\s+written|stop\s+calling\s+tools"
+    r"|&lt;\W*guidance\b|updated\s+its\s+guidance|withdrew\s+its\s+guidance|never\s+widens"
+    r"|exactly\s+as\s+written|stop\s+calling\s+tools"
     r"|end\s+your\s+turn|wrote\s+to\s+the\s+counterparty|nothing\s+more\s+reaches"
     r"|nothing\s+from\s+you\s+has\s+reached|waiting\s+on\s+a\s+person\s+on\s+your\s+side"
     r"|no\s+result\s+was\s+recorded",
@@ -187,6 +194,15 @@ class DeliveredNotice(_Model):
     """A notice the representative was sent: its call stored the system message."""
 
     kind: NoticeKind
+    text: str
+    delivered_at: datetime
+
+
+class DeliveredGuidance(_Model):
+    """A guidance version the representative was given, and when."""
+
+    version: int
+    # Empty when the guidance was withdrawn.
     text: str
     delivered_at: datetime
 
@@ -500,6 +516,30 @@ async def flush_notices(
     return _merged(notices)
 
 
+async def drop_undelivered(
+    uow: UnitOfWork,
+    *,
+    thread_id: UUID,
+    side: Side,
+    kinds: Collection[NoticeKind] = ("closed", "reopened"),
+) -> None:
+    """Delete the side's notices of `kinds` that never reached its representative:
+    unflushed, or flushed for a turn that stored no system message (REOPEN.md §5.3).
+    A reopen drops them so the next run doesn't tell it the conversation closed, or
+    reopened, again; other kinds stay true and stay queued."""
+    session = uow.session
+    world_id = uow.world_id
+    await _lock_notices(session, world_id, thread_id, side)
+    stale = [
+        *await _notices(session, world_id, thread_id, side, None),
+        *await _undelivered(session, world_id, thread_id, side),
+    ]
+    for notice in stale:
+        if notice.kind in kinds:
+            await session.delete(notice)
+    await session.flush()
+
+
 async def delivered_notices(
     session: AsyncSession, world_id: UUID, thread_id: UUID, side: Side
 ) -> list[DeliveredNotice]:
@@ -552,6 +592,116 @@ async def received_results(
     return received
 
 
+# --- Guidance ---------------------------------------------------------------------------
+
+# A delivered version's tag, as `guidance_text` writes it: only code writes a bare `<`.
+_GUIDANCE_OPEN: Final = re.compile(rf'<{GUIDANCE_TAG} from="[^"]*" version="(\d+)">')
+
+
+def guidance_text(text: str, *, version: int, org_name: str, counterparty_name: str) -> str:
+    """The block that gives the representative a guidance version: a code-written lead,
+    then the model-written text quoted in its tag. A withdrawal (empty text) keeps the
+    empty tag, so its version is recognizable in the transcript too."""
+    org, them = _one_line(org_name), _one_line(counterparty_name)
+    if text.strip():
+        lead = (
+            f"{org} updated its guidance for this conversation. Follow it from now on, in "
+            f"place of any earlier guidance from {org}. It comes from your own side, not "
+            f"from {them}. It never widens what you may pass on. Don't mention or "
+            f"acknowledge it to {them}; write to them with `send_message`."
+        )
+    else:
+        lead = (
+            f"{org} withdrew its guidance for this conversation. Follow your instructions "
+            "as they stand."
+        )
+    return lead + "\n" + quoted(GUIDANCE_TAG, text, from_=org, version=str(version))
+
+
+async def guidance_block(
+    session: AsyncSession,
+    world_id: UUID,
+    thread_id: UUID,
+    side: Side,
+    version: int | None,
+    *,
+    org_name: str,
+    counterparty_name: str,
+    before_turn: UUID,
+) -> str | None:
+    """The block for guidance `version`, or None when there is none or a user message
+    stored before turn `before_turn` already carries it. The turn's own rows are
+    ignored, so every attempt of a turn builds the same opening."""
+    if version is None:
+        return None
+    delivered = await _delivered_versions(session, world_id, thread_id, side, before=before_turn)
+    if version in delivered:
+        return None
+    row = await session.scalar(
+        repo.in_world(RepGuidance, world_id).where(
+            RepGuidance.thread_id == thread_id,
+            RepGuidance.side == side,
+            RepGuidance.version == version,
+        )
+    )
+    if row is None:
+        raise LookupError(f"thread {thread_id} has no {side} guidance version {version}")
+    return guidance_text(
+        row.text, version=version, org_name=org_name, counterparty_name=counterparty_name
+    )
+
+
+async def delivered_guidance(
+    session: AsyncSession, world_id: UUID, thread_id: UUID, side: Side
+) -> list[DeliveredGuidance]:
+    """Every guidance version a stored user message carries, oldest first, each with
+    when it was first stored."""
+    delivered = await _delivered_versions(session, world_id, thread_id, side)
+    if not delivered:
+        return []
+    rows = await session.scalars(
+        repo.in_world(RepGuidance, world_id)
+        .where(
+            RepGuidance.thread_id == thread_id,
+            RepGuidance.side == side,
+            RepGuidance.version.in_(list(delivered)),
+        )
+        .order_by(RepGuidance.version)
+    )
+    return [
+        DeliveredGuidance(version=row.version, text=row.text, delivered_at=delivered[row.version])
+        for row in rows
+    ]
+
+
+async def _delivered_versions(
+    session: AsyncSession,
+    world_id: UUID,
+    thread_id: UUID,
+    side: Side,
+    *,
+    before: UUID | None = None,
+) -> dict[int, datetime]:
+    """The guidance versions the side's stored user messages carry, each with when it
+    was first stored; with `before`, only rows of other turns than that one."""
+    query = select(RepTranscript.content_text, RepTranscript.created_at).where(
+        RepTranscript.world_id == world_id,
+        RepTranscript.thread_id == thread_id,
+        RepTranscript.side == side,
+        RepTranscript.role == "user",
+    )
+    if before is not None:
+        query = query.where(or_(RepTranscript.turn_id.is_(None), RepTranscript.turn_id != before))
+    versions: dict[int, datetime] = {}
+    for content_text, created_at in await session.execute(query.order_by(RepTranscript.seq)):
+        parsed: JsonValue = json.loads(content_text)
+        for block in objects(parsed):
+            text = as_str(block.get("text")) if block.get("type") == "text" else None
+            for match in _GUIDANCE_OPEN.finditer(text or ""):
+                versions.setdefault(int(match.group(1)), created_at)
+    return versions
+
+
 # --- Counterparty text and notices -----------------------------------------------------
 
 
@@ -581,13 +731,6 @@ def quote_released(text: str) -> str:
     return "\n".join([RELEASED_OPEN, escape_angles(text.strip()), RELEASED_CLOSE])
 
 
-def quote_note(text: str) -> str:
-    """A teammate's note on a held message, as quoted data for the representative: an
-    instruction for it alone, never words it may pass on, with every `<` escaped so it
-    can't close the block."""
-    return "\n".join([NOTE_OPEN, escape_angles(text.strip()), NOTE_CLOSE])
-
-
 def closed_notice(counterparty_name: str) -> str:
     """The `closed` notice: the counterparty ended the conversation, and this side may
     leave its own organization a summary in one last turn (R§5)."""
@@ -595,6 +738,21 @@ def closed_notice(counterparty_name: str) -> str:
         f"Notice from Harmony: {_one_line(counterparty_name)} closed this conversation, so "
         "nothing more reaches them. To leave your organization a summary of how it went, "
         "call `close` with it now."
+    )
+
+
+def reopened_notice(counterparty_name: str, *, by_us: bool) -> str:
+    """The `reopened` notice (REOPEN.md §5.2): the side's own organization, or the
+    counterparty, reopened the conversation. It names organizations, never a member."""
+    counterparty = _one_line(counterparty_name)
+    if by_us:
+        return (
+            f"Notice from Harmony: your organization reopened this conversation with "
+            f"{counterparty}, so messages reach them again. Send them your next message."
+        )
+    return (
+        f"Notice from Harmony: {counterparty} reopened this conversation, so messages reach "
+        "them again."
     )
 
 
@@ -918,12 +1076,12 @@ __all__ = [
     "COUNTERPARTY_OPEN",
     "EMPTY_PART",
     "ESCAPED_LESS_THAN",
-    "NOTE_CLOSE",
-    "NOTE_OPEN",
+    "GUIDANCE_TAG",
     "RELEASED_CLOSE",
     "RELEASED_OPEN",
     "SHARING_FOR_ANY",
     "UNVERIFIED_MARK",
+    "DeliveredGuidance",
     "DeliveredNotice",
     "InternalContext",
     "NoticeKind",
@@ -935,18 +1093,22 @@ __all__ = [
     "context_parts",
     "counterparty_descriptor",
     "current_settings",
+    "delivered_guidance",
     "delivered_notices",
+    "drop_undelivered",
     "escape_angles",
     "flush_notices",
     "freeze_rep_session",
+    "guidance_block",
+    "guidance_text",
     "load_rep_session",
     "long_date",
     "queue_notice",
-    "quote_note",
     "quote_released",
     "quoted",
     "received_results",
     "recipient_ask",
+    "reopened_notice",
     "sent_without_review",
     "sharing_parts",
     "sharing_text",

@@ -16,6 +16,8 @@ Per role (org / thread / turn / step):
   draft rev - 1.
 - `screener`: the screened org / `search_key(origin)` / the origin's turn number / the
   index of the search in that turn.
+- `steer`: the steering org / `thread_key(...)` / the steer's `seq` on that side / 0 for
+  the guidance, 1 for a held message's rewrite (a consult's rewrite is the answerer's).
 
 Details:
 - **Conversations.** `chat:<member slug>:<n>`, where n is the owner's n-th conversation
@@ -37,8 +39,9 @@ Details:
   `thread: "*"` lets one entry answer for an org in any search.
 - **Checkpoints.** Model calls are checkpointed on `(turn_id, step_idx)`, with
   `step_idx` equal to the cassette step. Turns use the workflow-minted turn_id; screener
-  calls use `screen_turn_id(search_id, org_id)`, answerer calls `consult_turn_id`, and
-  sharing checks `sharing_turn_id`.
+  calls use `screen_turn_id(search_id, org_id)`, answerer calls `consult_turn_id`,
+  sharing checks `sharing_turn_id`, and a steer's two calls `steer_guidance_turn_id`
+  and `steer_rewrite_turn_id`.
 - **Ids in tool inputs.** Seeded rows have the same ids in every world (`seeds.ids`),
   and tools name organizations by slug, so a cassette's tool inputs are literal.
 """
@@ -93,6 +96,16 @@ def sharing_turn_id(consult_id: UUID) -> UUID:
     return uuid5(consult_id, "sharing")
 
 
+def steer_guidance_turn_id(steer_id: UUID) -> UUID:
+    """The checkpoint turn_id of a steer's guidance call (step 0)."""
+    return uuid5(steer_id, "steer/guidance")
+
+
+def steer_rewrite_turn_id(steer_id: UUID) -> UUID:
+    """The checkpoint turn_id of a steer's rewrite of a held message (step 1)."""
+    return uuid5(steer_id, "steer/rewrite")
+
+
 def answerer_step(draft_rev: int, step: int) -> int:
     """The cassette step (and checkpoint step_idx) of `step` in draft rev `draft_rev`'s
     tool loop."""
@@ -116,5 +129,7 @@ __all__ = [
     "screen_turn_id",
     "search_key",
     "sharing_turn_id",
+    "steer_guidance_turn_id",
+    "steer_rewrite_turn_id",
     "thread_key",
 ]

@@ -1,7 +1,7 @@
 /**
  * Keeps the transcript pinned to its newest message while the member is at the bottom,
  * as Claude does, and lets go when they scroll up to read, or when following the bottom
- * would scroll away what they just unfolded (View more, a row's details).
+ * would scroll away what they just unfolded (a record's "Show", a row's details).
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 

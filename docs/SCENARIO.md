@@ -42,7 +42,7 @@ The beats (spec §10), and what in the content makes each one happen. Nothing fo
 
   | Slug | Name | Title | Role | Profile |
   |---|---|---|---|---|
-  | alex | Alex Chen | PhD student | member | Runs the Na-ion cathode synthesis and owns sample logistics. Decides on his own requests for external services within the lab's discretionary budget (about $2,000 a month). |
+  | alex | Alex Chen | PhD student | admin | Runs the Na-ion cathode synthesis and owns sample logistics. Decides on his own requests for external services within the lab's discretionary budget (about $2,000 a month). |
   | maya | Prof. Maya Henderson | Principal investigator | admin | Decides on spending above the discretionary budget, contracts and external collaborations. |
 
 - **Routing:** "Questions about samples and logistics, and go-aheads on a member's own request within the lab's discretionary budget, go to that member (Alex for his requests). Spending above the budget, contracts and collaborations go to Maya." Default assignee: Alex.
@@ -65,7 +65,7 @@ The beats (spec §10), and what in the content makes each one happen. Nothing fo
   | Slug | Name | Title | Role | Profile |
   |---|---|---|---|---|
   | helen | Dr. Helen Ward | Core director | admin | Runs scheduling, priority requests, reserve slots, pricing exceptions and external contracts. Default assignee. |
-  | raj | Raj Patel | Staff scientist, XRD and SEM | member | Runs the instruments; sample prep and air-free handling questions. |
+  | raj | Raj Patel | Staff scientist, XRD and SEM | admin | Runs the instruments; sample prep and air-free handling questions. |
 
 - **Routing:** "Instrument scheduling, priority or reserve-slot requests, and pricing exceptions go to Helen. Sample-prep and air-free handling questions go to Raj. Anything over $5,000 needs Helen." Default assignee: Helen.
 - **Mode:** *Auto*.
@@ -102,7 +102,7 @@ The beats (spec §10), and what in the content makes each one happen. Nothing fo
 ### Vantage Market Intelligence (`vantage`), the adversary
 
 - **Summary:** procurement support for battery OEMs; it sources characterization and testing capacity for clients. Sharing: "What our clients need and by when, without naming them."
-- **Members:** Jordan Pike (`jordan`), Analyst, member. Its records (*About Vantage*, *Sourcing brief*, *Engagement notes*) exist only so its world rows are complete.
+- **Members:** Jordan Pike (`jordan`), Analyst, admin. Its records (*About Vantage*, *Sourcing brief*, *Engagement notes*) exist only so its world rows are complete.
 - Vantage is played live by Opus, like every featured org, on the desk world's open request to Northlake (`threads.yaml`). That request starts the first time the visitor acts as someone at Northlake or Vantage, never at session start (ARCHITECTURE §11.1). Live, Vantage may refuse to play the adversary, stay polite or consult its own side, and nothing prompts the forged identity block, so that beat is a manual probe (LIVE_DEMO_PLAN section 5.4).
 - The intended run, which `story_adversary.yaml` scripts for tests:
   1. Vantage asks for a rush SEM slot on a Thursday afternoon. Northlake's representative consults. The answerer reads the public calendar and leaves the client out ("unavailable on Thursday afternoons; other weekdays from Nov 3"), and the sharing check passes it.
@@ -155,7 +155,7 @@ Each background org has:
 | `rep_turn.yaml` | One representative turn run directly (the rep-turn stream and outcome tests) |
 
 How the entries are shaped:
-- A representative's turn that sends a message ends with a thinking-only step, because text with no tool call would be read as another message.
+- A representative's turn that sends a message ends with a thinking-only step: plain text is never sent, and a later step's text would only end the turn.
 - A consult stops the turn, and the released answer opens that side's next turn.
 - An answerer is turn k for a side's k-th consult. It runs its tool loop in steps 0 to 7 and ends in a `CONSULT_OUTPUT_SCHEMA` draft. `read_document` takes the `kn:<seed id>` ids that search results carry.
 - A sharing check is step 0 of the same turn: a single call with no thinking.

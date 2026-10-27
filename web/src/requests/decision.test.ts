@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { HENDERSON_QUESTION, HENDERSON_SHORT_QUESTION, HENDERSON_WHY, THREAD, requestsWorld, routedToBoth } from "../fixtures/requests";
+import { HENDERSON_QUESTION, HENDERSON_SHORT_QUESTION, THREAD, requestsWorld } from "../fixtures/requests";
 import { members, orgs } from "../fixtures/shell";
-import { approvalCaption, cardTitle, eyebrow, lookedAtSummary, routingOf, whyHeading } from "./decision";
+import {
+  approveHint,
+  cardTitle,
+  declineCopy,
+  draftLabel,
+  eyebrow,
+  lookedAtSummary,
+  modeLine,
+  reasonLine,
+  sharingLabel,
+} from "./decision";
 import type { ConsultView, EscalationView } from "./types";
 
 const NOW = Date.parse("2026-10-26T10:30:00Z");
@@ -14,7 +24,6 @@ function item(threadId: string, world = requestsWorld(NOW)): { escalation: Escal
   return { escalation, consult: workspace.consults.find((asked) => asked.id === escalation.consult_id) ?? null };
 }
 
-const raj = { id: members.raj.id, slug: "raj", name: members.raj.name };
 const henderson = orgs.henderson;
 const vantage = orgs.vantage;
 
@@ -66,106 +75,39 @@ describe("cardTitle", () => {
   });
 });
 
-describe("routingOf", () => {
-  it("gives the viewer their own why, and who else has it", () => {
-    const { escalation } = item(THREAD.henderson, routedToBoth(requestsWorld(NOW)));
-    expect(routingOf(escalation, members.raj.id, orgs.northlake, members.helen.id)).toEqual({
-      line: `Routed to you: ${HENDERSON_WHY.raj}`,
-      with: "with Helen",
-    });
-    expect(routingOf(escalation, members.helen.id, orgs.northlake, members.helen.id)).toEqual({
-      line: `Routed to you: ${HENDERSON_WHY.helen}`,
-      with: "with Raj",
-    });
-  });
-
-  it("names the assignee's why for someone else's item", () => {
+describe("reasonLine", () => {
+  it("says why the item needs a person, and nothing when it's only Ask mode", () => {
     const { escalation } = item(THREAD.henderson);
-    expect(routingOf(escalation, members.raj.id, orgs.northlake, members.helen.id)).toEqual({
-      line: `Routed to Helen: “${HENDERSON_WHY.helen}”`,
-      with: null,
-    });
-  });
-
-  it("heads the routing part with whoever the item came to", () => {
-    const { escalation } = item(THREAD.henderson);
-    expect(whyHeading(escalation, members.helen.id)).toBe("Why it came to you");
-    expect(whyHeading(escalation, members.raj.id)).toBe("Why it came to Helen");
-    const both = item(THREAD.henderson, routedToBoth(requestsWorld(NOW))).escalation;
-    expect(whyHeading(both, members.raj.id)).toBe("Why it came to you");
-  });
-
-  it("reads the route the item opened with, never a redraft's", () => {
-    const { escalation } = item(THREAD.henderson);
-    const [opening] = escalation.drafts;
-    if (opening === undefined) throw new Error("no opening draft");
-    const redraft = { ...opening, draft_rev: 2, route: { assignees: [{ slug: "raj", why: "you run the XRD" }] } };
-    const redrafted = { ...escalation, drafts: [opening, redraft], current_draft_rev: 2 };
-    expect(routingOf(redrafted, members.helen.id, orgs.northlake, members.helen.id).line).toBe(
-      `Routed to you: ${HENDERSON_WHY.helen}`,
-    );
-  });
-
-  it("says only who has it once a teammate moved it", () => {
-    const { escalation } = item(THREAD.henderson);
-    const moved = { ...escalation, assignees: [raj] };
-    expect(routingOf(moved, members.helen.id, orgs.northlake, members.helen.id)).toEqual({
-      line: "Assigned to Raj",
-      with: null,
-    });
-    expect(routingOf(moved, members.raj.id, orgs.northlake, members.helen.id).line).toBe("Assigned to you");
-  });
-
-  it("says only who has a held message or an unnamed consult once a teammate moved it", () => {
-    const held = item(THREAD.vantage).escalation;
-    const moved = { ...held, assignees: [raj] };
-    expect(routingOf(moved, members.raj.id, orgs.northlake, members.helen.id).line).toBe("Assigned to you");
-    expect(routingOf(moved, members.helen.id, orgs.northlake, members.helen.id).line).toBe("Assigned to Raj");
-    const { escalation } = item(THREAD.henderson);
-    const unnamed = {
-      ...escalation,
-      assignees: [raj],
-      drafts: escalation.drafts.map((draft) => ({ ...draft, route: { assignees: [] } })),
-    };
-    expect(routingOf(unnamed, members.raj.id, orgs.northlake, members.helen.id).line).toBe("Assigned to you");
-    // Until the org's setting has loaded, it claims nothing it can't know.
-    expect(routingOf(held, members.helen.id, orgs.northlake, undefined).line).toBe("Assigned to you");
-  });
-
-  it("says an item routing named no one for, and a held message, went to the default assignee", () => {
-    const held = item(THREAD.vantage).escalation;
-    expect(routingOf(held, members.helen.id, orgs.northlake, members.helen.id).line).toBe(
-      "Sent to you as Northlake Characterization Core's default assignee.",
-    );
-    expect(routingOf(held, members.raj.id, orgs.northlake, members.helen.id).line).toBe(
-      "Sent to Helen as Northlake Characterization Core's default assignee.",
-    );
-    // The API drops names that aren't the org's members, as routing did.
-    const { escalation } = item(THREAD.henderson);
-    const unnamed = { ...escalation, drafts: escalation.drafts.map((draft) => ({ ...draft, route: { assignees: [] } })) };
-    expect(routingOf(unnamed, members.helen.id, orgs.northlake, members.helen.id).line).toMatch(/^Sent to you as /);
-    // Opened without a draft (the answerer failed): routing had no route to read.
-    const undrafted = { ...escalation, drafts: [] };
-    expect(routingOf(undrafted, members.helen.id, orgs.northlake, members.helen.id).line).toMatch(/^Sent to you as /);
+    expect(reasonLine(escalation)).toMatch(/^The answer mentions an internal reserve XRD slot/);
+    // A held message in Ask mode: the card's foot already says which mode.
+    expect(reasonLine(item(THREAD.vantage).escalation)).toBeNull();
+    expect(reasonLine({ ...escalation, reason: "  " })).toBeNull();
   });
 });
 
-describe("approvalCaption", () => {
-  it("says what approving does, and for whom when it isn't the viewer's", () => {
-    const { escalation } = item(THREAD.henderson);
-    expect(approvalCaption(escalation, henderson, members.helen.id, false)).toBe(
-      "Approving sends this reply to Henderson Lab only · ⌘↵ to approve",
-    );
-    expect(approvalCaption(escalation, henderson, members.raj.id, false)).toBe(
-      "Approving answers for Helen · sends this reply to Henderson Lab only",
-    );
+describe("the card's words", () => {
+  it("names the draft, and what approving it does", () => {
+    const consult = item(THREAD.henderson).escalation;
+    const held = item(THREAD.vantage).escalation;
+    expect(draftLabel(consult)).toBe("Draft reply");
+    expect(draftLabel(held)).toBe("Claude's message");
+    expect(approveHint(consult, henderson, false)).toBe("Claude replies to Henderson Lab with this answer");
+    expect(approveHint(consult, henderson, true)).toBe("Claude replies to Henderson Lab with your edited answer");
+    expect(approveHint(held, vantage, true)).toBe("Sends this message to Vantage Market Intelligence as shown");
   });
 
-  it("drops the ⌘↵ hint while text is typed, since ⌘↵ then acts on the text", () => {
-    const { escalation } = item(THREAD.henderson);
-    expect(approvalCaption(escalation, henderson, members.helen.id, true)).toBe(
-      "Approving sends this reply to Henderson Lab only",
-    );
+  it("says what declining does, and who may see the reason", () => {
+    expect(declineCopy(item(THREAD.henderson).escalation, henderson)).toEqual({
+      title: "Decline to answer",
+      caption: "Claude tells Henderson Lab you can't answer, and may pass on your reason.",
+    });
+    expect(declineCopy(item(THREAD.vantage).escalation, vantage).title).toBe("Decline this message");
+  });
+
+  it("names the mode a held message waits in, and links admins to the sharing to edit", () => {
+    expect(modeLine("Ask", vantage)).toBe("Ask mode with Vantage Market Intelligence");
+    expect(sharingLabel(true, henderson)).toBe("Edit what you share with Henderson Lab");
+    expect(sharingLabel(false, henderson)).toBe("See what you share with Henderson Lab");
   });
 });
 
@@ -174,7 +116,7 @@ describe("lookedAtSummary", () => {
     const [rev] = item(THREAD.henderson).escalation.drafts;
     if (rev === undefined) throw new Error("no draft");
     expect(lookedAtSummary(rev)).toBe(
-      "XRD availability before Nov 6 · Public calendar · Raj's note, reserve XRD block · External academic price list",
+      "XRD availability before Nov 6 · Public calendar · XRD reserve-slot schedule · External academic price list",
     );
     const untitled = { ...rev, activity: [{ tool: "read_document", label: "Read a document", detail: null }] };
     expect(lookedAtSummary(untitled)).toBe("Read a document");

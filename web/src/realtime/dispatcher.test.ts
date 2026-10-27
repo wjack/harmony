@@ -8,6 +8,7 @@ import { RealtimeDispatcher, TAB_CHANNEL, eventStreamUrl, type StreamSnapshot } 
 import {
   ChannelHub,
   EventSources,
+  MEMBER_ID,
   SESSION_ID,
   THREAD_ID,
   demoNotice,
@@ -357,67 +358,152 @@ describe("needs-human cues", () => {
 });
 
 describe("other tabs", () => {
-  it("an account switch in one tab reloads the visitor's other tabs", async () => {
-    const a = tab([snapshotAt(10, 1), snapshotAt(20, 2)]);
-    const b = tab([snapshotAt(10, 1)]);
-    await a.dispatcher.start();
-    await b.dispatcher.start();
+  const OTHER_SESSION = "6f1c2c1e-0000-4000-8000-0000000000ab";
 
-    a.sources.latest.send(memberChanged(11, 2));
-
-    expect(b.reload).toHaveBeenCalledOnce();
-    expect(a.reload).not.toHaveBeenCalled();
-  });
-
-  it("doesn't reload a tab that already handled the same switch", async () => {
+  it("follow an account switch in one tab in place, with no reload", async () => {
     const a = tab([snapshotAt(10, 1), snapshotAt(20, 2)]);
     const b = tab([snapshotAt(10, 1), snapshotAt(20, 2)]);
     await a.dispatcher.start();
     await b.dispatcher.start();
+    const heard = vi.fn();
+    b.dispatcher.onMemberChanged(heard);
+    const before = b.sources.latest;
 
-    b.sources.latest.send(memberChanged(11, 2)); // b handles it first, and tells a
-    a.sources.latest.send(memberChanged(11, 2)); // a's own stream reports it later
+    a.sources.latest.send(memberChanged(11, 2));
 
-    expect(a.reload).toHaveBeenCalledOnce();
+    expect(heard).toHaveBeenCalledExactlyOnceWith({ epoch: 2, memberId: MEMBER_ID });
+    expect(before.closed).toBe(true);
+    await vi.waitFor(() => {
+      expect(b.sources.latest.url).toBe("/api/events?after=20&epoch=2");
+    });
+    expect(b.dispatcher.state).toMatchObject({ generation: 2, epoch: 2, sessionId: SESSION_ID });
     expect(b.reload).not.toHaveBeenCalled();
+    expect(a.reload).not.toHaveBeenCalled();
   });
 
-  it("ignores unrelated messages on the channel", async () => {
-    const { dispatcher, reload } = tab([snapshotAt(10, 1)]);
+  it("follow each switch once, whichever tab hears of it first", async () => {
+    const a = tab([snapshotAt(10, 1), snapshotAt(20, 2)]);
+    const b = tab([snapshotAt(10, 1), snapshotAt(20, 2)]);
+    await a.dispatcher.start();
+    await b.dispatcher.start();
+    const heardA = vi.fn();
+    const heardB = vi.fn();
+    a.dispatcher.onMemberChanged(heardA);
+    b.dispatcher.onMemberChanged(heardB);
+    const streamA = a.sources.latest;
+
+    b.sources.latest.send(memberChanged(11, 2)); // b hears it first, and tells a
+    streamA.send(memberChanged(11, 2)); // a's own (now closed) stream reports it later
+    await a.dispatcher.memberChanged(2, { sessionId: SESSION_ID, memberId: MEMBER_ID }); // then its act-as returns
+
+    expect(heardA).toHaveBeenCalledOnce();
+    expect(heardB).toHaveBeenCalledOnce();
+    expect(a.snapshot).toHaveBeenCalledTimes(2);
+    expect(b.snapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("tell each other which session and member a switch was to", async () => {
+    const { dispatcher, sources } = tab([snapshotAt(10, 1), snapshotAt(20, 2)]);
+    await dispatcher.start();
+    const other = vi.fn();
+    hub.open(TAB_CHANNEL).onmessage = other;
+
+    sources.latest.send(memberChanged(11, 2));
+
+    expect(other).toHaveBeenCalledOnce();
+    expect((other.mock.calls[0]?.[0] as MessageEvent).data).toEqual({
+      type: "member_changed",
+      sessionId: SESSION_ID,
+      epoch: 2,
+      memberId: MEMBER_ID,
+    });
+  });
+
+  it("rebuild a tab in another session from a fresh snapshot, whatever its epoch", async () => {
+    const { dispatcher, sources, snapshot } = tab([
+      snapshotAt(10, 5),
+      { cursor: 3, epoch: 1, sessionId: OTHER_SESSION },
+    ]);
+    await dispatcher.start();
+
+    hub.open(TAB_CHANNEL).postMessage({
+      type: "member_changed",
+      sessionId: OTHER_SESSION,
+      epoch: 1,
+      memberId: MEMBER_ID,
+    });
+
+    await vi.waitFor(() => {
+      expect(sources.opened).toHaveLength(2);
+    });
+    expect(snapshot).toHaveBeenCalledTimes(2);
+    expect(sources.latest.url).toBe("/api/events?after=3&epoch=1");
+    expect(dispatcher.state).toMatchObject({ sessionId: OTHER_SESSION, epoch: 1 });
+  });
+
+  it("forget the epoch when the session is gone, so a new session's first switch is followed", async () => {
+    vi.useFakeTimers();
+    const { dispatcher, sources } = tab([
+      snapshotAt(10, 5),
+      null, // the stream was refused: the session was wiped
+      null,
+      { cursor: 4, epoch: 1, sessionId: OTHER_SESSION },
+    ]);
+    await dispatcher.start();
+    sources.latest.fail();
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(dispatcher.state).toMatchObject({ status: "no-session", sessionId: null, epoch: null });
+
+    // Another tab starts a new session and makes its first switch, to epoch 1.
+    hub.open(TAB_CHANNEL).postMessage({
+      type: "member_changed",
+      sessionId: OTHER_SESSION,
+      epoch: 1,
+      memberId: MEMBER_ID,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sources.latest.url).toBe("/api/events?after=4&epoch=1");
+    expect(dispatcher.state).toMatchObject({ sessionId: OTHER_SESSION, epoch: 1 });
+  });
+
+  it("ignore unrelated messages on the channel", async () => {
+    const { dispatcher, snapshot, reload } = tab([snapshotAt(10, 1)]);
     await dispatcher.start();
 
     const other = hub.open(TAB_CHANNEL);
     other.postMessage({ type: "something_else", epoch: 9 });
+    other.postMessage({ type: "member_changed", epoch: 9 }); // no session
+    other.postMessage({ type: "member_changed", sessionId: SESSION_ID, epoch: 1, memberId: MEMBER_ID }); // seen
     other.postMessage("member_changed");
 
+    expect(snapshot).toHaveBeenCalledOnce();
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("reloads other tabs through the platform BroadcastChannel", async () => {
-    const reloadA = vi.fn();
-    const reloadB = vi.fn();
-    const make = (reload: () => void, snapshots: StreamSnapshot[]) => {
+  it("reach each other through the platform BroadcastChannel", async () => {
+    const make = (snapshots: StreamSnapshot[]) => {
       const sources = new EventSources();
+      const snapshot = vi.fn(() => Promise.resolve(snapshots.shift() ?? snapshotAt(99, 9)));
       const dispatcher = new RealtimeDispatcher({
         queryClient: new QueryClient(),
-        snapshot: () => Promise.resolve(snapshots.shift() ?? snapshotAt(99, 9)),
+        snapshot,
         openEventSource: sources.open,
-        reload,
       });
       running.push(dispatcher);
-      return { dispatcher, sources };
+      return { dispatcher, sources, snapshot };
     };
-    const a = make(reloadA, [snapshotAt(10, 1), snapshotAt(20, 2)]);
-    const b = make(reloadB, [snapshotAt(10, 1)]);
+    const a = make([snapshotAt(10, 1), snapshotAt(20, 2)]);
+    const b = make([snapshotAt(10, 1), snapshotAt(20, 2)]);
     await a.dispatcher.start();
     await b.dispatcher.start();
 
     a.sources.latest.send(memberChanged(11, 2));
 
     await vi.waitFor(() => {
-      expect(reloadB).toHaveBeenCalledOnce();
+      expect(b.sources.latest.url).toBe("/api/events?after=20&epoch=2");
     });
-    expect(reloadA).not.toHaveBeenCalled();
+    expect(b.snapshot).toHaveBeenCalledTimes(2);
   });
 });
 

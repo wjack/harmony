@@ -1,18 +1,20 @@
 /**
  * A request's Details (LIVE_DEMO_PLAN 3.9), closed until the member opens it from the
- * header: Share, what our representative saw, the properties (Linear's, in the card of
- * Claude's project page) and the activity log. Beside the transcript when the view is
- * wide enough, else a sheet over it.
+ * header: Share, what our representative saw, the guidance our Claude follows here
+ * (EDIT.md §8.3), the properties (Linear's, in the card of Claude's project page) and
+ * the activity log. Beside the transcript when the view is wide enough, else a sheet
+ * over it, below the demo bar.
  */
-import { Building2, CircleDot, Eye, Timer, UserPlus, UserRound, X } from "lucide-react";
+import { Building2, CircleDot, Eye, History, Timer, UserPlus, UserRound, X } from "lucide-react";
 import { Dialog } from "radix-ui";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
+import type { GuidanceView } from "../api/types";
 import { useCalendar } from "../demo/worldClock";
 import { firstName } from "../shell/names";
 import { Avatar, Button, IconButton, OrgAvatar, Spark, cx } from "../shell/ui";
 import type { ActivityEntry } from "./activity";
-import { longAge, shortAge, timeLeft } from "./format";
+import { clockTime, dateTime, longAge, possessive, shortAge, shortDate, timeLeft } from "./format";
 import type { Properties } from "./properties";
 import type { OrgRef, RepresentativeContext } from "./types";
 
@@ -21,6 +23,10 @@ interface DetailsBodyProps {
   them: OrgRef;
   us: OrgRef;
   representative: RepresentativeContext | null;
+  /** The guidance our Claude follows on this thread, if any. */
+  guidance: GuidanceView | null;
+  /** Bumped by See guidance: Details opens at the guidance section. */
+  guidanceRequest: number;
   activity: readonly ActivityEntry[];
   /** `from` is the control that opened it, for focus to return to. */
   onShare: (from: HTMLElement) => void;
@@ -35,7 +41,17 @@ function sawSummary(representative: RepresentativeContext | null): string {
   return `Its prompt and ${String(released)} released ${released === 1 ? "answer" : "answers"}`;
 }
 
-function DetailsBody({ properties, them, us, representative, activity, onShare, onShowSaw }: DetailsBodyProps) {
+function DetailsBody({
+  properties,
+  them,
+  us,
+  representative,
+  guidance,
+  guidanceRequest,
+  activity,
+  onShare,
+  onShowSaw,
+}: DetailsBodyProps) {
   return (
     <div className="flex flex-col gap-3">
       <Button
@@ -58,24 +74,26 @@ function DetailsBody({ properties, them, us, representative, activity, onShare, 
             className="group flex w-full items-start gap-3 text-left"
           >
             <span className="min-w-0 flex-1">
-              <h3 id="rq-saw" className="text-[13.5px] font-medium text-ink">
+              <h3 id="rq-saw" className="text-ui font-medium text-ink">
                 What our representative saw
               </h3>
-              <span className="mt-0.5 block text-[12.5px] leading-[18px] text-muted">{sawSummary(representative)}</span>
+              <span className="mt-0.5 block text-ui-sm text-muted">{sawSummary(representative)}</span>
             </span>
             <Eye size={16} strokeWidth={1.5} aria-hidden className="mt-0.5 shrink-0 text-muted group-hover:text-ink" />
           </button>
         </section>
 
+        <GuidanceSection guidance={guidance} request={guidanceRequest} />
+
         <section aria-labelledby="rq-properties" className="border-t border-border px-4 pt-3.5 pb-3">
-          <h3 id="rq-properties" className="mb-2 text-[13.5px] font-medium text-ink">
+          <h3 id="rq-properties" className="mb-2 text-ui font-medium text-ink">
             Properties
           </h3>
           <PropertyList properties={properties} them={them} us={us} />
         </section>
 
         <section aria-labelledby="rq-activity" className="border-t border-border px-4 pt-3.5 pb-4">
-          <h3 id="rq-activity" className="mb-2.5 text-[13.5px] font-medium text-ink">
+          <h3 id="rq-activity" className="mb-2.5 text-ui font-medium text-ink">
             Activity
           </h3>
           <ActivityLog entries={activity} us={us} />
@@ -106,10 +124,10 @@ export function Details({ sheet, open, onOpenChange, returnFocus, ...body }: Det
               event.preventDefault();
               returnFocus();
             }}
-            className="fixed inset-y-2 right-2 z-50 flex w-[min(380px,calc(100vw-16px))] flex-col rounded-2xl border border-border bg-canvas text-ink shadow-modal outline-none data-[state=open]:animate-pop-in"
+            className="fixed top-[calc(var(--demo-bar-height)+8px)] right-2 bottom-2 z-50 flex w-[min(380px,calc(100vw-16px))] flex-col rounded-2xl border border-border bg-canvas text-ink shadow-modal outline-none data-[state=open]:animate-pop-in"
           >
             <header className="flex h-12 shrink-0 items-center justify-between pr-2 pl-4">
-              <Dialog.Title className="text-[15px] font-semibold">Details</Dialog.Title>
+              <Dialog.Title className="text-ui-title font-semibold">Details</Dialog.Title>
               <Dialog.Close asChild>
                 <IconButton label="Close details" size="sm">
                   <X size={16} strokeWidth={1.5} />
@@ -128,7 +146,7 @@ export function Details({ sheet, open, onOpenChange, returnFocus, ...body }: Det
   return (
     <aside aria-label="Properties" className="flex w-[320px] shrink-0 flex-col border-l border-border bg-canvas">
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border pr-2 pl-4">
-        <h2 className="text-[14px] font-medium text-ink">Details</h2>
+        <h2 className="text-ui font-medium text-ink">Details</h2>
         <IconButton
           label="Close details"
           size="sm"
@@ -147,11 +165,52 @@ export function Details({ sheet, open, onOpenChange, returnFocus, ...body }: Det
   );
 }
 
+/**
+ * What our Claude was told to do differently here, as it now reads, and whether it has
+ * read it. See guidance opens Details here: the section takes focus, which scrolls it
+ * into view and keeps the keyboard where the reader is looking.
+ */
+function GuidanceSection({ guidance, request }: { guidance: GuidanceView | null; request: number }) {
+  const calendar = useCalendar();
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (request > 0) section.current?.focus();
+  }, [request]);
+  return (
+    <section
+      ref={section}
+      tabIndex={-1}
+      aria-labelledby="rq-guidance"
+      className="border-t border-border px-4 py-3.5 outline-none focus-visible:bg-info-soft/30"
+    >
+      <h3 id="rq-guidance" className="text-ui font-medium text-ink">
+        Guidance Claude follows
+      </h3>
+      {guidance === null ? (
+        <p className="mt-0.5 text-ui-sm text-muted">None yet. Use Edit to tell Claude what to do differently.</p>
+      ) : (
+        <>
+          <p className="mt-1 text-ui-sm break-words whitespace-pre-wrap text-ink">{guidance.text}</p>
+          <p className="mt-1.5 text-ui-xs text-muted">
+            Version {guidance.version} · from {possessive(guidance.by.name)} edit ·{" "}
+            <time dateTime={guidance.created_at} title={dateTime(guidance.created_at, calendar)}>
+              {clockTime(guidance.created_at)}
+            </time>
+          </p>
+          <p className={cx("text-ui-xs", guidance.delivered_at === null ? "text-link" : "text-muted")}>
+            {guidance.delivered_at === null ? "Claude reads this at its next turn" : "Claude has read this"}
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 /** A label and its value. Details is the only place that names the assignee and the
  * counterparty in full, so a long value wraps rather than being cut off. */
 function Row({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2.5 py-[5px] text-[13px] leading-[22px]">
+    <div className="flex items-start gap-2.5 py-[5px] text-ui-sm leading-[22px]">
       <dt className="flex w-[104px] shrink-0 items-center gap-2 text-muted">
         <span className="flex size-4 items-center justify-center" aria-hidden>
           {icon}
@@ -172,7 +231,8 @@ const TONE_DOT: Record<Properties["status"]["tone"], string> = {
 };
 
 function PropertyList({ properties, them, us }: { properties: Properties; them: OrgRef; us: OrgRef }) {
-  const { status, assignees, expiresAt } = properties;
+  const calendar = useCalendar();
+  const { status, assignees, closesAt, closedAt, reopened } = properties;
   return (
     <dl className="flex flex-col">
       <Row icon={<CircleDot size={14} strokeWidth={1.5} />} label="Status">
@@ -199,9 +259,21 @@ function PropertyList({ properties, them, us }: { properties: Properties; them: 
         <OrgAvatar name={them.name} seed={them.slug} size={18} className="mt-0.5 shrink-0" />
         <span className="min-w-0">{them.name}</span>
       </Row>
-      {expiresAt !== null && (
-        <Row icon={<Timer size={14} strokeWidth={1.5} />} label="Expires">
-          <span>{timeLeft(expiresAt)}</span>
+      {closesAt !== null && (
+        <Row icon={<Timer size={14} strokeWidth={1.5} />} label="Closes">
+          <span title={dateTime(closesAt, calendar)}>{timeLeft(closesAt)}</span>
+        </Row>
+      )}
+      {closedAt !== null && (
+        <Row icon={<Timer size={14} strokeWidth={1.5} />} label="Closed">
+          <span title={dateTime(closedAt, calendar)}>{shortDate(closedAt, calendar)}</span>
+        </Row>
+      )}
+      {reopened !== null && (
+        <Row icon={<History size={14} strokeWidth={1.5} />} label="Reopened">
+          <span className="min-w-0">
+            by {reopened.by} · <span title={dateTime(reopened.at, calendar)}>{shortDate(reopened.at, calendar)}</span>
+          </span>
         </Row>
       )}
     </dl>
@@ -210,12 +282,12 @@ function PropertyList({ properties, them, us }: { properties: Properties; them: 
 
 function ActivityLog({ entries, us }: { entries: readonly ActivityEntry[]; us: OrgRef }) {
   const calendar = useCalendar();
-  if (entries.length === 0) return <p className="text-[12.5px] text-muted">Nothing yet.</p>;
+  if (entries.length === 0) return <p className="text-ui-sm text-muted">Nothing yet.</p>;
   return (
     <ol className="relative flex flex-col gap-2.5">
       <span aria-hidden className="absolute top-2 bottom-2 left-[8.5px] w-px bg-border" />
       {entries.map((entry) => (
-        <li key={entry.id} className="relative flex items-start gap-2.5 text-[12.5px] leading-[18px]">
+        <li key={entry.id} className="relative flex items-start gap-2.5 text-ui-sm">
           {entry.actor === null ? (
             <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-canvas">
               <Spark size={12} />

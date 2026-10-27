@@ -58,7 +58,7 @@ export function ShareDialog({
         returnFocus();
       }}
       title="Share with a teammate"
-      description={`They'll see this thread, Claude's drafts and the internal notes. Only people at ${us.name} can be added.`}
+      description={`They'll see this conversation, Claude's drafts and your team's comments. Only people at ${us.name} can be added.`}
       footer={
         <>
           <Button

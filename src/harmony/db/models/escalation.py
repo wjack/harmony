@@ -114,8 +114,9 @@ class Escalation(CreatedAt, VersionedEntity, Base):
 
 
 class EscalationDraft(CreatedAt, WorldScoped, Base):
-    """One draft for an escalation: an answerer draft of a consult answer (each redraft
-    is a new rev), or the held message of an `outbound_review`."""
+    """One draft for an escalation: an answerer draft of a consult answer, or the held
+    message of an `outbound_review` (rev 1, the representative's). Each rewrite a
+    member's Edit asks for is a new rev (`turn_id` is then the steer's)."""
 
     __tablename__ = "escalation_drafts"
     __table_args__ = (world_fk("escalation_id", "escalations"),)

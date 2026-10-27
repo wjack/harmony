@@ -8,7 +8,10 @@
   billed so far.
 - A stream that ends without `message_stop` (the connection closed mid-response, no
   error event) is a failed, retryable call: the SDK's accumulated snapshot is a
-  fragment whose usage never reported its output tokens.
+  fragment whose usage never reported its output tokens. So is a stream whose tool
+  input the SDK can't parse as JSON (it raises a plain `ValueError`): the model wrote
+  malformed JSON, and the next attempt asks again. The model retry policy bounds the
+  attempts.
 - The final message is stored exactly as accumulated: no `exclude_none`, no
   `exclude_defaults`, so an empty thinking block keeps its empty text and signature.
 - `stop_reason == "refusal"` is checked before anything reads the content; the
@@ -30,7 +33,7 @@ import contextlib
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from decimal import Decimal
 from typing import Final, cast
 
@@ -130,7 +133,7 @@ class AnthropicModel:
                 extra_body=body,
             ) as stream:
                 completed = False
-                async for event in stream:
+                async for event in _parsed(stream, tracker):
                     raw = _raw_event(event)
                     if raw is None:
                         continue
@@ -216,6 +219,25 @@ class AnthropicModel:
         while True:
             await asyncio.sleep(self._heartbeat_interval)
             heartbeat()
+
+
+async def _parsed[T](stream: AsyncIterator[T], tracker: StreamUsageTracker) -> AsyncIterator[T]:
+    """The stream's events, with the SDK's failure to parse a tool's input JSON as a
+    retryable `ModelCallError`. Only the SDK's own iteration is covered: a `ValueError`
+    from our code handling an event isn't one. The SDK's message quotes the model's
+    output, so it isn't chained into the error that Temporal records."""
+    while True:
+        try:
+            event = await anext(stream)
+        except StopAsyncIteration:
+            return
+        except ValueError:
+            raise ModelCallError(
+                "the model wrote tool input that isn't valid JSON",
+                partial_usage=tracker.usage,
+                served_model=tracker.served_model,
+            ) from None
+        yield event
 
 
 def _raw_event(event: object) -> Mapping[str, JsonValue] | None:

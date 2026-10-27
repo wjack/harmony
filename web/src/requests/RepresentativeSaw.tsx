@@ -1,12 +1,13 @@
 /**
  * "What our representative saw" (REVISION_UNSTRUCTURED.md §2): exactly the parts of
  * Claude for <us>'s frozen prompt on this thread, the notices Harmony sent it since (a
- * changed setting, mode or sharing description replaces what its prompt says, R§12), and
- * each result its side gave it: a settled consult's, and a held message's when it quotes
- * what a person wrote. The server lists a notice or result only once a stored call
- * carried it. Nothing else from our side ever reaches the representative.
+ * changed setting, mode or sharing description replaces what its prompt says, R§12), the
+ * guidance our side's edits gave it (EDIT.md §3.6), and each result its side gave it: a
+ * settled consult's, and a held message's when it quotes what a person wrote. The server
+ * lists a notice, guidance or result only once a stored call carried it. Nothing else
+ * from our side ever reaches the representative.
  */
-import { Bell, Building2, FileText, IdCard, MessageCircleQuestion, ScrollText, Share2, Target, X } from "lucide-react";
+import { Bell, Building2, FileText, IdCard, MessageCircleQuestion, ScrollText, Share2, Sparkles, Target, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState, type ReactNode } from "react";
 
@@ -78,6 +79,7 @@ const NOTICE_HEADING: Record<DeliveredNotice["kind"], string> = {
   sharing: "What it may pass on changed",
   world_date: "Today's date",
   closed: "The other side closed the conversation",
+  reopened: "The conversation was reopened",
 };
 
 function releasedBy(answer: ReleasedAnswer): string {
@@ -118,6 +120,7 @@ export function RepresentativeSaw({ open, onOpenChange, us, them, representative
   const released = [...(representative?.released ?? [])].sort(
     (a, b) => Date.parse(a.released_at) - Date.parse(b.released_at),
   );
+  const guidance = [...(representative?.guidance ?? [])].sort((a, b) => a.version - b.version);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -135,7 +138,7 @@ export function RepresentativeSaw({ open, onOpenChange, us, them, representative
               <Dialog.Title className="text-[16px] leading-6 font-semibold">What our representative saw</Dialog.Title>
               <Dialog.Description className="mt-0.5 text-[13px] leading-5 text-muted">
                 Everything {representativeName(us.name)} had on this thread with {them.name}: its prompt, and the
-                notices and answers your side gave it since.
+                notices, guidance and answers your side gave it since.
               </Dialog.Description>
             </div>
             <Dialog.Close
@@ -177,6 +180,17 @@ export function RepresentativeSaw({ open, onOpenChange, us, them, representative
                       heading={NOTICE_HEADING[notice.kind]}
                       text={notice.text}
                       meta={`Sent ${dateTime(notice.delivered_at, calendar)}`}
+                    />
+                  ))}
+                </Listed>
+                <Listed label="Guidance from your side" count={guidance.length}>
+                  {guidance.map((version) => (
+                    <Row
+                      key={version.version}
+                      icon={<Sparkles size={15} strokeWidth={1.5} />}
+                      heading={`Guidance, version ${String(version.version)}`}
+                      text={version.text}
+                      meta={`Sent ${dateTime(version.delivered_at, calendar)}`}
                     />
                   ))}
                 </Listed>

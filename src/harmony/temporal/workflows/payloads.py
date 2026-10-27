@@ -20,11 +20,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from hashlib import sha256
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from temporalio.exceptions import ActivityError, ApplicationError
 
 from harmony.agents.models import MAX_ACTIVE_THREADS, EscalationAction, RequestStatus
@@ -51,6 +52,14 @@ NOT_IN_ORG_ERROR: Final = "NotInOrg"
 INVALID_RESOLUTION_ERROR: Final = "InvalidResolution"
 # The row an Update names isn't in the world (404).
 NOT_FOUND_ERROR: Final = "NotFoundInWorld"
+# A steer is already running for that side (409 `steer_running`), with
+# `details=[{"by_member_id": <its author>}]`.
+STEER_RUNNING_ERROR: Final = "SteerRunning"
+# The thread has ended, or is ending: Reopen is the way back (409 `thread_closed`).
+THREAD_CLOSED_ERROR: Final = "ThreadClosed"
+# A steer id already stored with different content: one client reused its key for
+# different text (422 `invalid`).
+STEER_CONFLICT_ERROR: Final = "SteerConflict"
 # A model activity's refused hosted reservation, non-retryable, with
 # `details=[BudgetExhaustedDetails(...).model_dump()]`: an uncaught exception would
 # reach the workflow with only its class name and message (3.5).
@@ -67,6 +76,11 @@ BUDGET_FAILURES: Final[Mapping[BudgetKind, FailureReason]] = MappingProxyType(
         "paused": "paused",
     }
 )
+
+# A steer's instruction is as long as a comment may be (`notes.BODY_MAX_CHARS`), and the
+# unsaved draft wording it carries at most `steers.draft_text`'s CHECK.
+STEER_BODY_MAX_CHARS: Final = 4000
+DRAFT_TEXT_MAX_CHARS: Final = 20_000
 
 # A conversation workflow continues as new after this many turns, and exits after
 # this long without a message, an update or a pending card.
@@ -135,6 +149,9 @@ class NetworkUpdate(_Payload):
 
     request_id: UUID
     kind: NetworkUpdateKind
+    # The request's round that ended: each reopen that reopened the request adds one
+    # (REOPEN.md §6.2), and the chat takes each round once.
+    round: int = Field(default=1, ge=1)
 
 
 class ConversationCarry(_Payload):
@@ -144,27 +161,15 @@ class ConversationCarry(_Payload):
     network_updates: list[NetworkUpdate] = []
     # Internal turns taken so far (the cassette turn number continues from here).
     turns: int = Field(default=0, ge=0)
-    # Requests whose `closed` update was taken: a repeat (a retried signal) is dropped.
+    # Read only, from runs before rounds: requests whose round 1 `closed` was taken.
     closed_request_ids: list[UUID] = []
+    # The highest round whose `closed` update was taken, per request: a repeat (a
+    # retried signal, or a second caller of `end_round`) is dropped.
+    closed_request_rounds: dict[UUID, int] = {}
     # `closed` updates a turn took but never stored (`ConversationWorkflow._undelivered`).
     undelivered_updates: list[NetworkUpdate] = []
     # Why the last turn failed, if it did and no turn has run since.
     turn_failure: FailureReason | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _failed_flag(cls, data: object) -> object:
-        """A carry from before failure reasons (3.5) says only whether the last turn
-        failed. It reads as `model_error`, as `failure_reason` reads a failure it can't
-        place, so a conversation started or continued then still replays."""
-        if not isinstance(data, dict):
-            return data
-        fields = dict(cast(dict[str, Any], data))
-        if "turn_failed" not in fields:
-            return fields
-        failed = fields.pop("turn_failed")
-        fields.setdefault("turn_failure", "model_error" if failed else None)
-        return fields
 
 
 class ConversationInput(_Payload):
@@ -247,6 +252,39 @@ class RequestProgress(_Payload):
 # --- ThreadWorkflow ------------------------------------------------------------------
 
 
+class ThreadCarry(_Payload):
+    """What one run of a thread hands the next (REOPEN.md §4.9): turn numbers, delivered
+    seqs and consult ordinals continue, and each side's next turn opens with the tool
+    results it is owed, so its transcript stays valid across runs."""
+
+    turns: dict[Side, int]
+    delivered: dict[Side, int]
+    consults: dict[Side, int]
+    owed: dict[Side, list[OwedResult]]
+
+    @field_validator("owed")
+    @classmethod
+    def _settled(cls, owed: dict[Side, list[OwedResult]]) -> dict[Side, list[OwedResult]]:
+        # A pending result would wait forever: nothing in a new run resolves it.
+        if any(result.content is None for results in owed.values() for result in results):
+            raise ValueError("a carried tool result can't be pending")
+        return owed
+
+
+class ReopenInput(_Payload):
+    """The attempt a reopened run starts with (REOPEN.md §4.3): the API recorded the
+    steer, and `record_reopen` writes it again if that commit failed."""
+
+    steer_id: UUID
+    side: Side
+    org_id: UUID
+    member_id: UUID
+    body: str = Field(min_length=1, max_length=STEER_BODY_MAX_CHARS)
+    # The steer's seq, and the terminal state the thread is reopened from.
+    seq: int = Field(ge=1)
+    from_state: ThreadState
+
+
 class ThreadInput(_Payload):
     world_id: UUID
     thread_id: UUID
@@ -255,10 +293,18 @@ class ThreadInput(_Payload):
     responder_org_id: UUID
     # The thread's cassette key (`agents.keys.thread_key`), fixed when it opens.
     cassette_thread: str
+    # Carried turns included, so every run gets the same number of new turns.
     max_turns: int = Field(default=16, ge=1)
     # The thread ends `expired` here, whatever it waits on (a person included), so it
     # always writes its own terminal state inside the 24 h execution timeout.
     deadline_at: datetime | None = None
+    # Set on a reopened run (REOPEN.md §4.3); all defaulted, so run 1 is unchanged.
+    run: int = Field(default=1, ge=1)
+    carry: ThreadCarry | None = None
+    reopen: ReopenInput | None = None
+    # Each side's latest guidance version and steer seq, which the run starts from.
+    guidance: dict[Side, int] = {}
+    steer_seq: dict[Side, int] = {}
 
 
 class ThreadResult(_Payload):
@@ -290,19 +336,38 @@ class Reassigned(_Payload):
     assignees: list[UUID]
 
 
-class Redraft(_Payload):
-    """Update `redraft`: "Ask Claude to redraft" an open consult escalation's answer
-    with the member's instruction (a new `draft_rev`; the escalation stays open)."""
+class SteerRequest(_Payload):
+    """Update `steer`: a member's Edit on this thread (EDIT.md §3.1). The API has checked
+    who sent it and that they can see the thread and the item; the id is the server's
+    (`steers.steer_id_for`), so the Update id (`update_id`) dedupes a retried POST."""
 
-    escalation_id: UUID
-    instruction: str = Field(min_length=1, max_length=4000)
-    by_member_id: UUID
+    steer_id: UUID
+    side: Side
+    org_id: UUID
+    member_id: UUID
+    client_key: UUID
+    body: str = Field(min_length=1, max_length=STEER_BODY_MAX_CHARS)
+    # The waiting item the member was looking at, if any.
+    escalation_id: UUID | None = None
+    # The member's unsaved wording of that item's draft, which the rewrite starts from.
+    draft_text: str | None = Field(default=None, max_length=DRAFT_TEXT_MAX_CHARS)
+
+    @property
+    def update_id(self) -> str:
+        """`steer:{steer_id}:{body digest}`. Temporal answers a repeated Update id with
+        the first one's outcome, so the same key with other text must be a new Update:
+        `record_steer` then refuses it (`STEER_CONFLICT_ERROR`) instead of the first
+        steer's 202 coming back for it."""
+        return f"steer:{self.steer_id}:{sha256(self.body.encode()).hexdigest()[:16]}"
 
 
-class RedraftStarted(_Payload):
-    escalation_id: UUID
-    # The rev the answerer is drafting; it appears as an `escalation_draft` snapshot.
-    draft_rev: int
+class SteerStarted(_Payload):
+    """`steer`'s result, and `POST /threads/{id}/steers`' 202 body. `escalation_id` and
+    `draft_rev` are set when the item is being rewritten, as that rev."""
+
+    steer_id: UUID
+    escalation_id: UUID | None
+    draft_rev: int | None
 
 
 class ThreadProgress(_Payload):
@@ -326,11 +391,16 @@ __all__ = [
     "CONVERSATION_IDLE",
     "CONVERSATION_KIND",
     "CONVERSATION_TURNS_PER_RUN",
+    "DRAFT_TEXT_MAX_CHARS",
     "ESCALATION_NOT_OPEN_ERROR",
     "INVALID_RESOLUTION_ERROR",
     "NOT_FOUND_ERROR",
     "NOT_IN_ORG_ERROR",
     "REQUEST_KIND",
+    "STEER_BODY_MAX_CHARS",
+    "STEER_CONFLICT_ERROR",
+    "STEER_RUNNING_ERROR",
+    "THREAD_CLOSED_ERROR",
     "THREAD_KIND",
     "BudgetExhaustedDetails",
     "CardResolved",
@@ -346,9 +416,11 @@ __all__ = [
     "NetworkUpdateKind",
     "Reassigned",
     "Reassignment",
-    "Redraft",
-    "RedraftStarted",
+    "ReopenInput",
     "RequestProgress",
+    "SteerRequest",
+    "SteerStarted",
+    "ThreadCarry",
     "ThreadChanged",
     "ThreadInput",
     "ThreadProgress",

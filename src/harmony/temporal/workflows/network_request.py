@@ -4,9 +4,11 @@ ID `w:{world}:req:{request_id}`.
 Started by `NetworkActivities.start_network_request` once an outreach card is approved.
 It opens one thread per recipient (`NetworkActivities.open_thread`), each running its
 own `ThreadWorkflow`, through a sliding window of `max_active_threads` threads that
-haven't ended, and follows them through `thread_changed` signals. Once every thread is
-`closed` or `expired`, the request is `closed` and the origin chat hears `closed`, the
-one update that wakes internal Claude to tell the member how it went.
+haven't ended, and follows each thread's first run through `thread_changed` signals.
+Once every first run has ended it calls `end_round`, which closes the request unless a
+thread was reopened meanwhile (docs/design/REOPEN.md §6); that thread's own tail closes
+it later. When the request closes, the origin chat hears `closed`, the one update that
+wakes internal Claude to tell the member how it went.
 
 Owner: R-temporal.
 """
@@ -22,10 +24,10 @@ with workflow.unsafe.imports_passed_through():
     from harmony.agents.models import RequestStatus
     from harmony.db.models.choices import ThreadState
     from harmony.temporal.activities.network import (
+        EndRoundInput,
         NetworkActivities,
         NotifyConversationInput,
         OpenThreadInput,
-        RequestStatusInput,
     )
     from harmony.temporal.policies import mirror_activity_options
     from harmony.temporal.workflows.payloads import (
@@ -57,15 +59,16 @@ class NetworkRequestWorkflow:
                 break
             await workflow.wait_condition(self._can_progress)
         await workflow.wait_condition(workflow.all_handlers_finished)
-        self._status = "closed"
-        await workflow.execute_activity_method(
-            NetworkActivities.set_request_status,
-            RequestStatusInput(
-                world_id=request.world_id, request_id=request.request_id, status="closed"
+        ended = await workflow.execute_activity_method(
+            NetworkActivities.end_round,
+            EndRoundInput(
+                world_id=request.world_id, request_id=request.request_id, from_workflow=True
             ),
             **mirror_activity_options(),
         )
-        await self._notify_closed()
+        self._status = "closed" if ended.closed else "active"
+        if ended.closed:
+            await self._notify_closed(ended.round)
         return NetworkRequestResult(status=self._status)
 
     @workflow.signal
@@ -127,7 +130,7 @@ class NetworkRequestWorkflow:
             return live == 0
         return live < self._input.max_active_threads
 
-    async def _notify_closed(self) -> None:
+    async def _notify_closed(self, round: int) -> None:
         request = self._input
         if request.conversation_id is None:
             return
@@ -136,7 +139,7 @@ class NetworkRequestWorkflow:
             NotifyConversationInput(
                 world_id=request.world_id,
                 conversation_id=request.conversation_id,
-                update=NetworkUpdate(request_id=request.request_id, kind="closed"),
+                update=NetworkUpdate(request_id=request.request_id, kind="closed", round=round),
             ),
             **mirror_activity_options(),
         )

@@ -135,7 +135,7 @@ function Primitives() {
           open={modal}
           onOpenChange={setModal}
           title="Share this thread"
-          description="Teammates you share with can see the thread and its internal notes."
+          description="Teammates you share with can see the conversation and your team's comments."
           footer={
             <>
               <Button

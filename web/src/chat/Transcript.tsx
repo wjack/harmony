@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { cx } from "../shell/ui/cx";
 import { InlineQuestionCard } from "./cards/InlineQuestionCard";
-import { OutreachCard } from "./cards/OutreachCard";
+import { EarlierVersion, OutreachRecord } from "./cards/OutreachCard";
 import { RequestStatusCard } from "./cards/RequestStatusCard";
 import type { Block } from "./items";
 import type { StreamingText } from "./live";
@@ -29,6 +29,10 @@ export interface TranscriptProps extends TranscriptActions {
   /** Why Claude's last turn failed (failureCopy.ts), while nothing has run since; else null. */
   failure: string | null;
   streaming: StreamingText | null;
+  /** The outreach card waiting on the member, drawn by the chat in its block's place. */
+  pending: { cardId: string; node: ReactNode } | null;
+  /** Cards the member approved with wording of their own, by card id. */
+  editedCards: ReadonlySet<string>;
 }
 
 /** Cards sit a little outside the text column, as Claude's tool results do. */
@@ -40,6 +44,11 @@ function spacing(block: Block, previous: Block | undefined): string {
   if (block.kind === "user") return "mt-8";
   if (previous.kind === "user") return "mt-12";
   return "mt-4";
+}
+
+/** When each request went out, by request id: its status card's time. */
+function sentTimes(blocks: readonly Block[]): Map<string, string> {
+  return new Map(blocks.flatMap((block) => (block.kind === "request" ? [[block.item.request_id, block.item.at]] : [])));
 }
 
 /** Each reply's text, for its Copy button: everything Claude wrote since the last member message. */
@@ -62,6 +71,8 @@ export function Transcript({
   showSpark,
   failure,
   streaming,
+  pending,
+  editedCards,
   answering,
   answerErrors,
   blocked,
@@ -70,6 +81,7 @@ export function Transcript({
 }: TranscriptProps) {
   const texts = replyTexts(blocks);
   const lastReplyKey = [...texts.keys()].at(-1);
+  const sent = sentTimes(blocks);
 
   const render = (block: Block, next: Block | undefined): ReactNode => {
     switch (block.kind) {
@@ -86,9 +98,24 @@ export function Transcript({
           />
         );
       case "activity":
-        return <ActivityLine items={block.items} reply={next?.kind === "assistant" ? next.item.markdown : null} />;
+        return (
+          <ActivityLine
+            items={block.items}
+            reply={next?.kind === "assistant" ? next.item.markdown : null}
+            working={working}
+          />
+        );
       case "outreach":
-        return <OutreachCard item={block.item} />;
+        if (pending !== null && block.item.card_id === pending.cardId) return pending.node;
+        return (
+          <OutreachRecord
+            item={block.item}
+            sentAt={block.item.request_id === null ? null : (sent.get(block.item.request_id) ?? null)}
+            edited={editedCards.has(block.item.card_id)}
+          />
+        );
+      case "earlier":
+        return <EarlierVersion item={block.item} />;
       case "request":
         return <RequestStatusCard requestId={block.item.request_id} memberId={memberId} />;
       case "question":

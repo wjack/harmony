@@ -2,7 +2,9 @@
 UI_REFERENCE §6).
 
 - GET /api/threads/{thread_id}/workspace: the acting member's org's side panel
-- POST /api/threads/{thread_id}/notes {body}: add an internal note
+- POST /api/threads/{thread_id}/notes {body, as_member_id}: add an internal note
+- POST /api/threads/{thread_id}/steers {client_key, as_member_id, body, escalation_id?,
+  draft_text?}: tell this side's Claude how to handle the thread (docs/design/EDIT.md)
 
 P0's `GET /api/threads/{thread_id}` keeps returning the shared thread (messages both
 sides see). The workspace adds what only the acting member's side may see: its consults
@@ -10,8 +12,8 @@ sides see). The workspace adds what only the acting member's side may see: its c
 Claude looked at, its internal notes, its own close summary, and "What our
 representative saw": the parts of the side's frozen system prompt plus every answer
 released to it (REVISION_UNSTRUCTURED.md §2). Same access rule as the thread (404,
-never 403). Carries `X-Harmony-Cursor`; `consult`, `escalation`, `escalation_draft` and
-`internal_note` snapshots keep it live.
+never 403). Carries `X-Harmony-Cursor`; `consult`, `escalation`, `escalation_draft`,
+`internal_note`, `steer` and `rep_guidance` snapshots keep it live.
 
 Owner: E4.
 """
@@ -27,6 +29,8 @@ from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.client import WorkflowUpdateFailedError
+from temporalio.service import RPCError
 
 from harmony.agents import consult as answerer
 from harmony.agents import context, keys, release
@@ -39,9 +43,25 @@ from harmony.agents.models import (
     MemberRef,
     Route,
 )
-from harmony.api.deps import SessionmakerDep, read_cursor, set_cursor, snapshot_session
-from harmony.api.routes.inbox import HELD_MESSAGE_REASON
-from harmony.api.routes.problems import invalid, not_found, problems, world_retired
+from harmony.api.deps import (
+    ServicesDep,
+    SessionmakerDep,
+    read_cursor,
+    set_cursor,
+    snapshot_session,
+)
+from harmony.api.routes.acting import require_acting
+from harmony.api.routes.inbox import held_reason
+from harmony.api.routes.problems import (
+    ApiProblemError,
+    from_update_failure,
+    invalid,
+    not_found,
+    problem,
+    problems,
+    temporal_of,
+    world_retired,
+)
 from harmony.auth import access
 from harmony.auth.session import Actor, ActorDep
 from harmony.db import repo
@@ -51,7 +71,9 @@ from harmony.db.models import (
     EscalationDraft,
     InternalNote,
     Member,
+    RepGuidance,
     RepSession,
+    Steer,
     Thread,
 )
 from harmony.db.models.base import JsonObject
@@ -61,11 +83,24 @@ from harmony.db.models.choices import (
     NoteAuthor,
     ReleasedBy,
     Side,
+    SteerDraftOutcome,
+    SteerFailure,
+    SteerGuidanceOutcome,
+    SteerKind,
+    SteerStatus,
 )
 from harmony.db.uow import unit_of_work
-from harmony.domain import consults, escalations, notes, routing, threads
+from harmony.domain import consults, escalations, notes, routing, steers, threads
 from harmony.domain.notes import BODY_MAX_CHARS
 from harmony.errors import WorldRetired
+from harmony.temporal.activities.network import run_update, workflow_missing
+from harmony.temporal.workflows.payloads import (
+    DRAFT_TEXT_MAX_CHARS,
+    STEER_BODY_MAX_CHARS,
+    SteerRequest,
+    SteerStarted,
+    thread_workflow_id,
+)
 
 router = APIRouter(tags=["threads"])
 
@@ -105,6 +140,13 @@ class RouteView(_View):
     assignees: list[RouteAssigneeView]
 
 
+class RewrittenBy(_View):
+    """The steer whose instruction rewrote a draft, and who gave it."""
+
+    steer_id: UUID
+    author: MemberRef
+
+
 class EscalationDraftView(_View):
     draft_rev: int
     # The drafted answer (a consult), or the held message (`outbound_review`).
@@ -115,6 +157,8 @@ class EscalationDraftView(_View):
     rationale: str
     # What internal Claude looked at while drafting, from its tool calls.
     activity: list[ActivityLine]
+    # None unless a steer rewrote this rev.
+    rewritten_by: RewrittenBy | None
     created_at: datetime
 
 
@@ -169,8 +213,49 @@ class RepresentativeContext(_View):
     notices: list[context.DeliveredNotice]
     # Only those a stored transcript row carries: a thread can end before one is given.
     released: list[ReleasedAnswerView]
+    guidance: list[context.DeliveredGuidance]
     # When the system prompt was frozen: this side's first turn.
     frozen_at: datetime
+
+
+class SteerView(_View):
+    """A member's instruction to this side's Claude (an Edit, or a Reopen's text) and
+    what came of it."""
+
+    id: UUID
+    kind: SteerKind
+    author: MemberRef
+    body: str
+    created_at: datetime
+    status: SteerStatus
+    # The item the member was looking at, and its rev then.
+    escalation_id: UUID | None
+    draft_rev: int | None
+    guidance_outcome: SteerGuidanceOutcome | None
+    guidance_version: int | None
+    draft_outcome: SteerDraftOutcome | None
+    failure_reason: SteerFailure | None
+    version: int
+
+
+class GuidanceView(_View):
+    """What this side's representative follows on the thread now."""
+
+    version: int
+    # Empty when the guidance was withdrawn.
+    text: str
+    created_at: datetime
+    steer_id: UUID
+    by: MemberRef
+    # None until the representative is given this version.
+    delivered_at: datetime | None
+
+
+class EarlierSummary(_View):
+    """This side's close summary of an earlier run."""
+
+    run: int
+    text: str
 
 
 class ThreadWorkspace(_View):
@@ -184,6 +269,12 @@ class ThreadWorkspace(_View):
     representative: RepresentativeContext | None
     # This side's own close summary, once written; the other side's is never shown.
     close_summary: str | None
+    # This side's steers, oldest first.
+    steers: list[SteerView]
+    # None until a steer first sets guidance.
+    guidance: GuidanceView | None
+    # This side's close summaries of earlier runs, oldest first.
+    earlier_summaries: list[EarlierSummary]
     # The thread's version this view is consistent with.
     version: int
 
@@ -192,6 +283,21 @@ class AddNote(BaseModel):
     """`@slug` mentions in `body` share the thread with those teammates."""
 
     body: str = Field(min_length=1, max_length=BODY_MAX_CHARS)
+    # The member the tab shows; 409 `member_changed` when the session has switched.
+    as_member_id: UUID
+
+
+class AddSteer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Makes a retry the same steer (its id is minted from it).
+    client_key: UUID
+    # The member the tab shows; 409 `member_changed` when the session has switched.
+    as_member_id: UUID
+    body: str = Field(min_length=1, max_length=STEER_BODY_MAX_CHARS)
+    # The item the member was looking at, and its draft as they left it.
+    escalation_id: UUID | None = None
+    draft_text: str | None = Field(default=None, max_length=DRAFT_TEXT_MAX_CHARS)
 
 
 @router.get(
@@ -218,6 +324,9 @@ async def get_workspace(
 async def add_note(
     thread_id: UUID, body: AddNote, actor: ActorDep, sessionmaker: SessionmakerDep
 ) -> NoteView:
+    """409 `member_changed` (with `member`) first, then 404 for a thread the member
+    can't see."""
+    await require_acting(sessionmaker, actor, body.as_member_id)
     async with sessionmaker() as db:
         await _visible(db, actor, thread_id)
     try:
@@ -241,6 +350,88 @@ async def add_note(
         members = await _members(db, actor.world_id, [note.author_member_id])
         mentioned = await _mentioned(db, actor.world_id, actor.org_id, [note])
     return _note_view(note, members, mentioned)
+
+
+@router.post(
+    "/threads/{thread_id}/steers",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=SteerStarted,
+    responses=problems(
+        status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT
+    ),
+)
+async def add_steer(
+    thread_id: UUID, body: AddSteer, actor: ActorDep, services: ServicesDep
+) -> SteerStarted:
+    """Start a steer on this side of the thread; its outcome arrives as `steer` events.
+
+    409 `member_changed` (with `member`) first, then 422 `invalid` (a blank body), 404
+    (the thread, or an `escalation_id` that isn't the actor's org's item on it), 403
+    `not_in_org`, 422 `invalid` (the `client_key` already sent other text), 409
+    `steer_running` (with `by`), `thread_closed` and `world_retired`.
+    """
+    await require_acting(services.sessionmaker, actor, body.as_member_id)
+    if not body.body.strip():
+        raise invalid("say what Claude should do differently")
+    steer_id = steers.steer_id_for(actor.world_id, actor.org_id, actor.member_id, body.client_key)
+    async with services.sessionmaker() as db:
+        thread = await _visible(db, actor, thread_id)
+        try:
+            side = threads.side_of(thread, actor.org_id)
+        except ValueError:
+            raise problem(
+                status.HTTP_403_FORBIDDEN,
+                "not_in_org",
+                "your organization isn't a party to this conversation",
+            ) from None
+        if body.escalation_id is not None and not await _own_item(
+            db, actor, thread_id, body.escalation_id
+        ):
+            raise not_found("escalation")
+        stored = await repo.get(db, Steer, actor.world_id, steer_id)
+        if stored is not None and (stored.thread_id, stored.body) != (thread_id, body.body):
+            raise invalid("this client_key was already used for a different edit")
+        if thread.state in threads.TERMINAL_STATES:
+            raise _thread_closed()
+    request = SteerRequest(
+        steer_id=steer_id,
+        side=side,
+        org_id=actor.org_id,
+        member_id=actor.member_id,
+        client_key=body.client_key,
+        body=body.body,
+        escalation_id=body.escalation_id,
+        draft_text=body.draft_text if body.escalation_id is not None else None,
+    )
+    handle = temporal_of(services).get_workflow_handle(
+        thread_workflow_id(actor.world_id, thread_id)
+    )
+    try:
+        return await run_update(handle, "steer", request, SteerStarted, id=request.update_id)
+    except WorkflowUpdateFailedError as failed:
+        raise await from_update_failure(failed, services.sessionmaker, actor.world_id) from None
+    except RPCError as error:
+        if not workflow_missing(error):
+            raise
+    # No run takes it: the thread ended (or, seeded, never ran).
+    raise _thread_closed()
+
+
+async def _own_item(db: AsyncSession, actor: Actor, thread_id: UUID, escalation_id: UUID) -> bool:
+    """Whether the escalation is the actor's org's item on this thread."""
+    found = await db.scalar(
+        select(Escalation.id).where(
+            Escalation.world_id == actor.world_id,
+            Escalation.id == escalation_id,
+            Escalation.thread_id == thread_id,
+            Escalation.org_id == actor.org_id,
+        )
+    )
+    return found is not None
+
+
+def _thread_closed() -> ApiProblemError:
+    return problem(status.HTTP_409_CONFLICT, "thread_closed", "this conversation has ended")
 
 
 async def _visible(db: AsyncSession, actor: Actor, thread_id: UUID) -> Thread:
@@ -285,6 +476,9 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
         db, world_id=world_id, thread_id=thread.id, org_id=actor.org_id
     )
     rep = await db.get(RepSession, (world_id, thread.id, side))
+    steer_rows = await steers.for_thread(db, world_id, thread.id, actor.org_id)
+    guidance = await steers.latest_guidance(db, world_id, thread.id, side)
+    delivered = await context.delivered_guidance(db, world_id, thread.id, side)
     members = await _members(
         db,
         world_id,
@@ -293,8 +487,18 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
             *(row.resolved_by_member_id for row in escalation_rows),
             *(row.released_by_member_id for row in consult_rows),
             *(note.author_member_id for note in note_rows),
+            *(row.author_member_id for row in steer_rows),
+            guidance.created_by_member_id if guidance is not None else None,
         ],
     )
+    # A rev a steer reserved is written only by that steer's rewrite.
+    rewritten_by = {
+        (row.escalation_id, row.draft_rev): RewrittenBy(
+            steer_id=row.id, author=members[row.author_member_id]
+        )
+        for row in steer_rows
+        if row.escalation_id is not None and row.draft_rev is not None
+    }
     mentioned = await _mentioned(db, world_id, actor.org_id, note_rows)
     org_slugs = list(
         await db.scalars(
@@ -312,6 +516,7 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
                 by_consult.get(row.consult_id) if row.consult_id is not None else None,
                 [d for d in draft_rows if d.escalation_id == row.id],
                 activity,
+                rewritten_by,
                 members,
                 org_slugs,
             )
@@ -330,11 +535,19 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
                     members,
                 ),
                 frozen_at=rep.created_at,
+                guidance=delivered,
             )
             if rep is not None
             else None
         ),
         close_summary=rep.close_summary if rep is not None else None,
+        steers=[_steer_view(row, members) for row in steer_rows],
+        guidance=_guidance_view(guidance, delivered, members) if guidance is not None else None,
+        earlier_summaries=[
+            EarlierSummary(run=run.run, text=text)
+            for run in await threads.runs(db, world_id, thread.id)
+            if (text := run.requester_summary if side == "requester" else run.responder_summary)
+        ],
         version=thread.version,
     )
 
@@ -384,19 +597,18 @@ def _released(
         and row.released_by is not None
         and row.released_at is not None
     ]
-    drafts = {(d.escalation_id, d.draft_rev): d for d in draft_rows}
+    drafts = {(d.escalation_id, d.draft_rev): d.answer for d in draft_rows}
     for row in escalation_rows:
         if row.kind != "outbound_review" or row.resolution is None or row.resolved_at is None:
             continue
         resolution = EscalationResolution.model_validate(row.resolution)
-        draft = drafts.get((row.id, row.current_draft_rev or 0))
         resolver = _ref(row.resolved_by_member_id, members)
         # Rebuilt exactly as the representative got it (`network._held_outcome`).
         text = answerer.held_result(
             resolution.action,
             text=resolution.text or "",
-            drafted=draft.answer if draft is not None else "",
-            member_name=resolver.name if resolver is not None else None,
+            drafted=drafts.get((row.id, 1), ""),
+            resolved=drafts.get((row.id, resolution.draft_rev or row.current_draft_rev or 0), ""),
         )
         if context.RELEASED_OPEN in text and text in received:
             released.append(
@@ -417,15 +629,21 @@ def _escalation_view(
     consult: Consult | None,
     drafts: list[EscalationDraft],
     activity: Mapping[tuple[UUID, int], list[ActivityLine]],
+    rewritten_by: Mapping[tuple[UUID, int], RewrittenBy],
     members: Mapping[UUID, MemberRef],
     org_slugs: Sequence[str],
 ) -> EscalationView:
+    held = next((draft for draft in drafts if draft.draft_rev == 1), None)
     return EscalationView(
         id=row.id,
         kind=row.kind,
         status=escalations.escalation_status(row.status),
         consult_id=row.consult_id,
-        reason=release.why_needed(consult) if consult is not None else HELD_MESSAGE_REASON,
+        reason=(
+            release.why_needed(consult)
+            if consult is not None
+            else held_reason(held.rationale if held is not None else None)
+        ),
         assignees=_refs(row.assignees, members),
         current_draft_rev=row.current_draft_rev,
         drafts=[
@@ -436,6 +654,7 @@ def _escalation_view(
                 route=_route_view(draft.route, org_slugs),
                 rationale=draft.rationale,
                 activity=activity.get((row.id, draft.draft_rev), []),
+                rewritten_by=rewritten_by.get((row.id, draft.draft_rev)),
                 created_at=draft.created_at,
             )
             for draft in drafts
@@ -449,6 +668,39 @@ def _escalation_view(
         resolved_at=row.resolved_at,
         created_at=row.created_at,
         version=row.version,
+    )
+
+
+def _steer_view(row: Steer, members: Mapping[UUID, MemberRef]) -> SteerView:
+    return SteerView(
+        id=row.id,
+        kind=row.kind,
+        author=members[row.author_member_id],
+        body=row.body,
+        created_at=row.created_at,
+        status=row.status,
+        escalation_id=row.escalation_id,
+        draft_rev=row.draft_rev,
+        guidance_outcome=row.guidance_outcome,
+        guidance_version=row.guidance_version,
+        draft_outcome=row.draft_outcome,
+        failure_reason=row.failure_reason,
+        version=row.version,
+    )
+
+
+def _guidance_view(
+    row: RepGuidance,
+    delivered: Sequence[context.DeliveredGuidance],
+    members: Mapping[UUID, MemberRef],
+) -> GuidanceView:
+    return GuidanceView(
+        version=row.version,
+        text=row.text,
+        created_at=row.created_at,
+        steer_id=row.steer_id,
+        by=members[row.created_by_member_id],
+        delivered_at=next((d.delivered_at for d in delivered if d.version == row.version), None),
     )
 
 

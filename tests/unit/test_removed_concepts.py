@@ -2,9 +2,12 @@
 from the code, the web client, the migrations, the scenarios and the tests.
 
 Matching is by substring, case-insensitive, so `send_offer`, `ThreadVisibility` and
-`approval_limit` count as much as prose does. Directory visibility (who can find an
-org) is the one kept concept that shares a word. This file names the concepts, so it is
-the only file left out.
+`approval_limit` count as much as prose does. Two kept concepts share a word: directory
+visibility (who can find an org) and the Reopen offer (whether a side may reopen a
+thread: `ReopenOffer`, `reopens.reopen_offer`, docs/design/REOPEN.md §3.2). So does the
+demo's fixed Reopen text, which offers the general capabilities sheet
+(docs/FEEDBACK_R2_PLAN.md §1.9). This file names the concepts, so it is the only file
+left out.
 """
 
 from __future__ import annotations
@@ -23,7 +26,11 @@ REMOVED: Final = re.compile(
     r"|allowlist|default[ _-]?scope|counterparty[ _-]?override",
     re.IGNORECASE,
 )
-KEPT: Final = re.compile(r"directory[ _-]?visibility", re.IGNORECASE)
+KEPT: Final = re.compile(
+    r"directory[ _-]?visibility|reopens?[ ._-]?offer"
+    r"|offer(?:\s+[\w']+){0,2}\s+general\s+capabilities\s+sheet",
+    re.IGNORECASE,
+)
 
 
 def _text_files() -> list[Path]:
@@ -54,7 +61,7 @@ def test_no_removed_concept_is_referenced() -> None:
     assert hits == []
 
 
-def test_the_pattern_catches_code_names_and_spares_directory_visibility() -> None:
+def test_the_pattern_catches_code_names_and_spares_the_kept_concepts() -> None:
     for caught in (
         "send_offer",
         "ThreadVisibility",
@@ -71,5 +78,14 @@ def test_the_pattern_catches_code_names_and_spares_directory_visibility() -> Non
         "counterparty_override",
     ):
         assert REMOVED.search(KEPT.sub("", caught)), caught
-    for kept in ("directory_visibility", "DirectoryVisibility", "directory visibility"):
+    for kept in (
+        "directory_visibility",
+        "DirectoryVisibility",
+        "directory visibility",
+        "ReopenOffer",
+        "reopens.offer(thread)",
+        "def reopen_offer(",
+        "Offer them our general capabilities sheet instead.",
+        "Offer Northlake's general capabilities sheet.",
+    ):
         assert not REMOVED.search(KEPT.sub("", kept)), kept

@@ -61,8 +61,10 @@ An org describes, in prose, **what kinds of information its representative may p
 
 Tools, identical for every representative: `send_message(text)`, `consult(question)`, `close(summary)`.
 
-- A turn is a normal tool loop. The representative may send several messages, consult, then send again, and the turn ends when the model stops calling tools or calls `close`. Tools run one at a time (`disable_parallel_tool_use` stays: it keeps transcripts deterministic).
+- A turn is a normal tool loop. The representative may send several messages, and the turn ends when the model stops calling tools or calls `close`. Tools run one at a time (`disable_parallel_tool_use` stays: it keeps transcripts deterministic).
+  - Round 2 (FEEDBACK_R2_PLAN decision 1): it consults before it sends. Once it has sent a message in a turn, a `consult` is refused with `CONSULT_AFTER_SEND`, and it consults at the start of its next turn.
 - `close(summary)` ends the thread for both sides. The summary is for the closer's own org only (stored per side, never sent to the counterparty). The other side's representative gets a code-written notice and may write its own summary in one last turn.
+  - Round 2 (docs/design/REOPEN.md): a member of either side who can see the thread can reopen it, at most twice and within REOPEN.md's hand-back rules, which starts a new run of the same thread. For threads that start after round 2, the close tool's text no longer says the conversation ends "for good".
 - Turn cap, idle timeout and the blocking consult stay as safety plumbing.
 - Messages carry provenance `agent`, `agent_approved` (released or edited by a teammate) or `human` (a teammate took over). No `template`.
 
@@ -91,7 +93,7 @@ Nothing is deployed and nothing is committed, so fold these into `migrations/ver
 - `knowledge_items.visibility`, `documents.visibility`. These tables remain the org's own records, read only by internal Claude's tools.
 - `escalations.scope`. Escalation kinds become `consult` and `outbound_review`.
 - `thread_messages.offer_id`. Message kinds become `message` and `close`. Provenance drops `template`.
-- Thread states `binding`, `declined`, `awaiting_requester_decision` and `awaiting_subrequest`. States become `active`, `awaiting_principal`, `closed` and `expired`.
+- Thread states `binding`, `declined`, `awaiting_requester_decision` and `awaiting_subrequest`. States become `active`, `awaiting_principal`, `closed` and `expired` (round 2: neither of the last two is final, since Reopen returns a thread to `active`, and the UI shows both as "Closed").
 - `network_requests`: `authority`, `brief_constraints` and the structured brief fields. Sub-request columns go too.
 - Enums: `Visibility`, `GrantScope`, `GrantSubject`, `RevokeMode`, `OfferStatus`, `AcceptanceMode`, plus `GrantedBy` if nothing else uses it.
 - Screening: per-must-have results and `self_reported`.

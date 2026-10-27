@@ -3,8 +3,8 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
 /**
  * A ref for a textarea that stays as tall as its text, up to `max` px: when the text
  * changes, when its width does (a narrower window rewraps the text without changing
- * it), and, while it is empty, when its `placeholder` does (an empty field is as tall as
- * the placeholder it shows).
+ * it), when a web font finishes loading, and, while it is empty, when its `placeholder`
+ * does (an empty field is as tall as the placeholder it shows).
  */
 export function useAutoHeight(
   value: string,
@@ -31,8 +31,13 @@ export function useAutoHeight(
       fit();
     });
     observer.observe(element);
+    // A web font that lands after the first fit rewraps the text at the same width, and
+    // the field would hide its last line. (jsdom has no `document.fonts`.)
+    const fonts = "fonts" in document ? document.fonts : null;
+    fonts?.addEventListener("loadingdone", fit);
     return () => {
       observer.disconnect();
+      fonts?.removeEventListener("loadingdone", fit);
     };
   }, [value, max, placeholder]);
   return field;

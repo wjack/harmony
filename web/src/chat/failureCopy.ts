@@ -52,11 +52,12 @@ const CAP: Record<BudgetReason, string> = {
 };
 
 /**
- * Why the system ended a thread, under its "Stopped" heading. Nothing on a thread can be
- * tried again, so unlike a chat turn's line it asks for nothing. A budget reason names
- * its cap: ran out while the budget reads any cap spent, else busy or nearly used up
- * (calls in flight held the rest, or it has refilled since). The budget names only its
- * widest spent cap, so a pause or another spent cap would hide this one's.
+ * Why the system ended a thread, after "Closed · {date} ·" on its Closed row. Unlike a
+ * chat turn's line it asks for nothing: the row's Reopen is the way back, except after
+ * the other side's refusal, when only they can reopen it (REOPEN.md §3.2). A budget
+ * reason names its cap: ran out while the budget reads any cap spent, else busy or nearly
+ * used up (calls in flight held the rest, or it has refilled since). The budget names
+ * only its widest spent cap, so a pause or another spent cap would hide this one's.
  */
 export function stoppedLine(reason: FailureReason, state: BudgetState): string {
   switch (reason) {

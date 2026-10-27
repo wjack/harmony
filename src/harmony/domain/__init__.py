@@ -17,6 +17,8 @@ through `UnitOfWork.add_event`). Chat messages are never snapshotted on their ow
 their conversation's snapshot tells clients to refetch.
 
 Modules: `conversations`, `cards`, `requests`, `threads`, `consults`, `escalations`,
-`routing`, `notes`, `settings`, `agent_turns` (the per-turn cost and latency rows, with
-no events); `clock` is the world clock; `errors` holds the domain errors.
+`routing`, `notes`, `steers` (members' instructions to their side's Claude and the
+guidance written from them, org-private like notes), `settings`, `agent_turns` (the
+per-turn cost and latency rows, with no events); `clock` is the world clock; `errors`
+holds the domain errors.
 """

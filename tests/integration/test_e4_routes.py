@@ -7,7 +7,9 @@ they answer when a thread, request or chat has already ended."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, Final, cast
 from uuid import UUID, uuid4
 
@@ -16,9 +18,12 @@ from fastapi import FastAPI
 from pydantic import JsonValue, SecretStr
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from temporalio import activity
 from temporalio.client import Client
+from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
 
 from harmony.agents import consult as answerer
 from harmony.agents import context, transcript
@@ -35,6 +40,8 @@ from harmony.agents.models import (
 from harmony.agents.runtime import OwedResult, text_block
 from harmony.agents.transcript import RepSideTranscript, WireMessage
 from harmony.api.app import create_app
+from harmony.api.routes import cards as cards_route
+from harmony.api.routes.problems import from_update_failure
 from harmony.auth.session import current_actor, resolve_actor
 from harmony.config import Settings
 from harmony.db import repo
@@ -45,19 +52,34 @@ from harmony.db.models import (
     NetworkRequest,
     RepNotice,
     RepSession,
+    Steer,
     Thread,
     World,
 )
 from harmony.db.uow import unit_of_work
-from harmony.domain import cards, escalations, requests, routing, threads
+from harmony.domain import cards, escalations, requests, routing, steers, threads
 from harmony.domain import settings as settings_domain
 from harmony.domain.errors import CardNotPending
-from harmony.temporal.activities.agents import rep_opening
+from harmony.temporal.activities.agents import (
+    GuidanceWritten,
+    RepTurnInput,
+    RepTurnResult,
+    SteerPartInput,
+    rep_opening,
+)
 from harmony.temporal.activities.network import (
     ApplyResolutionInput,
     NetworkActivities,
     ThreadStateInput,
 )
+from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
+from harmony.temporal.workflows.payloads import (
+    STEER_RUNNING_ERROR,
+    CardResolved,
+    ThreadInput,
+    thread_workflow_id,
+)
+from harmony.temporal.workflows.thread import ThreadWorkflow
 from tests.integration._e2_world import DANA
 from tests.integration._e2_world import open_thread as e2_open_thread
 from tests.integration._e4_world import (
@@ -78,6 +100,7 @@ from tests.integration._e4_world import (
     start_chat,
 )
 from tests.integration._visitors import ADMIN_SECRET, HISTORY, Visitor, cursor_of, visitor
+from tests.integration._worlds import demote_to_member
 
 type Sessionmaker = async_sessionmaker[AsyncSession]
 type Json = dict[str, Any]
@@ -244,9 +267,11 @@ async def test_a_note_mention_lands_in_shared_with_you(
 ) -> None:
     async with visitor(app) as v:
         _, thread_id, _ = await _story(v, db_sessionmaker)
-        await v.act_as("helen")
+        helen = (await v.act_as("helen"))["member"]["id"]
         note = await v.json(
-            "POST", f"/threads/{thread_id}/notes", json={"body": "@raj is Nov 4 still free?"}
+            "POST",
+            f"/threads/{thread_id}/notes",
+            json={"body": "@raj is Nov 4 still free?", "as_member_id": helen},
         )
         assert note["seq"] == 1
         assert note["author"]["slug"] == "helen"
@@ -260,8 +285,37 @@ async def test_a_note_mention_lands_in_shared_with_you(
         assert "shared" in shared[0]["access_reasons"]
 
         # A bystander org can't write in the margin of a thread it isn't part of.
-        await v.act_as("dana")
-        await v.request("POST", f"/threads/{thread_id}/notes", json={"body": "hi"}, expect=404)
+        dana = (await v.act_as("dana"))["member"]["id"]
+        await v.request(
+            "POST",
+            f"/threads/{thread_id}/notes",
+            json={"body": "hi", "as_member_id": dana},
+            expect=404,
+        )
+
+
+async def test_a_note_from_a_tab_showing_another_member_is_refused(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    """A tab still showing Helen after a switch to Raj in another tab: 409
+    `member_changed` naming Raj, checked before the thread is read, and nothing stored."""
+    async with visitor(app) as v:
+        _, thread_id, _ = await _story(v, db_sessionmaker)
+        helen = (await v.act_as("helen"))["member"]["id"]
+        raj = (await v.act_as("raj"))["member"]
+
+        for thread in (thread_id, uuid4()):
+            refused = await v.json(
+                "POST",
+                f"/threads/{thread}/notes",
+                json={"body": "Checking the block.", "as_member_id": helen},
+                expect=409,
+            )
+            assert refused["code"] == "member_changed"
+            assert refused["member"] == {k: raj[k] for k in ("id", "slug", "name")}
+
+        await v.act_as("helen")
+        assert (await v.json("GET", f"/threads/{thread_id}/workspace"))["notes"] == []
 
 
 # --- Workspace ------------------------------------------------------------------------
@@ -272,8 +326,12 @@ async def test_each_side_sees_only_its_own_workspace(
 ) -> None:
     async with visitor(app) as v:
         _, thread_id, escalation_id = await _story(v, db_sessionmaker)
-        await v.act_as("helen")
-        await v.json("POST", f"/threads/{thread_id}/notes", json={"body": "Checking the block."})
+        helen = (await v.act_as("helen"))["member"]["id"]
+        await v.json(
+            "POST",
+            f"/threads/{thread_id}/notes",
+            json={"body": "Checking the block.", "as_member_id": helen},
+        )
         response = await v.request("GET", f"/threads/{thread_id}/workspace")
         assert cursor_of(response) > 0
         workspace = response.json()
@@ -298,11 +356,13 @@ async def test_each_side_sees_only_its_own_workspace(
             "route",
             "rationale",
             "activity",
+            "rewritten_by",
             "created_at",
         }
         assert [n["body"] for n in workspace["notes"]] == ["Checking the block."]
-        # Northlake's representative hasn't taken a turn yet.
+        # Northlake's representative hasn't taken a turn yet, nor been steered.
         assert (workspace["representative"], workspace["close_summary"]) == (None, None)
+        assert (workspace["steers"], workspace["guidance"]) == ([], None)
 
         await v.act_as("alex")
         workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
@@ -313,7 +373,8 @@ async def test_each_side_sees_only_its_own_workspace(
             [],
         )
 
-        # A teammate without access (Raj wasn't routed or shared it) gets nothing.
+        # A teammate without access (Raj, a member, wasn't routed or shared it) gets nothing.
+        await demote_to_member(db_sessionmaker, await _world(v), "raj")
         await v.act_as("raj")
         await v.request("GET", f"/threads/{thread_id}/workspace", expect=404)
         await v.request("GET", f"/threads/{uuid4()}/workspace", expect=404)
@@ -360,7 +421,13 @@ async def test_drafts_and_close_summaries_stay_with_their_side_after_the_thread_
         # The activity `ThreadWorkflow._end("closed")` runs; it never reaches Temporal.
         activities = NetworkActivities(cast(Client, None), db_sessionmaker)
         await activities.set_thread_state(
-            ThreadStateInput(world_id=outreach.world_id, thread_id=thread_id, state="closed")
+            ThreadStateInput(
+                world_id=outreach.world_id,
+                thread_id=thread_id,
+                state="closed",
+                end_reason="closed",
+                closed_by="requester",
+            )
         )
         async with unit_of_work(db_sessionmaker, outreach.world_id) as uow:
             for side, summary in (
@@ -390,6 +457,7 @@ async def test_drafts_and_close_summaries_stay_with_their_side_after_the_thread_
         (edge,) = network["edges"]
         assert edge["close_summary"] == "Booked Nov 4."
         # A member who can't see the thread doesn't get the request at all.
+        await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
         await v.act_as("raj")
         params = {"request": str(outreach.request_id)}
         await v.request("GET", "/network", params=params, expect=404)
@@ -546,7 +614,10 @@ async def test_what_the_representative_saw_lists_every_result_its_side_gave_it(
             (
                 None,
                 answerer.held_result(
-                    "decline", text="Don't name clients.", drafted="Acme holds Nov 4."
+                    "decline",
+                    text="Don't name clients.",
+                    drafted="Acme holds Nov 4.",
+                    resolved="Acme holds Nov 4.",
                 ),
             ),
         ]
@@ -571,7 +642,8 @@ async def test_escalation_actions_check_who_and_whether_it_is_open(
         path = f"/escalations/{escalation_id}"
         approve = {"action": "approve", "text": "Yes, Nov 4."}
 
-        # The requester can't see Northlake's item; Raj isn't routed it.
+        # The requester can't see Northlake's item; Raj, a member, isn't routed it.
+        await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
         for slug in ("alex", "raj"):
             await v.act_as(slug)
             problem = await v.json("POST", f"{path}/resolve", json=approve, expect=404)
@@ -587,10 +659,10 @@ async def test_escalation_actions_check_who_and_whether_it_is_open(
         # No workflow waits on it (its thread ended): it isn't open any more.
         problem = await v.json("POST", f"{path}/resolve", json=approve, expect=409)
         assert problem["code"] == "escalation_not_open"
-        problem = await v.json(
-            "POST", f"{path}/redraft", json={"instruction": "Shorter."}, expect=409
-        )
-        assert problem["code"] == "escalation_not_open"
+        # A rewrite is an Edit now (POST /threads/{id}/steers), not an action on the item.
+        await v.request("POST", f"{path}/redraft", json={"instruction": "Shorter."}, expect=405)
+        revise = {"action": "revise", "text": "Shorter."}
+        await v.request("POST", f"{path}/resolve", json=revise, expect=422)
 
         async with db_sessionmaker() as session:
             await session.execute(
@@ -602,6 +674,182 @@ async def test_escalation_actions_check_who_and_whether_it_is_open(
         problem = await v.json("POST", f"{path}/resolve", json=approve, expect=409)
         assert problem["code"] == "escalation_not_open"
         assert problem["resolved_by"]["slug"] == "helen"
+
+
+async def test_a_steer_is_its_sides_own_and_needs_a_running_thread(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(temporal_app) as v:
+        outreach, thread_id, escalation_id = await _story(v, db_sessionmaker)
+        path = f"/threads/{thread_id}/steers"
+        raj = (await v.member_ids())["raj"]
+        helen = (await v.act_as("helen"))["member"]["id"]
+        edit = {"client_key": str(uuid4()), "as_member_id": helen, "body": "Shorter."}
+
+        problem = await v.json("POST", path, json={**edit, "as_member_id": str(raj)}, expect=409)
+        assert problem["code"] == "member_changed"
+        problem = await v.json("POST", path, json={**edit, "body": "  "}, expect=422)
+        assert problem["code"] == "invalid"
+        problem = await v.json(
+            "POST", path, json={**edit, "escalation_id": str(uuid4())}, expect=404
+        )
+        assert problem["code"] == "not_found"
+        # No workflow runs this seeded thread, so nothing can take the steer.
+        on_item = {**edit, "escalation_id": str(escalation_id), "draft_text": "Yes: Nov 4."}
+        problem = await v.json("POST", path, json=on_item, expect=409)
+        assert problem["code"] == "thread_closed"
+
+        # Northlake's item isn't the requester's to steer.
+        alex = (await v.act_as("alex"))["member"]["id"]
+        problem = await v.json("POST", path, json={**on_item, "as_member_id": alex}, expect=404)
+        assert problem["code"] == "not_found"
+
+        # A steer and the guidance it wrote are their side's alone.
+        async with unit_of_work(db_sessionmaker, outreach.world_id) as uow:
+            steer = await steers.record(
+                uow,
+                steer_id=uuid4(),
+                thread_id=thread_id,
+                org_id=NORTHLAKE,
+                kind="edit",
+                author_member_id=HELEN,
+                body="Keep the reserve out of it.",
+            )
+            await steers.add_guidance(uow, steer, "Don't mention the reserve block.")
+            await uow.commit()
+        workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
+        assert (workspace["steers"], workspace["guidance"]) == ([], None)
+        await v.act_as("helen")
+        workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
+        (shown,) = workspace["steers"]
+        assert (shown["body"], shown["author"]["slug"]) == ("Keep the reserve out of it.", "helen")
+        guidance = workspace["guidance"]
+        assert (guidance["version"], guidance["text"]) == (1, "Don't mention the reserve block.")
+        assert guidance["delivered_at"] is None
+
+
+@activity.defn(name="rep_turn")
+async def _endless_turn(turn: RepTurnInput) -> RepTurnResult:
+    """The requester's first turn, still running when the worker stops."""
+    await asyncio.Event().wait()
+    raise AssertionError("never set")
+
+
+@activity.defn(name="write_guidance")
+async def _no_guidance(part: SteerPartInput) -> GuidanceWritten:
+    """Nothing written, so each steer settles as soon as it starts."""
+    return GuidanceWritten(outcome="unchanged")
+
+
+@asynccontextmanager
+async def _live_thread(
+    env: WorkflowEnvironment, sessionmaker: Sessionmaker, outreach: Outreach, thread_id: UUID
+) -> AsyncIterator[None]:
+    """The thread's `ThreadWorkflow`, running its Updates with the real database
+    activities. Its requester's turn never ends, so the thread stays live."""
+    network = NetworkActivities(env.client, sessionmaker)
+    main = Worker(
+        env.client,
+        task_queue=MAIN_TASK_QUEUE,
+        workflows=[ThreadWorkflow],
+        activities=[network.record_steer, network.settle_steer, network.set_thread_state],
+    )
+    model = Worker(
+        env.client, task_queue=MODEL_TASK_QUEUE, activities=[_endless_turn, _no_guidance]
+    )
+    async with main, model:
+        handle = await env.client.start_workflow(
+            ThreadWorkflow.run,
+            ThreadInput(
+                world_id=outreach.world_id,
+                thread_id=thread_id,
+                request_id=outreach.request_id,
+                requester_org_id=HENDERSON,
+                responder_org_id=NORTHLAKE,
+                cassette_thread="henderson.northlake",
+            ),
+            id=thread_workflow_id(outreach.world_id, thread_id),
+            task_queue=MAIN_TASK_QUEUE,
+        )
+        try:
+            yield
+        finally:
+            await handle.terminate()
+
+
+async def _steers_of(sessionmaker: Sessionmaker, world_id: UUID) -> list[tuple[UUID, str, str]]:
+    async with sessionmaker() as session:
+        rows = await session.execute(
+            select(Steer.author_member_id, Steer.body, Steer.status)
+            .where(Steer.world_id == world_id)
+            .order_by(Steer.seq)
+        )
+        return [(author, body, status) for author, body, status in rows.all()]
+
+
+async def test_a_steer_starts_for_whoever_can_see_the_thread_and_never_reuses_a_key(
+    temporal_app: FastAPI, temporal_env: WorkflowEnvironment, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(temporal_app) as v:
+        outreach, thread_id, _ = await _story(v, db_sessionmaker)
+        world_id = outreach.world_id
+        path = f"/threads/{thread_id}/steers"
+        # Helen, routed the consult, can see the thread as a member; Raj can't.
+        for slug in ("helen", "raj"):
+            await demote_to_member(db_sessionmaker, world_id, slug)
+        ids = await v.member_ids()
+        key = uuid4()
+        edit = {"client_key": str(key), "as_member_id": str(ids["helen"]), "body": "Shorter."}
+        async with _live_thread(temporal_env, db_sessionmaker, outreach, thread_id):
+            await v.act_as("helen")
+            started = await v.json("POST", path, json=edit, expect=202)
+            steer_id = steers.steer_id_for(world_id, NORTHLAKE, HELEN, key)
+            assert started == {"steer_id": str(steer_id), "escalation_id": None, "draft_rev": None}
+            # A retried POST is the same steer; the key with other text is refused, not
+            # answered with the first steer's 202.
+            assert await v.json("POST", path, json=edit, expect=202) == started
+            other = {**edit, "body": "Longer."}
+            problem = await v.json("POST", path, json=other, expect=422)
+            assert problem["code"] == "invalid"
+
+            # Neither Raj (Northlake, no access) nor Priya (Calder, not a party) is told
+            # the thread exists, and neither sends an Update.
+            for slug in ("raj", "priya"):
+                await v.act_as(slug)
+                outsider = {**edit, "client_key": str(uuid4()), "as_member_id": str(ids[slug])}
+                problem = await v.json("POST", path, json=outsider, expect=404)
+                assert problem["code"] == "not_found"
+        assert await _steers_of(db_sessionmaker, world_id) == [(HELEN, "Shorter.", "failed")]
+
+
+def test_a_steer_id_is_one_members_one_key_in_one_world() -> None:
+    world, key = uuid4(), uuid4()
+    steer_id = steers.steer_id_for(world, NORTHLAKE, HELEN, key)
+    assert steers.steer_id_for(world, NORTHLAKE, HELEN, key) == steer_id
+    others = [
+        steers.steer_id_for(uuid4(), NORTHLAKE, HELEN, key),
+        steers.steer_id_for(world, HENDERSON, HELEN, key),
+        steers.steer_id_for(world, NORTHLAKE, RAJ, key),
+        steers.steer_id_for(world, NORTHLAKE, HELEN, uuid4()),
+    ]
+    assert steer_id not in others
+
+
+async def test_a_steer_refused_while_another_runs_names_who_sent_that_one(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        world_id = await _world(v)
+    # As `ThreadWorkflow.validate_steer` rejects it.
+    busy = ApplicationError(
+        "Claude is still working on an earlier edit",
+        {"by_member_id": str(HELEN)},
+        type=STEER_RUNNING_ERROR,
+    )
+    error = await from_update_failure(busy, db_sessionmaker, world_id)
+    assert (error.status_code, error.problem.code) == (409, "steer_running")
+    assert error.problem.by is not None
+    assert error.problem.by.slug == "helen"
 
 
 async def test_card_actions_on_ended_workflows_conflict(
@@ -643,6 +891,7 @@ async def test_members_read_and_admins_change_harmony_settings(
     async with visitor(app) as v:
         outreach, thread_id, _ = await _story(v, db_sessionmaker)
         alex = (await v.member_ids())["alex"]
+        await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
 
         await v.act_as("raj")
         settings = await v.json("GET", "/orgs/northlake/harmony")
@@ -726,6 +975,7 @@ async def test_admins_edit_their_members_profiles(
         outreach, thread_id, _ = await _story(v, db_sessionmaker)
         ids = await v.member_ids()
         profile = "Runs the XRD and SEM queues; owns the reserve block."
+        await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
 
         await v.act_as("raj")
         version = (await v.json("GET", "/orgs/northlake/harmony"))["policy_version"]
@@ -782,6 +1032,7 @@ async def test_trusted_organizations_are_admin_only_and_versioned(
     async with visitor(app) as v:
         outreach, _, _ = await _story(v, db_sessionmaker)
         body = {"counterparty_org_id": str(HENDERSON), "autonomy": "ask"}
+        await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
 
         await v.act_as("raj")
         problem = await v.json("POST", path, json=body, expect=403)
@@ -1022,7 +1273,8 @@ async def test_a_request_shows_what_a_thread_says_only_to_those_who_can_open_it(
 ) -> None:
     async with visitor(app) as v:
         world_id = await _world(v)
-        # Maya's request; Alex is routed into Northlake's thread only.
+        await demote_to_member(db_sessionmaker, world_id, "alex")
+        # Maya's request; Alex, a member, is routed into Northlake's thread only.
         outreach = await approved_outreach(db_sessionmaker, world_id, NORTHLAKE, CALDER, owner=MAYA)
         northlake = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
         calder = await open_thread(db_sessionmaker, outreach, CALDER)
@@ -1373,6 +1625,42 @@ async def test_a_card_sent_without_review_is_never_the_members_to_settle(
         assert _selected(card) == {"northlake": True, "ridgeline": False, "calder": False}
 
 
+async def test_an_outreach_decline_takes_an_optional_reason(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision 10: Decline needs no reason, and the resolution says it was a Decline
+    (a message typed while the card waits rejects it too, as `message`)."""
+    sent: list[CardResolution] = []
+
+    async def run_update(
+        handle: object, name: str, resolution: CardResolution, result_type: type[CardResolved]
+    ) -> CardResolved:
+        # The conversation's `resolve_card` Update, which stores the resolution.
+        sent.append(resolution)
+        return CardResolved(card_id=resolution.card_id, status="rejected")
+
+    monkeypatch.setattr(cards_route, "run_update", run_update)
+    async with visitor(temporal_app) as v:
+        world_id = await _world(v)
+        chat_id = await start_chat(db_sessionmaker, world_id)
+        card_id = await propose(db_sessionmaker, world_id, chat_id, payload=_suggesting())
+        await v.act_as("alex")
+
+        await v.request(
+            "POST", f"/cards/{card_id}/reject", json={"feedback": "x" * 4001}, expect=422
+        )
+        assert sent == []
+        resolved = await v.json("POST", f"/cards/{card_id}/reject", json={})
+
+    assert resolved["status"] == "rejected"
+    (resolution,) = sent
+    assert (resolution.decision, resolution.feedback, resolution.rejected_with) == (
+        "reject",
+        None,
+        "decline",
+    )
+
+
 async def test_an_auto_card_the_workflow_rejects_stays_auto_and_shows_its_proposal(
     app: FastAPI, db_sessionmaker: Sessionmaker
 ) -> None:
@@ -1483,6 +1771,7 @@ async def test_admins_set_whether_chats_send_without_confirmation(
 ) -> None:
     async with visitor(app) as v:
         outreach, thread_id, _ = await _story(v, db_sessionmaker)
+        await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
 
         await v.act_as("raj")
         settings = await v.json("GET", "/orgs/northlake/harmony")

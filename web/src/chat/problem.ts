@@ -10,6 +10,9 @@ export function problemOf(error: unknown): ApiProblem | null {
 export function describeFailure(error: unknown): string {
   const problem = problemOf(error);
   if (problem === null) {
+    if (error instanceof ApiError && error.invalid.includes("string_too_long")) {
+      return "That's too long to send. Shorten it and try again.";
+    }
     return error instanceof ApiError && error.status >= 500
       ? "Something went wrong. Try again in a moment."
       : "That didn't go through. Try again.";

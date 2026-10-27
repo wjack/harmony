@@ -26,9 +26,22 @@ from harmony.seeds.loader import load_scenario, load_world
 from harmony.worlds.retirer import SyncRetirer
 from harmony.worlds.service import WorldService
 from tests.conftest import settings_without_dotenv
-from tests.integration._visitors import HISTORY, RAJ_THREAD, Visitor, build_app, cursor_of, visitor
+from tests.integration._visitors import (
+    HISTORY,
+    RAJ_THREAD,
+    Json,
+    Visitor,
+    build_app,
+    cursor_of,
+    visitor,
+)
+from tests.integration._worlds import demote_to_member
 
 type Sessionmaker = async_sessionmaker[AsyncSession]
+
+# Everyone in the demo is an admin (FEEDBACK_R2_PLAN E1). These two are demoted here,
+# so the rule for members (routed and shared rows only) stays covered.
+MEMBERS: Final = ("alex", "raj")
 
 # What each demo member's inbox holds, and why (P0_PLAN.md T3's access fixtures).
 INBOXES: Final[dict[str, dict[UUID, list[AccessReason]]]] = {
@@ -47,6 +60,17 @@ def app(app_settings: Settings, db_engine: AsyncEngine) -> FastAPI:
     return build_app(app_settings, db_engine)
 
 
+async def _start(v: Visitor, sm: Sessionmaker) -> Json:
+    started = await v.start()
+    await _demote(sm, UUID(started["world_id"]))
+    return started
+
+
+async def _demote(sm: Sessionmaker, world_id: UUID) -> None:
+    for slug in MEMBERS:
+        await demote_to_member(sm, world_id, slug)
+
+
 async def _reasons(v: Visitor) -> dict[UUID, list[AccessReason]]:
     return {thread_id: row["access_reasons"] for thread_id, row in (await v.inbox()).items()}
 
@@ -63,9 +87,11 @@ async def _all_inboxes(v: Visitor) -> dict[str, dict[UUID, list[AccessReason]]]:
 
 
 @pytest.mark.parametrize("slug", list(INBOXES))
-async def test_each_member_sees_exactly_their_threads(app: FastAPI, slug: str) -> None:
+async def test_each_member_sees_exactly_their_threads(
+    app: FastAPI, db_sessionmaker: Sessionmaker, slug: str
+) -> None:
     async with visitor(app) as v:
-        await v.start()
+        await _start(v, db_sessionmaker)
         await v.act_as(slug)
         response = await v.request("GET", "/threads")
         assert cursor_of(response) == 2  # world.created, session.member_changed
@@ -128,6 +154,7 @@ async def test_the_sql_predicate_matches_the_rule_for_every_member(
 ) -> None:
     world_id = await load_world(db_sessionmaker, "harmony-demo", build_sha="test")
     other_world = await load_world(db_sessionmaker, "harmony-demo", build_sha="test")
+    await _demote(db_sessionmaker, world_id)
     async with db_sessionmaker() as session:
         members = list(await session.scalars(select(Member).where(Member.world_id == world_id)))
         threads = list(await session.scalars(select(Thread)))
@@ -161,7 +188,7 @@ async def test_the_sql_predicate_matches_the_rule_for_every_member(
 
 async def test_sharing_adds_exactly_one_member(app: FastAPI, db_sessionmaker: Sessionmaker) -> None:
     async with visitor(app) as v:
-        started = await v.start()
+        started = await _start(v, db_sessionmaker)
         raj = (await v.member_ids())["raj"]
         before = await _all_inboxes(v)
         await v.act_as("helen")
@@ -217,9 +244,11 @@ async def test_sharing_adds_exactly_one_member(app: FastAPI, db_sessionmaker: Se
     }
 
 
-async def test_sharing_is_limited_to_visible_threads_and_your_own_org(app: FastAPI) -> None:
+async def test_sharing_is_limited_to_visible_threads_and_your_own_org(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
     async with visitor(app) as v, visitor(app) as other:
-        await v.start()
+        await _start(v, db_sessionmaker)
         await other.start(scenario="minimal")
         members = await v.member_ids()
         foreign = (await other.member_ids())["sam"]
@@ -267,8 +296,8 @@ async def test_worlds_with_the_same_seed_ids_stay_apart(
     app: FastAPI, db_sessionmaker: Sessionmaker
 ) -> None:
     async with visitor(app) as a, visitor(app) as b:
-        world_a = UUID((await a.start())["world_id"])
-        world_b = UUID((await b.start())["world_id"])
+        world_a = UUID((await _start(a, db_sessionmaker))["world_id"])
+        world_b = UUID((await _start(b, db_sessionmaker))["world_id"])
         assert world_a != world_b
         assert await a.member_ids() == await b.member_ids()
         snapshot_a = await a.json("GET", f"/threads/{HISTORY}")

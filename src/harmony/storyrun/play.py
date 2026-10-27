@@ -6,6 +6,9 @@ inline questions), the status of every request the chat sent, and the inboxes of
 people a thread may be waiting on. Where a person would act it asks `Decisions`, and it
 records each beat the story's steps `expect` as it sees it.
 
+Each `--edit` (`storyrun.edits`) is posted as a member of its org, an admin first, once
+its thread has its messages.
+
 A story stops when every expected beat has been seen. It stops early when it can no
 longer finish: every request ended, a conversation the story needs closed expired or
 was never opened, a model call in the story's own workflows failed for good, or the
@@ -19,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 from uuid import UUID
 
@@ -33,16 +36,18 @@ from harmony.agents.models import (
 from harmony.api.routes.cards import ApproveCard
 from harmony.api.routes.conversations import ConversationDetail
 from harmony.api.routes.threads import ThreadDetail
-from harmony.api.routes.workspace import ThreadWorkspace
+from harmony.api.routes.workspace import AddSteer, ThreadWorkspace
 from harmony.auth.views import MemberView, SessionView
 from harmony.db.models.choices import MemberRole
 from harmony.domain.requests import RequestStatusView
+from harmony.domain.threads import TERMINAL_STATES
 from harmony.seeds.dates import render_dates
 from harmony.seeds.loader import Scenario
 from harmony.seeds.schema import StorySpec
 from harmony.storyrun.api import ApiError, HarmonyApi
 from harmony.storyrun.beats import Atom, Outcome, SeenBeat, StoryRun, describe, expected_beats
 from harmony.storyrun.decide import Decisions, PendingEscalation
+from harmony.storyrun.edits import PlannedEdit
 from harmony.temporal.workflows.payloads import (
     conversation_workflow_id,
     request_workflow_id,
@@ -80,13 +85,15 @@ class StoryPlayer:
         failures: Mapping[str, str] | None = None,
         send_without_review: bool = False,
         on_poll: PollHook | None = None,
+        edits: Sequence[PlannedEdit] = (),
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         """`story` is played as written; `beats.recast` plays it as someone else.
         `failures`: workflow ID → a model call in it that failed for good, as the
         in-process worker reports them (`worker.ActivityLog`). `send_without_review`
-        starts the chat with that override, as the composer would."""
+        starts the chat with that override, as the composer would. `edits` are posted
+        as their threads reach them."""
         self._api = api
         self._scenario = scenario
         self._story = story
@@ -100,6 +107,8 @@ class StoryPlayer:
         self._failures: Mapping[str, str] = failures if failures is not None else {}
         self._send_without_review = send_without_review
         self._on_poll = on_poll
+        # Not posted yet.
+        self._edits = list(edits)
         self._clock = clock
         self._sleep = sleep
         self._started = clock()
@@ -128,6 +137,8 @@ class StoryPlayer:
             await self._loop(run)
         except ApiError as error:
             run.outcome, run.detail = "failed", str(error)
+        for edit in self._edits:
+            self._log(f"--edit {edit.describe()} was never posted")
         return run
 
     async def settle(self, run: StoryRun) -> bool:
@@ -222,6 +233,7 @@ class StoryPlayer:
             self._note_threads(run, status)
             for member in self._inboxes(status):
                 await self._inbox(run, member)
+        await self._post_edits(run)
         if not run.expected:
             return _free_form_end(chat, statuses)
         if statuses and all(status.status == "closed" for status in statuses):
@@ -348,6 +360,45 @@ class StoryPlayer:
                 self._log(f"  {pending.member.name}: {said}")
             self._see(run, ("resolved", pending.org, pending.member.slug, body.action))
         return True
+
+    # --- Edits -----------------------------------------------------------------------
+
+    async def _post_edits(self, run: StoryRun) -> None:
+        """Post each edit whose thread has its messages. One whose thread ended first is
+        dropped; one refused while another steer runs on that side (409) is tried again
+        on the next poll."""
+        requester = self.member.org.slug
+        for edit in list(self._edits):
+            thread_id = next(
+                (
+                    thread_id
+                    for thread_id, responder in run.threads.items()
+                    if {requester, responder} == {edit.org, edit.counterparty}
+                ),
+                None,
+            )
+            if thread_id is None:
+                continue
+            member = self._org_members(edit.org)[0]
+            await self._act_as(member.id)
+            thread = await self._api.thread(thread_id)
+            if thread.state in TERMINAL_STATES:
+                self._edits.remove(edit)
+                self._log(f"--edit {edit.describe()}: the thread ended first")
+                continue
+            if len(thread.messages) < edit.after_messages:
+                continue
+            body = AddSteer(client_key=edit.client_key, as_member_id=member.id, body=edit.text)
+            try:
+                await self._api.steer(thread_id, body)
+            except ApiError as error:
+                if error.status != CONFLICT:
+                    raise
+                self._log(f"  --edit {edit.describe()}: {error.detail}; trying again")
+                continue
+            self._edits.remove(edit)
+            elapsed = self._clock() - self._started
+            self._log(f"[{elapsed:6.1f}s] {member.name} edits {edit.org}'s side: {edit.text}")
 
     # --- Settling --------------------------------------------------------------------
 

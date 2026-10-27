@@ -4,7 +4,7 @@ This is the contract every rework task codes against after [REVISION_UNSTRUCTURE
 
 The `Owner:` lines in module docstrings date from the P1 build (E1–E5, U1–U4) and are historical. The [file ownership](#file-ownership) table below is what counts.
 
-The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this contract. Its shapes are in the [Live phase](#live-phase) section at the end, and the sections above it are updated where it changes them.
+The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this contract. Its shapes are in the [Live phase](#live-phase) section, and the sections above it are updated where it changes them. Feedback round 2 ([FEEDBACK_R2_PLAN.md](FEEDBACK_R2_PLAN.md); designs [EDIT.md](design/EDIT.md) and [REOPEN.md](design/REOPEN.md)) adds Edit (the `steer` Update), Reopen and the rest of its shapes; they are in the [Round 2](#round-2) section at the end, and the sections above are updated where it changes them.
 
 ## Ground rules
 
@@ -20,11 +20,11 @@ The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this
   Domain functions never mint IDs, and every write is idempotent on its ID.
 - **The API never calls the model.** It starts, signals or updates workflows. Model activities run on `harmony-model`.
 - **`web/src/api/schema.d.ts` is generated** by `make gen-api`. Nobody hand-edits it. Whoever changes an API or event model runs `make gen-api` in the same change.
-- **Dev databases upgrade in place.** `0001_initial` was rewritten in place once (R§8), and is now fixed: the live phase's schema is the `0002_live_demo` migration, so `make migrate` takes a dev database at `0001` to head.
+- **Dev databases upgrade in place.** `0001_initial` was rewritten in place once (R§8), and is now fixed: the live phase's schema is the `0002_live_demo` migration and round 2's are `0003_edit_guidance` and `0004_reopen`, so `make migrate` takes a dev database at `0001` to head.
 
 ## Database
 
-`migrations/versions/0001_initial.py` is the P1–P2 schema, and `0002_live_demo.py` adds the live phase's (see [Live phase](#live-phase)). On a fresh database, or one at `0001`, `make migrate` applies them; `alembic check` reports no drift, and `alembic downgrade 0001 && alembic upgrade head` round-trips. No task writes a migration. A task that needs a column asks the coordinator, who folds it into `0002`.
+`migrations/versions/0001_initial.py` is the P1–P2 schema, `0002_live_demo.py` adds the live phase's (see [Live phase](#live-phase)), and `0003_edit_guidance.py` and `0004_reopen.py` add round 2's (see [Round 2](#round-2)). On a fresh database, or one at `0001`, `make migrate` applies them; `alembic check` reports no drift, and `alembic downgrade 0001 && alembic upgrade head` round-trips. No task writes a migration. A task that needs a column asks the coordinator, who folds it into `0002`.
 
 **Dropped** (R§8):
 - Tables: `offers`, `grants` and `routing_decisions`.
@@ -63,7 +63,7 @@ The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this
 
 **Literals** (`db/models/choices.py`):
 - `Autonomy` = `ask` | `auto` | `skip`.
-- `ThreadState` = `active` | `awaiting_principal` | `closed` | `expired`.
+- `ThreadState` = `active` | `awaiting_principal` | `closed` | `expired`. Every surface shows both terminal states as Closed, with the reason from `EndReason` (round 2).
 - `ThreadMessageKind` = `message` | `close`.
 - `Provenance` = `agent` | `agent_approved` | `human`.
 - `ConsultStatus` = `answering` | `released` | `needs_human` | `declined`.
@@ -72,20 +72,22 @@ The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this
 - `Fit` = `strong` | `possible` | `no` | `unknown`.
 - `CardKind` = `outreach`.
 - `ModelRole` adds `sharing_check`.
-- `MemberRole` = `admin` | `member` (R§12 drops `approver`).
+- `MemberRole` = `admin` | `member` (R§12 drops `approver`). Every member of the demo cast is an admin (round 2, E1); tests make a non-admin in their fixtures.
+- Round 2: `EndReason`, `ReopenBlock`, `SteerKind`, `SteerStatus`, `SteerGuidanceOutcome`, `SteerDraftOutcome`, `SteerFailure`, and `NoticeKind` gains `reopened` (see [Round 2](#round-2)).
 
 ## Events (`src/harmony/events/schemas.py`)
 
 - `EntityType` / `ENTITY_TYPES`: every `entity.snapshot` type.
   - The `Snapshotable` models (`db.models.SNAPSHOT_ENTITIES`): `org`, `member`, `rep_settings`, `rep_policy`, `trusted_organization`, `conversation`, `card`, `network_request`, `thread`, `consult`, `escalation`, `knowledge_item` and `document`.
-  - The append-only types (`APPEND_ONLY_ENTITY_TYPES`): `thread_message`, `internal_note` and `escalation_draft`. These are snapshotted once at version 1.
+  - The append-only types (`APPEND_ONLY_ENTITY_TYPES`): `thread_message`, `internal_note`, `escalation_draft` and `rep_guidance`. These are snapshotted once at version 1.
+  - Round 2 adds `steer` (versioned) and `rep_guidance`. Both are what an org tells its own Claude, so the network view's stream never carries them (`LENS_HIDDEN_ENTITY_TYPES`).
 - `ThreadAccessChanged.added`: true when a member gained an access reason, false when they lost one. It was `granted`.
 - `DemoNeedsHuman` (`demo.needs_human`, `{org_slug, member_slug, entity_id}`) and `StreamChatDelta` (`stream.chat_delta`) are unchanged. The web client types the delta from the generated schema (`EventOf<"stream.chat_delta">`); the realtime dispatcher leaves it to the chat view, which appends it to the streaming turn.
 - **A deleted row** gets one last snapshot at `version + 1` whose `data` is the row's keys plus `deleted: true`. Removing a trusted organization is the one case.
 
 Snapshot scopes:
 - Thread rows go to each party org's thread scope.
-- Org-private rows (consults, escalations, drafts, notes) go to the owning org's thread scope.
+- Org-private rows (consults, escalations, drafts, comments, steers, guidance) go to the owning org's thread scope.
 - Settings, policy, trusted organizations and member profile edits go to `EventScope.org(org)`.
 - Chat rows go to `EventScope.member(owner, org)`.
 
@@ -100,12 +102,14 @@ A cassette entry matches `CallKey(scenario, org, role, thread, turn, step_idx)`.
 | `answerer` | the consulting org | the thread key | the k-th consult of (thread, side) | `answerer_step(draft_rev, step)` = `(draft_rev - 1) * ANSWERER_STEPS + step` (`ANSWERER_STEPS` = 8): one block of steps per draft rev |
 | `sharing_check` | the consulting org | the thread key | the k-th consult of (thread, side) | `draft_rev - 1` |
 | `screener` | the screened org | `search_key(chat key)` (`*` matches any search) | the origin chat turn | the search's index in that turn |
+| `steer` (round 2) | the steering org | the thread key | the steer's `seq` on that side | 0 for the guidance, 1 for the held message's rewrite |
 
 Checkpoint turn ids:
 - turns use the workflow-minted `turn_id`;
 - screener calls use `screen_turn_id(search_id, org_id)`;
 - answerer calls use `consult_turn_id(consult_id)`;
-- sharing checks use `sharing_turn_id(consult_id)`.
+- sharing checks use `sharing_turn_id(consult_id)`;
+- a steer's two calls use `steer_guidance_turn_id(steer_id)` and `steer_rewrite_turn_id(steer_id)`.
 
 `step_idx` equals the cassette step.
 
@@ -120,21 +124,21 @@ Checkpoint turn ids:
 - **Status literals.**
   - `RequestStatus` = `active` | `closed`.
   - `EscalationStatus` = `open` | `resolved` | `cancelled`.
-  - `ParticipantStatus` = `screened` | `messaged` | `replied` | `needs_human` | `closed` (R§9; `expired` shows as `closed`).
+  - `ParticipantStatus` = `screened` | `messaged` | `replied` | `needs_human` | `closed` (R§9; `expired` shows as `closed`). A reopened thread reads `messaged`, `replied` or `needs_human` again, from its live state.
 - **People, routing and context.**
   - `MemberRef(id, slug, name)`.
   - `Route(assignees: RouteAssignee(member: slug, why)[])`. A before-validator maps the old stored shape (`assignees: [slug]`, one `reason`) to each slug with that reason as its why.
   - `ActivityLine(tool, label, detail?)`: one thing internal Claude did with a tool, as the reviewer reads it.
   - `ContextPart(kind, label, text)`, where `ContextPartKind` = `public_summary` | `instructions` | `sharing` | `brief` | `ask` | `counterparty`. These are the parts of a representative's frozen prompt (R§2).
 - **Escalations.**
-  - `EscalationAction` = `approve` | `decline` | `take_over` | `revise`. Approve with `text` is "Edit". `revise` (held messages only, text required) sends nothing and gives the text to the representative as an instruction. Redraft and reassign are separate Updates.
+  - `EscalationAction` = `approve` | `decline` | `take_over`. Approve with `text` sends the member's wording of the draft. Telling Claude what to change is the `steer` Update (round 2), which replaced Redraft and `revise`; reassign is its own Update.
   - `EscalationResolution(escalation_id, action, text?, draft_rev?, member_id, org_id)`: the `resolve_escalation` Update's argument and the stored resolution. `org_id` is the acting member's org, so the validator can refuse another org's member.
 - **Cards.**
   - `ScreenedCounts`.
   - `OutreachRecipient(org_id, fit?, reason, ask?, title?, suggested?)`.
   - `OutreachCardPayload(kind="outreach", brief, recipients, screened?, search_ids, title?, auto_send_recipients?)`. `CardPayload` = `OutreachCardPayload`.
   - `OutreachEdits(recipients?: org ids, brief?, asks?: {org id: ask})`.
-  - `CardResolution(card_id, decision: approve | reject, member_id, edits?, feedback?, auto=false)`.
+  - `CardResolution(card_id, decision: approve | reject, member_id, edits?, feedback?, auto=false, rejected_with?)`. `rejected_with` (`CardRejectedWith` = `decline` | `message`) says how a member rejected it: the card's Decline, or a message typed while it waited.
 - **Chat items.** The `ChatItem` union (on `type`): `user_text`, `assistant_text`, `thinking_summary`, `tool_activity`, `outreach_card`, `request_status` and `inline_question`. There are no compare-offers or accept cards.
 
 ### Consult (`agents/consult.py` models) and release (`agents/release.py`)
@@ -150,16 +154,16 @@ Checkpoint turn ids:
 - `release.decide(mode, draft, sharing?) -> Release(answer) | NeedsHuman(reason, detail)`. It applies the R§4.4 table in this order: `needs_human` first, then *Auto* (a failed check needs a human), then *Ask* (always a person). *Auto* requires the verdict. A check that couldn't run is stored as `SharingCheck(within_sharing=False, reason=...)` and passed in.
 - `release.why_needed(consult) -> str`: "Why this needs you", read back from the consult row.
 - The calls, in `agents/consult.py`:
-  - `answer(sessionmaker, model, *, world_id, consult_id, draft_rev=1, instruction?, attempt, model_override?, cassette_thread?, consult_turn?) -> DraftReady | AnswerFailed`: a tool loop of at most `ANSWERER_STEPS` calls over `ANSWERER_TOOLS`, ending in the structured draft (R§4.1). Its prompt (`answer_inputs`) is read live: the sharing descriptions, instructions, member profiles, routing prompt, internal notes (and a redraft's instruction), the thread quoted, and the question. It holds no records: the answerer looks them up.
+  - `answer(sessionmaker, model, *, world_id, consult_id, draft_rev=1, instruction?, attempt, model_override?, cassette_thread?, consult_turn?) -> DraftReady | AnswerFailed`: a tool loop of at most `ANSWERER_STEPS` calls over `ANSWERER_TOOLS`, ending in the structured draft (R§4.1). Its prompt (`answer_inputs`) is read live: the sharing descriptions, instructions, member profiles, routing prompt, the current guidance for this side (quoted, and labelled as never widening what may be shared; "None." when there is none), a steer's instruction when it redrafts, the thread quoted, and the question. No comment reaches it. It holds no records: the answerer looks them up.
   - `check_sharing(sessionmaker, model, *, world_id, consult_id, draft, draft_rev=1, attempt, model_override?, cassette_thread?, consult_turn?) -> SharingCheck`: one call that sees only the applicable sharing descriptions, the question and the draft. A refusal or an invalid verdict returns a failed check whose reason says it couldn't run.
-  - `settle(uow, *, consult_id, outcome, draft_rev=1, sharing?) -> Answered | Escalated`: records the draft (`consults.record_draft`) and verdict (`consults.record_sharing_check`), applies `release.decide` with live policy, and releases (`consults.release`, `released_by="auto"`) or opens the consult's one escalation (`escalation_id_for(consult_id)` = `uuid5(consult_id, "escalation")`) and routes it. Idempotent; a redraft only adds its draft rev to the open escalation.
+  - `settle(uow, *, consult_id, outcome, draft_rev=1, sharing?) -> Answered | Escalated`: records the draft (`consults.record_draft`) and verdict (`consults.record_sharing_check`), applies `release.decide` with live policy, and releases (`consults.release`, `released_by="auto"`) or opens the consult's one escalation (`escalation_id_for(consult_id)` = `uuid5(consult_id, "escalation")`) and routes it. Idempotent; a steer's redraft only adds its draft rev to the open escalation.
   - `result_text(action, text) -> str`: the `consult` tool result for any settlement. An approval is `"Your side answered:\n"` plus the text quoted (`context.quote_released`), and that string is what `consults.released_text` stores; a decline quotes what the side may say, if anything.
   - `settled_result(consult) -> str | None`: the result a settled consult owes, for a retried settle. A settled consult is never reused: the same question asked again is a new consult (`consults.open` dedupes only open ones, storing a repeat under `<dedupe_key>#<consult_id>`), so it is answered from the records and policy as they are then.
 
 ### Runtime (`agents/runtime.py`)
 
 - `run_turn(ctx, executor, model, *, transcript, on_text=None) -> TurnOutcome`: unchanged. At most `MAX_STEPS` (8).
-- `PerformativeName` = `send_message` | `consult` | `close`: the representative tools that can stop a turn before the model does. `consult` stops it until the answer is released, `close` stops it for good, and `send_message` stops it only when *Ask* holds the message. Otherwise a turn ends when the model stops calling tools (`end_turn`).
+- `PerformativeName` = `send_message` | `consult` | `close`: the representative tools that can stop a turn before the model does. `consult` stops it until the answer is released, `close` ends the conversation, and `send_message` stops it only when *Ask* holds the message (or, round 2, an Edit or a guided bare reply holds it). Otherwise a turn ends when the model stops calling tools (`end_turn`).
 - `TurnStop` = `performative` | `end_turn` | `awaiting_card` | `max_steps` | `refusal`.
 - The `TurnEffect` union (on `kind`):
   - `message_sent(message_id, message_kind)`;
@@ -173,7 +177,7 @@ Checkpoint turn ids:
 
 ### Tools (`agents/tools/`)
 
-- **Representative** (`REP_TOOLS`, inputs `REP_INPUTS`): `send_message{text}`, `consult{question}` and `close{summary}`. They are identical for every representative. A turn may send several messages (R§5).
+- **Representative** (`REP_TOOLS`, inputs `REP_INPUTS`): `send_message{text}`, `consult{question}` and `close{summary}`. They are identical for every representative. A turn may send several messages and may consult before it sends (R§5). Once it has sent, `consult` is refused with `CONSULT_AFTER_SEND`, which tells it to end the turn, not to close, and to ask at the start of its next turn.
   - Under *Ask*, `send_message` is held as an `outbound_review` escalation whose draft is the message. Its id is `uuid5(message_id, "outbound_review")`, where `message_id` is the call's side-effect id, and its dedupe key is `outbound:{message_id}`. The turn stops, and the result is owed once a person decides. A `close` is never held: no words cross but its empty marker, and the summary stays with the closer's side.
   - `close` stores its side's summary (`threads.store_close_summary`) and appends a `close` thread message with an empty body, so the summary never reaches the counterparty.
   - A bare text reply maps to `send_message` (`TEXT_REPLY_ID`).
@@ -191,11 +195,13 @@ Checkpoint turn ids:
 - `build_rep_context(session, *, world_id, thread_id, side, model) -> RepContext` renders only the R§2 parts: the counterparty, the public summary, the instructions, the sharing descriptions that apply (`sharing_parts(policy, trusted?, *, counterparty_name)`) and, on the requester side, the brief. Each part is in its own tag with `<` escaped.
 - `context_parts(system_text) -> list[ContextPart]`: reads the parts back from the frozen bytes, for "What our representative saw".
 - `delivered_notices(...) -> list[DeliveredNotice]` and `received_results(...) -> set[str]`: the notices and result texts the side's stored transcript carries, for the same drawer.
-- `NoticeKind` = `settings` | `mode` | `sharing` | `world_date` | `closed`. These are code-written notices.
+- `NoticeKind` = `settings` | `mode` | `sharing` | `world_date` | `closed` | `reopened`. These are code-written notices.
   - `settings`: the org changed its prompt settings, and the thread keeps its frozen version (`domain/settings.SETTINGS_NOTICE`).
   - `mode`: the mode for this counterparty changed (`domain/settings.mode_notice`).
   - `sharing`: the sharing descriptions that apply changed. The text is the new descriptions (`domain/settings.sharing_notice`).
   - `closed`: the counterparty closed, and this side may write its summary in one last turn (`context.closed_notice(counterparty_name)`).
+  - `reopened` (round 2): the conversation was reopened, worded for the side that reopened it and for the other side. `begin_reopen` drops stale undelivered `closed` and `reopened` notices before it queues these.
+- Guidance is never a notice (round 2): `guidance_block` renders a version as a code-written lead plus the text in `<guidance>`, the user-message block a turn opens with once, and `delivered_guidance` reads back which versions reached the representative.
 - `queue_notice`, `flush_notices`, `wrap_counterparty`, `quote_released`, `world_date_notice`, `build_internal_context`, `load_rep_session` and `freeze_rep_session` keep their signatures.
 - `RepContext` has no record of what was exposed: records reach a representative only inside released answers, which arrive as tool results.
 
@@ -227,17 +233,17 @@ Activities turn them into non-retryable `ApplicationError`s typed by class name.
 
 - **`requests.py`.**
   - `create_from_card(uow, card, resolution, *, request_id)`: takes the brief from `edits.brief`, else the card's, and the recipients from `chosen_recipients` with the edited asks (see [Live phase](#live-phase)).
-  - `set_status`, `recipients_of`, `threads_of` and `request_status`.
+  - `set_status`, `recipients_of`, `threads_of` and `request_status`. Round 2 adds `reopen` (a closed request back to active, round + 1) and `end_round(uow, request_id, *, from_workflow)`, the one locked path that closes a request.
   - `status(session, request, *, waiting_of=None) -> RequestStatusView`. A recipient the card proposed but the member left out (no thread) is listed as `screened`, with its fit and reason from the card.
   - `participant(thread, *, needs_human, replied) -> ParticipantStatus`.
   - `RequestStatusView(id, title, status, brief, conversation_id, created_at, screened, recipients, version)`.
   - `RecipientStatus(org, fit, reason, sent, participant, thread_id, thread_state, waiting_on, latest_line, close_summary, stop_reason?, last_activity_at)`. `latest_line` is the thread's newest message (either side) after its sender's name, so internal Claude and the member can tell who said it. `close_summary` is the requester side's own summary.
 - **`threads.py`.**
-  - `open`, `set_state`, `parties`, `side_of`, `org_of`, `other`, `cassette_key` and `locked`.
+  - `open`, `set_state`, `parties`, `side_of`, `org_of`, `other`, `cassette_key` and `locked`. `set_state` also takes `end_reason` and `closed_by` and, on the move into a terminal state, stores them with `ended_at`.
   - `add_access(uow, thread, *, member_id, org_id, reason="routed", shared_by_member_id?, question?) -> bool`: one access reason for one member, idempotent, announced with `thread.access_changed`.
   - `append_message(uow, thread_id, *, message_id, from_org_id, kind, body, provenance, turn_id?, author_member_id?, approved_by_member_id?)`: `turn_count` counts turns, not messages.
   - `store_close_summary(uow, thread_id, side, summary)`: the side's own summary on its `rep_sessions` row. The first write wins; a side with no session raises `ValueError`.
-  - `TERMINAL_STATES` = `closed`, `expired`.
+  - `TERMINAL_STATES` = `closed`, `expired`. A terminal thread leaves its state only through a reopen (`reopens.begin`, round 2).
   - `MAX_TURNS` = 16.
 - **`consults.py`.**
   - `dedupe_key`, `open`, `mark_needs_human`, `decline`, `get`, `for_thread` and `ordinal`.
@@ -256,7 +262,8 @@ Activities turn them into non-retryable `ApplicationError`s typed by class name.
 - **`agent_turns.py`.** `record(uow, *, turn_id, role, org_id, latency_ms, thread_id?, conversation_id?, side?, calls_turn_id?, steps?)` upserts the turn's row, costed from its checkpointed `model_calls` (within `steps` when given), so a retry rewrites the same total. `rev_turn_id(checkpoint_turn_id, draft_rev)` = `uuid5(checkpoint, f"rev/{draft_rev}")` keys one draft rev of a consult's answerer or sharing check.
 - **`conversations.py`.** `tool_label(name, tool_input) -> (label, detail?)` is public and `chat_items` builds only the R§9 items. The send-mode helpers are in [Live phase](#live-phase).
 - **`cards.py`.** `create(…, auto=False)`, and `awaiting_member()`, the one predicate for a card awaiting the member (see [Live phase](#live-phase)).
-- **`notes.py` and `clock.py`:** unchanged.
+- **`notes.py` and `clock.py`:** unchanged. Notes are the request view's comments, which no Claude reads (round 2).
+- **`steers.py`, `reopens.py`** (round 2): see [Round 2](#round-2).
 
 ## Temporal
 
@@ -270,7 +277,8 @@ Update validators reject with an `ApplicationError` of one of these types:
 - `ESCALATION_NOT_OPEN_ERROR` (409);
 - `NOT_IN_ORG_ERROR` (403);
 - `INVALID_RESOLUTION_ERROR` (422);
-- `NOT_FOUND_ERROR` (404).
+- `NOT_FOUND_ERROR` (404);
+- round 2's `STEER_RUNNING_ERROR` ("SteerRunning", 409 `steer_running`, `details=[{by_member_id}]`), `THREAD_CLOSED_ERROR` ("ThreadClosed", 409 `thread_closed`) and `STEER_CONFLICT_ERROR` ("SteerConflict", 422 `invalid`).
 
 `payloads.update_failure(ActivityError)` re-raises an activity's typed cause, so the API sees the same types.
 
@@ -278,7 +286,7 @@ Update validators reject with an `ApplicationError` of one of these types:
 
 - `run(ConversationInput(world_id, conversation_id, org_id, owner_member_id, cassette_thread, carried, turns_per_run)) -> ConversationResult(turns)`.
 - Signal `member_message(MemberMessage(message_id, member_id, text, sent_at))`. While a card is pending, the message rejects the card with the text as feedback.
-- Signal `network_update(NetworkUpdate(request_id, kind))`, where `kind` is `closed`: every thread of the request has ended. It wakes an internal turn, which summarizes in prose.
+- Signal `network_update(NetworkUpdate(request_id, kind, round=1))`, where `kind` is `closed`: every thread of the request has ended. It wakes an internal turn, which summarizes in prose. `round` counts the request's rounds (round 2's Reopen), and the conversation takes each (request, round) once.
   - An inline question is no update and never reaches the model: the escalation's own commits (open, assign, resolve, cancel) touch the request's conversation, so the chat refetches.
 - Update `resolve_card(CardResolution) -> CardResolved(card_id, status, request_id?)`. The validator rejects a card that isn't the pending one, and feedback on an approval.
 - Query `pending() -> ConversationPending(queued_messages, network_updates, turn_in_flight, pending_card_id, turns)`.
@@ -287,7 +295,7 @@ Update validators reject with an `ApplicationError` of one of these types:
 
 - `run(NetworkRequestInput(world_id, request_id, requester_org_id, conversation_id?, recipient_org_ids, max_active_threads=8)) -> NetworkRequestResult(status)`.
   - Opens one thread per recipient through a sliding window.
-  - Once every thread has ended, it sets the request `closed` and sends `notify_conversation(kind="closed")`.
+  - It follows each thread's first run only. Once every first run has ended, it calls `end_round(from_workflow=True)`, which closes the request unless a reopened thread is still live; when it closed it, the workflow sends `notify_conversation(kind="closed", round)`. Otherwise the reopened thread's own tail closes it later.
   - There is no fan-in, deadline or acceptance.
 - Signal `thread_changed(ThreadChanged(thread_id, responder_org_id, state))`.
 - Query `status() -> RequestProgress(request_id, status, threads: ThreadProgressRef(thread_id, responder_org_id, state)[])`.
@@ -295,7 +303,7 @@ Update validators reject with an `ApplicationError` of one of these types:
 
 ### `ThreadWorkflow` (`workflows/thread.py`)
 
-`run(ThreadInput(world_id, thread_id, request_id, requester_org_id, responder_org_id, conversation_id?, cassette_thread, max_turns=16, deadline_at?)) -> ThreadResult(state, turns)`.
+`run(ThreadInput(world_id, thread_id, request_id, requester_org_id, responder_org_id, conversation_id?, cassette_thread, max_turns=16, deadline_at?, run=1, carry?, reopen?, guidance={}, steer_seq={})) -> ThreadResult(state, turns)`. A reopened run is a new execution under the same id (round 2).
 
 The requester's representative opens. A side's turn is a tool loop (R§5). When it ends with `end_turn`, the other side moves, receiving every message sent since its last turn. Then:
 - **`consult`.** The thread goes `awaiting_principal`, and `answer_consult` runs.
@@ -306,8 +314,8 @@ The requester's representative opens. A side's turn is a tool loop (R§5). When 
   - Approve, or approve with edits: the message is sent, the counterparty moves next, and the owed result opens the holding side's next turn.
   - Decline: nothing is sent, and the same side moves again with the owed refusal.
   - Take over: the member's text goes out with `human` provenance, and the counterparty moves next.
-- **`close`.** The thread becomes `closed` for both sides. The other side gets a `closed` notice and one last turn, in which only `close` (its own summary) takes effect.
-- **Bounds.** `max_steps` hands the move to the other side, like `end_turn`. A refusal closes the thread with no summary. The thread ends `expired` at `max_turns` (both sides' turns together) or at `deadline_at`, which bounds every wait, a person's included. These bounds are R§5's turn cap and idle timeout; there is no separate idle timer.
+- **`close`.** The thread becomes `closed` for both sides, `end_reason` `closed`. The other side gets a `closed` notice and one last turn, in which only `close` (its own summary) takes effect.
+- **Bounds.** `max_steps` hands the move to the other side, like `end_turn`. A refusal closes the thread with no summary (`end_reason` `stopped`). The thread ends `expired` at `max_turns` (both sides' turns together, `turn_limit`) or at `deadline_at` (`deadline`), which bounds every wait, a person's included. These bounds are R§5's turn cap and idle timeout; there is no separate idle timer.
 
 Handlers:
 - Update `resolve_escalation(EscalationResolution) -> EscalationResolved(escalation_id, action, message_id?)`. The validator rejects:
@@ -317,7 +325,7 @@ Handlers:
 
   A consult resolution is pinned to a draft rev: the one it names, else the newest one written.
 - Update `reassign(Reassignment(escalation_id, to_member_id, by_member_id)) -> Reassigned(escalation_id, assignees)`. It moves the item and its routed thread access, and records nothing for learning.
-- Update `redraft(Redraft(escalation_id, instruction, by_member_id)) -> RedraftStarted(escalation_id, draft_rev)`: open `consult` escalations only. A rev that ends up unwritten (the answerer's call failed or returned no draft) is reported by `NetworkActivities.report_redraft_failed` as `RedraftFailed` (`escalation.redraft_failed`, `{escalation_id, draft_rev}`, in the escalation's scope), so the panel stops waiting for it at once.
+- Update `steer(SteerRequest) -> SteerStarted` (round 2) replaces `redraft`; `RedraftFailed` and `escalation.redraft_failed` are gone. See [Round 2](#round-2).
 - Query `state() -> ThreadProgress(thread_id, state, side_to_move, requester_turns, responder_turns, open_escalation_ids, owed, last_stop)`.
 - The `accepted` signal is gone.
 
@@ -326,12 +334,13 @@ Handlers:
 `AgentActivities` runs on `harmony-model` (`activities/agents.py`):
 - `internal_turn(InternalTurnInput) -> InternalTurnResult`.
 - Each internal or representative turn writes its `agent_turns` row once `run_turn` returns. A turn paused on a card is written again when it resumes and ends.
-- `rep_turn(RepTurnInput(world_id, thread_id, side, org_id, cassette_thread, turn_id, turn, owed, deliver_after_seq)) -> RepTurnResult(turn_id, stop, next_step, effects, owed?, refusal_category?, delivered_through_seq)`.
+- `rep_turn(RepTurnInput(world_id, thread_id, side, org_id, cassette_thread, turn_id, turn, owed, deliver_after_seq, guidance_version?, steer_seq=0, reopened=false, run_start_seq=0)) -> RepTurnResult(turn_id, stop, next_step, effects, owed?, refusal_category?, delivered_through_seq)`.
 - `answer_consult(AnswerConsultInput(world_id, consult_id, thread_id, side, org_id, cassette_thread, consult_turn, draft_rev, instruction?))` returns one of:
   - `ConsultReleased(consult_id, owed)`;
   - `ConsultEscalated(consult_id, escalation_id, draft_rev?, assignee_ids)`.
 
-  It runs the answerer's tool loop, then the sharing check (role `sharing_check`) when the first draft would be released under *Auto*, then `consult.settle`, which applies `release.decide` and, when a person is needed, `routing.apply_route`. A redraft is never checked: a person releases it. The settle unit of work also records the rev's `agent_turns` rows.
+  It runs the answerer's tool loop, then the sharing check (role `sharing_check`) when the first draft would be released under *Auto*, then `consult.settle`, which applies `release.decide` and, when a person is needed, `routing.apply_route`. A steer's redraft is never checked: a person releases it.
+- `write_guidance(SteerPartInput) -> GuidanceWritten` and `rewrite_held(SteerPartInput) -> int | None` (round 2, role `steer`). The settle unit of work also records the rev's `agent_turns` rows.
 
 `NetworkActivities` runs on `harmony-main` (`activities/network.py`):
 - `apply_card_resolution(CardResolutionInput) -> CardResolutionApplied`.
@@ -339,7 +348,9 @@ Handlers:
 - `open_thread(OpenThreadInput) -> ThreadInput`.
 - `apply_resolution(ApplyResolutionInput(world_id, thread_id, resolution, message_id)) -> ResolutionApplied(resolved, owed?, side, sent)`.
 - `reassign_escalation(ReassignInput(world_id, reassignment)) -> Reassigned`.
-- `set_thread_state(ThreadStateInput)`, `set_request_status(RequestStatusInput)` and `notify_conversation(NotifyConversationInput)`.
+- `set_thread_state(ThreadStateInput)` and `notify_conversation(NotifyConversationInput)`. `ThreadStateInput` gains `end_reason`, `closed_by` and `last_turn` (round 2).
+- `settled_card`, `stored_resolution` (the retry paths) and `note_unsummarized`.
+- Round 2 adds `record_steer`, `settle_steer`, `record_reopen`, `begin_reopen`, `finish_run` and `end_round`. `set_request_status` and `report_redraft_failed` are gone.
 
 `post_holding`, `holding_delay`, `record_acceptance`, `accept_delegated` and `countersign` are deleted, and so is their registration in `worker.main_activities`.
 
@@ -355,7 +366,8 @@ Errors are `ApiProblem{detail, code, resolved_by?}`, where `code` is one of:
 - `escalation_not_open`;
 - `not_in_org`;
 - `world_retired`;
-- the live phase's `passcode_required`, `passcode_invalid`, `too_many_attempts` and `payload_too_large` (see [Live phase](#live-phase)).
+- the live phase's `passcode_required`, `passcode_invalid`, `too_many_attempts` and `payload_too_large` (see [Live phase](#live-phase));
+- round 2's `member_changed`, `steer_running`, `thread_closed`, `thread_open`, `reopen_in_progress`, `closing_in_progress` and `not_reopenable` (see [Round 2](#round-2)). `ApiProblem` gains `by`, `member`, `reopened_by` and `block` for them.
 
 A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor`. The `/api/offers` route and the grant, permission and knowledge-visibility endpoints are gone.
 
@@ -367,14 +379,15 @@ A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor
 | `PATCH /api/conversations/{id}` | `ConversationUpdate{send_without_confirmation: bool \| null}` → `SendMode{override, org_default, effective}` | The chat's send mode (Live phase). Owner only (404 otherwise); 409 `world_retired`. |
 | `POST /api/conversations/{id}/messages` | `{text}` → `MessagePosted{message_id, outcome: queued \| card_rejected, card_id}` | A member message. A pending card is rejected with the text as feedback. |
 | `POST /api/cards/{card_id}/approve` | `{recipients?: uuid[] (min 1), brief?: string, asks?: {org id: string}}` → `CardResolved{card_id, status, request_id?}` | Approve the outreach card, with the member's brief, asks and a subset of the proposed recipients. The web always sends `recipients`. Errors: 409 `card_not_pending` (also for an `auto` card); 422 `invalid` (recipients or asks outside the proposed ones); 404. |
-| `POST /api/cards/{card_id}/reject` | `{feedback}` → `CardResolved` | Reject the card with feedback for Claude. |
+| `POST /api/cards/{card_id}/reject` | `{feedback?}` (1..4000) → `CardResolved` | The card's Decline (`rejected_with: decline`), with an optional reason that only Claude in this chat reads. |
 | `GET /api/requests/{id}` | → `RequestStatusView` (cursor) | Per-recipient status, latest line and own-side close summary. |
 | `GET /api/inbox` | → `Inbox{needs_you, with_your_team, claude_handling, shared_with_you, done}` (cursor) | Each section is a list of `InboxItem{thread_id, title, side, counterparty, thread_state, stop_reason?, side_to_move, escalation: InboxEscalation{id, kind, status, question, short_question?, reason, assignees, priority, created_at, version}?, shared_by?, shared_question?, access_reasons, last_activity_at}`. `title` is `threads.thread_title`. `reason` is "Why this needs you". `side_to_move` is whose turn it is; while the thread is `awaiting_principal`, it is the side checking with its team. A live thread with an item open for a teammate (not the member) is `with_your_team`. A thread whose items are all resolved stays under `claude_handling` (or `shared_with_you`) until it closes or expires; only those are `done`. There are no routing stats. |
-| `POST /api/escalations/{id}/resolve` | `{action: approve \| decline \| take_over \| revise, text? (≤ 20000), draft_rev?}` → `EscalationResolved` | Approve & send (`text` is "Edit"), Decline (`text` is the reason), Take over (needs `text`), or Revise (a held message only, needs `text`: the representative's instruction). Errors: 409 `escalation_not_open` (with `resolved_by`); 403 `not_in_org`; 422 `invalid`; 404. |
+| `POST /api/escalations/{id}/resolve` | `{action: approve \| decline \| take_over, text? (≤ 20000), draft_rev?}` → `EscalationResolved` | Approve and send (`text` is the member's wording of the draft), Decline (`text` is the reason), or Take over (needs `text`). `draft_rev` pins the draft the member saw, held messages included. `revise` is refused (422). Errors: 409 `escalation_not_open` (with `resolved_by`); 403 `not_in_org`; 422 `invalid`; 404. |
 | `POST /api/escalations/{id}/reassign` | `{member_id}` → `Reassigned` | Move the item. The target must be a member of the escalation's org. |
-| `POST /api/escalations/{id}/redraft` | `{instruction}` → `RedraftStarted` | "Ask Claude to redraft" (consult items only). |
 | `GET /api/threads/{id}/workspace` | → `ThreadWorkspace` (cursor) | Own side only; details below the table. |
-| `POST /api/threads/{id}/notes` | `{body}` → `NoteView` | Internal note. An `@slug` mention shares the thread. |
+| `POST /api/threads/{id}/notes` | `{body, as_member_id}` → `NoteView` | A comment for the team, which no Claude reads. An `@slug` mention shares the thread. Errors: 409 `member_changed` (with `member`: the tab's member is stale after a switch elsewhere), checked first; 404. |
+| `POST /api/threads/{id}/steers` | `AddSteer` → 202 `SteerStarted` | Edit: tell this side's Claude what to do differently (round 2). |
+| `POST /api/threads/{id}/reopen` | `ReopenRequest` → 202 `ReopenStarted` | Reopen a closed conversation (round 2). |
 | `GET /api/orgs/{slug}/harmony` | → `HarmonySettingsView` (cursor) | Any member of the org; fields below the table. |
 | `PUT /api/orgs/{slug}/harmony` | `HarmonySettingsUpdate` → `HarmonySettingsView` | Admins only (403 `not_admin`). The update and its notices are described below the table. |
 | `POST /api/orgs/{slug}/trusted-organizations` | `TrustedOrganizationCreate{counterparty_org_id, autonomy?, sharing_description=""}` → `TrustedOrganizationView` | Admins only. Errors: 409 `invalid` if the org is already trusted; 422 `invalid` for self or an org outside the world. |
@@ -382,11 +395,12 @@ A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor
 | `DELETE /api/orgs/{slug}/trusted-organizations/{counterparty_org_id}?version=` | → 204 | Admins only. A stale `version` is 409; an org that isn't trusted is 404. Same notices. |
 | `GET /api/network?request=<id?>` | → `NetworkView` (cursor) | The network graph; details below the table. |
 | `GET /api/demo/story` | → `DemoStory{scenario, world_date, acting_as, suggested_message?, suggested_recipients, steps}` | The walkthrough beat. |
+| `GET /api/demo/whose?chat=\|thread=` | → `DemoWhose{kind, orgs: {org, people: {member_id, name}[]}[]}` | Who can open a chat or thread the acting member can't, for the not-found page (round 2). |
 
-**`ThreadWorkspace`** is `{thread_id, side, consults, escalations, notes, representative, close_summary, version}`:
+**`ThreadWorkspace`** is `{thread_id, side, consults, escalations, notes, representative, close_summary, steers, guidance, earlier_summaries, version}` (round 2 adds the last three; see [Round 2](#round-2)):
 - `consults`: `ConsultView{id, question, status, answer, needs_human, needs_human_reason, sharing_check, released_text, released_by, released_by_member, created_at, released_at, version}`.
-- `escalations`: `EscalationView{id, kind, status, consult_id, reason, assignees, priority, current_draft_rev, drafts: EscalationDraftView{draft_rev, answer, short_question?, route: RouteView{assignees: {slug, why}[]}?, rationale, activity: ActivityLine[], created_at}[], resolution, resolved_by, resolved_at, created_at, version}`.
-- `representative`: `RepresentativeContext{parts: ContextPart[], notices: DeliveredNotice[], released: ReleasedAnswerView[], frozen_at}`. It is "What our representative saw", and is null before the side's first turn. `notices` (`{kind, text, delivered_at}`) and `released` list only what a stored call of that side carried.
+- `escalations`: `EscalationView{id, kind, status, consult_id, reason, assignees, priority, current_draft_rev, drafts: EscalationDraftView{draft_rev, answer, short_question?, route: RouteView{assignees: {slug, why}[]}?, rationale, activity: ActivityLine[], rewritten_by: RewrittenBy{steer_id, author}?, created_at}[], resolution, resolved_by, resolved_at, created_at, version}`. A held message's `reason` is rev 1's own (an Edit's hold, a guided bare reply, or *Ask*).
+- `representative`: `RepresentativeContext{parts: ContextPart[], notices: DeliveredNotice[], released: ReleasedAnswerView[], guidance: DeliveredGuidance[], frozen_at}`. It is "What our representative saw", and is null before the side's first turn. `notices` (`{kind, text, delivered_at}`), `released` and `guidance` list only what a stored call of that side carried.
 
 **`HarmonySettingsView`** is `{org, settings_version, public_summary, instructions, sharing_description, autonomy, trusted_organizations, directory_visibility, routing_prompt, default_assignee, send_without_confirmation, members, policy_version, editable}`:
 - `trusted_organizations`: `TrustedOrganizationView{counterparty, autonomy?, sharing_description, updated_by?, updated_at, version}`.
@@ -400,15 +414,15 @@ A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor
 
 **`NetworkView`** is `{world_id, requests: NetworkRequestRef[], request_id, nodes, edges, counts}`:
 - `nodes`: `NetworkNode{org, kind, featured, role, participant?, fit?, waiting_on?, suggested}`.
-- `edges`: `NetworkEdge{thread_id, from_org_id, to_org_id, state, stop_reason?, latest_line?, turn_count?, close_summary?, last_activity_at}`. `close_summary` is set only for the acting member's own org's side.
+- `edges`: `NetworkEdge{thread_id, from_org_id, to_org_id, state, stop_reason?, end_reason?, closed_by?, latest_line?, turn_count?, close_summary?, last_activity_at}`. `close_summary` is set only for the acting member's own org's side, and `closed_by` only for a party to the thread.
 - `counts`: `NetworkCounts{orgs, threads, active, closed}`.
 - There are no offer labels.
 
-P0's routes are unchanged, except `ThreadSummary` (`GET /api/threads`, `GET /api/threads/{id}`), whose `title` is `threads.thread_title` and which gains `stop_reason?`, and `SessionView`, which gains `internal_model` (see [Live phase](#live-phase)).
+P0's routes are unchanged, except `ThreadSummary` (`GET /api/threads`, `GET /api/threads/{id}`), whose `title` is `threads.thread_title` and which gains `stop_reason?` and round 2's `run`, `end_reason`, `ended_at`, `closed_by` and `run_finished_at`; `ThreadDetail`, which gains `reopen` and `runs` (see [Round 2](#round-2)); and `SessionView`, which gains `internal_model` (see [Live phase](#live-phase)).
 
 ## File ownership
 
-Every file maps to one owner. To change a file you don't own, ask the coordinator. In the live phase, LIVE_DEMO_PLAN §4 assigns the files (L0–L8), and its owners take precedence over the R-task names below. Each task also owns the tests and fixtures for its own files. A test of a deleted concept is deleted, not skipped.
+Every file maps to one owner. To change a file you don't own, ask the coordinator. In the live phase, LIVE_DEMO_PLAN §4 assigned the files (L0–L8), and in round 2 FEEDBACK_R2_PLAN §2.1 did; their owners take precedence over the R-task names below. Each task also owns the tests and fixtures for its own files. A test of a deleted concept is deleted, not skipped.
 
 | Files | Owner |
 |---|---|
@@ -519,7 +533,7 @@ Admin routes take `X-Admin-Secret`, compared with `hmac.compare_digest`. Without
 - Domain: `conversations.start(…, send_without_confirmation=None)`, `set_send_mode(uow, conversation_id, override)`, `send_mode(session, conversation) -> SendMode` and `effective_send_mode(session, conversation) -> bool` (read live; L8 calls it when `send_network_request` runs). `cards.create(…, auto=False)` stores the flag, so nothing sets the column on a returned row.
 - **No member action touches an auto card.** `cards.awaiting_member()` (pending and not `auto`) is the one predicate for `cards.pending()`, the Recents `has_pending_card` query and superseding. `cards.resolve` raises `CardNotPending(card, "being sent without review")` unless `resolution.auto`, approve and reject answer 409 `card_not_pending`, and a typed message returns `queued`, not `card_rejected`.
 - **Guards, in auto mode only** (`tools/internal.py`), each an error result that stores nothing: only rows marked `suggested` that a search in this chat screened `strong` or `possible` are sent (an unscreened or `no` suggested row refuses the whole call; unsuggested rows are listed but not sent); at most `AUTO_SEND_MAX_RECIPIENTS` = `MAX_ACTIVE_THREADS` (8) recipients; at most 3 auto requests per internal turn; no recipient with a live thread from another request in this chat. A retried call reuses the decision stored on its card. A second `send_network_request` in the same response gets `NOT_RUN_YET` ("Not run yet: requests go out one at a time…").
-- The workflow settles an auto card with `CardResolution(…, member_id=owner, auto=True)` through `apply_card_resolution` with mirror options, with no Update, then starts the request and resumes the turn with "Sent without review (this chat's setting): request R to A, B." If the apply fails with a domain error, it rejects the card the same way and resumes with "Couldn't send: {reason}. Nothing went out." `InternalTurnResult.card_auto` (default false) and `CardRaised.auto` (default false) carry the decision out of the turn, and `OutreachCardPayload.auto_send_recipients` says who it goes to.
+- The workflow settles an auto card with `CardResolution(…, member_id=owner, auto=True)` through `apply_card_resolution` with mirror options, with no Update, then starts the request and resumes the turn with "Sent without review (this chat's setting): request R to A and B." plus `AFTER_SEND` (round 2's card results, below). If the apply fails with a domain error, it rejects the card the same way and resumes with "Couldn't send: {reason}. Nothing went out." `InternalTurnResult.card_auto` (default false) and `CardRaised.auto` (default false) carry the decision out of the turn, and `OutreachCardPayload.auto_send_recipients` says who it goes to.
 - On a new turn whose effective mode differs from the last one Claude was told in this chat, an appended system notice starting `NOTICE_PREFIX` ("Harmony: in this chat, `send_network_request` …") tells it (`temporal/activities/send_mode.py`). The system prompt and tool bytes are the same in either mode.
 - `OutreachCardItem.auto` is true for an auto card in every status, and false otherwise.
 
@@ -547,12 +561,12 @@ Admin routes take `X-Admin-Secret`, compared with `hmac.compare_digest`. Without
 - `EscalationDraftView.route` is `RouteView{assignees: RouteAssigneeView{slug, why}[]}`, as applied.
 - `CONSULT_OUTPUT_SCHEMA` requires `short_question` and `route.assignees: [{member, why}]` (the route's `reason` is gone). The validators still accept the old shape from stored drafts.
 
-**Revise (3.13 E3b).** `EscalationAction` gains `revise`, for `outbound_review` items only, with `text` required (otherwise 422 `invalid`). Nothing is sent, and the representative gets the text as an instruction, never as text it may pass on. `consult.result_text` refuses it. `consult.held_result("revise", …, member_name=)` reads "Not sent: {first name} asked you to change it. Their note is for you only; don't pass it on:", the note in a code-written `<note>` part (`context.quote_note`), then "Rewrite the message and send it again, or consult if you need to." The first name drops honorifics ("Dr. Helen Ward" → "Helen"), and every caller passes the resolver's name.
+**Revise (3.13 E3b), superseded by Edit in round 2.** `revise`, `context.quote_note` and the `<note>` part are gone: the resolve route refuses `revise` with 422, and a member tells Claude what to change on a held message with the `steer` Update, which rewrites the message in place and writes guidance (see [Round 2](#round-2)). `consult.held_result` keeps approve, decline and take over; an approval of a member's edited wording reads "Sent as your side edited it".
 
 **Session (3.13 E6).** `SessionView.internal_model: InternalModelView{id, label, adaptive}` (`auth/views.py`) is what internal Claude runs on for the acting org: "Opus 5.5" or "Haiku 5.5" (else the model id) with `adaptive` true, or "Scripted" with `adaptive` false when `MODEL_MODE=scripted`. `session_view(…, settings)` and `session_response(…, settings)` take the settings.
 
 **The representative's turn (3.13 E1, E1b, E3).**
-- `close` is refused while the counterparty has never sent a message on the thread; a closed thread still takes the summary-only close.
+- `close` is refused while the counterparty has sent no message in this run (`RepToolScope.run_start_seq`, round 2's Reopen); a closed thread still takes the summary-only close.
 - An empty `end_turn` after this turn's own tool results ends the turn as `end_turn`; an empty first response, and `max_tokens` with empty content, still raise `TurnIncomplete`.
 - `TurnContext.bare_text_sends` and `RepToolScope.bare_text_sends` (both default true) are false when a turn opens with the code-written `NOTHING_NEW` or `THREAD_ENDED` fallback; bare text then stays private and isn't streamed.
 - `ThreadWorkflow` ends a thread `expired` after two consecutive turns, one per side, that sent no message, consulted no one and didn't close.
@@ -560,7 +574,7 @@ Admin routes take `X-Admin-Secret`, compared with `hmac.compare_digest`. Without
 
 **Queues and models (3.1, 3.7).** `internal_turn` runs on `harmony-chat` (`WORKER_CHAT_CONCURRENCY` slots); `rep_turn` and `answer_consult` on `harmony-model` (`WORKER_MODEL_CONCURRENCY`, `WORKER_MODEL_RATE`). `run_worker` builds its `WorkerConfig` from settings. Background orgs' internal Claude runs on Haiku 5.5, and every org's chat streams. `harmony llm ping [--live] --model opus|haiku` sends the production shapes (streamed featured internal turn; the screener).
 
-**Workflow versioning.** This phase's `ConversationWorkflow` and `ThreadWorkflow` changes (silent-turn expiry, failure reasons, refusal closes, auto cards) carry no `workflow.patched` guard. `tests/workflow/test_replay.py` replays saved histories (`tests/fixtures/histories/`) against today's code: `p0_p2/`, recorded at `ceea81b` by its workflow tests and scripted story, and `live/`, recorded by this phase's. A `ConversationCarry` from before failure reasons, with its `turn_failed` flag, still loads (`true` reads as `model_error`), so every recorded conversation replays. One `p0_p2` thread isn't kept: its requester's first turn sent nothing, which now ends the thread `expired` instead of handing the move over. Nothing is deployed, so no such run is in flight. `HARMONY_SAVE_HISTORIES=<dir>` makes the Temporal test fixtures save every run of these three workflows (`tests/_histories.py`), which is how a recording is made again.
+**Workflow versioning.** The live phase's and round 2's `ConversationWorkflow`, `NetworkRequestWorkflow` and `ThreadWorkflow` changes carry no `workflow.patched` guard: worlds fork per build, so no deployed workflow resumes on changed code. `tests/workflow/test_replay.py` replays saved histories (`tests/fixtures/histories/`) against today's code: `r2/` only (`RECORDINGS = ("r2",)`), recorded by this build's workflow tests and scripted story after `redraft` and `revise` were removed, and recorded again at integration; it includes a reopened run and a failed reopen attempt. The older `p0_p2/` and `live/` recordings were deleted, because they hold the removed Update and commands that no longer replay. The `ConversationCarry` shim for the old `turn_failed` flag is deleted too; `closed_request_ids` is still read (as round 1) from a carry made before rounds. `HARMONY_SAVE_HISTORIES=<dir>` makes the Temporal test fixtures save every run of these three workflows (`tests/_histories.py`), which is how a recording is made again.
 
 **Defaults that keep old data valid.** Every new response field defaults where null or false is a true value (`title`, `ask`, `suggested`, `auto`, `short_question`, `stop_reason`, `why`). `SessionView.internal_model`, `ConversationDetail.send_mode`, `ConversationDetail.turn_failure` and `RecipientStatus.sent` are required. The tool inputs `SendNetworkRequestInput.title` and `RecipientInput.ask`, `title` and `suggested` are required (the cassettes carry them); each title is 1–60 characters after stripping whitespace. A call with two or more recipients is refused when the brief names a recipient org, or one recipient's ask or title names another (full `Org.name`, case-insensitive, word boundaries). Asks a member edits on the card aren't checked: they are the member's own words. `test_story_scripted` also plays the story with the answerers' cassettes as P0–P2 recorded them (`tests/fixtures/cassettes_p0_p2/`): routes naming member slugs with one shared `reason`, and no `short_question`. A send without `title`, `ask` or `suggested` is refused, so the chat's cassette is today's in both runs.
 
@@ -571,8 +585,59 @@ Admin routes take `X-Admin-Secret`, compared with `hmac.compare_digest`. Without
 **Web pieces for later owners.**
 - `web/src/app/budget.ts`: `useBudget()` over `GET /api/budget` (query key `queryKeys.budget` = `["budget"]`), and the types `BudgetView` and `BudgetState`. It runs once there is a session, polls every 30 s while the tab is visible, and refetches on `demo.notice {kind: "budget"}`.
 - `web/src/chat/failureCopy.ts`: `failureLine(reason: FailureReason, state: BudgetState): string` (the 3.5 copy), `budgetLine(state): string | null` (the demo bar's and composer's state line) and `useBudgetState()`, and the type `FailureReason`. The demo bar, Demo controls, chat, request view and network view all read their copy here.
-- `web/src/shell/ui/ClampedText.tsx`: `ClampedText({children, lines, className?})`, with a "View more" / "View less" toggle shown only when the text overflows.
+- `web/src/shell/ui/ClampedText.tsx` is gone (round 2, decision 8): long briefs, asks and messages show in full.
 - `web/src/test/shellHarness.tsx`: `NEW_WORLD_ID`, `Page`, `testRoutes`, `Gate`, `FakeServer`, `renderShell`, `renderLive`, `openAccountMenu`, `demoBar` and `watchFor`. Later owners may add exports but keep these signatures.
 - `web/e2e/unlock.ts`: `unlock(page: Page): Promise<void>` posts `E2E_PASSCODE` to `/api/gate` through `page.request`, and fails on a non-200. `playwright.config.ts` refuses to start without `E2E_PASSCODE`, and `scripts/e2e_ui.sh` exports it.
-- Lock handling (`web/src/api/client.ts`, `app/lock.ts`): a 401 whose code is `passcode_required` throws `PasscodeRequired` or calls the dispatcher's `lock()`, which stops retries, clears the query cache, alerts and toasts, posts `{type: "locked"}` to other tabs (they reload) and goes to `/api/gate?next=<path>`. Any other 401 still shows the Landing.
+- Lock handling (`web/src/api/client.ts`, `app/lock.ts`): a 401 whose code is `passcode_required` throws `PasscodeRequired` or calls the dispatcher's `lock()`, which stops retries, clears the query cache, alerts and toasts, posts `{type: "locked"}` to other tabs (they reload; it is the only message that still reloads a tab, round 2) and goes to `/api/gate?next=<path>`. Any other 401 still shows the Landing.
 - `web/src/fixtures/index.ts`: `Method` includes `"patch"`.
+
+## Round 2
+
+Feedback round 2's shapes ([FEEDBACK_R2_PLAN.md](FEEDBACK_R2_PLAN.md) §1, which fixed the names; [EDIT.md](design/EDIT.md) and [REOPEN.md](design/REOPEN.md) for the behaviour), as built. Where the designs and the code differ, the code wins and the plan's status records it.
+
+**Schema.**
+- `0003_edit_guidance`: `steers(thread_id, org_id, side, seq, kind: edit | reopen, author_member_id, body, escalation_id?, draft_text?, draft_rev?, status: working | done | failed, guidance_outcome?, guidance_version?, draft_outcome?, failure_reason?, version)` and `rep_guidance(thread_id, org_id, side, version, text, steer_id, created_by_member_id)`, append-only (an empty `text` withdraws the guidance).
+- `0004_reopen`: `threads.run` (1), `end_reason`, `ended_at`, `closed_by`, `run_finished_at`; `thread_runs(thread_id, run, started_at, deadline_at, max_turns, reopened_by_member_id?, reopened_by_org_id?, reopened_side?, steer_id?, start_seq, state?, end_reason?, closed_by?, stop_reason?, ended_at?, requester_summary?, responder_summary?, carry?, finished_at?)`; `network_requests.round` (1) and `workflow_done_at`. Both migrations are additive, with downgrades. Seeded terminal threads get `end_reason` and `ended_at` from the loader and no `thread_runs` row; `open_thread` writes run 1's row.
+- Literals: `EndReason` = `closed` | `quiet` | `unsent` | `turn_limit` | `deadline` | `stopped`; `ReopenBlock` = `history` | `unfinished` | `not_asked` | `limit` | `refused` | `they_closed`; `SteerKind`, `SteerStatus`, `SteerGuidanceOutcome` (`updated` | `unchanged` | `rejected` | `failed`), `SteerDraftOutcome` (`rewritten` | `settled` | `failed`), `SteerFailure` (a `FailureReason`, `added_details`, `invalid`, `thread_closed`, `unchanged` or `reopen_failed`); `ModelRole` adds `steer`.
+
+**Turn rules (decision 1, EDIT.md §3.6 and §3.7).** In `agents/tools/rep.py`:
+- `CONSULT_AFTER_SEND`: "Not asked: your message already went out, so it's {counterparty}'s move. Don't close. End your turn now: stop calling tools. Ask your side at the start of your next turn."
+- `NOT_REPLIED`: "{counterparty} hasn't replied yet. To wait for their reply, end your turn: stop calling tools. `close` ends the conversation." `CLOSE_TOOL` begins "End the conversation for both sides once it's settled or clearly going nowhere." Tool text is frozen per thread side, so threads started before this build keep their old wording.
+- A steer recorded after a turn started (`steers.max_seq(...) > RepToolScope.steer_seq`): before the turn has sent, `send_message` is held with `STEERED_HOLD` ("Claude wrote this before your side's latest edit reached it."); after it has sent, a send is refused with `STEERED_NOT_SENT` and a close with `STEERED_NOT_CLOSED`. In a turn that opened with guidance (`RepToolScope.guided`), a bare text reply is held with `GUIDED_TEXT_HOLD` ("Claude answered in plain text just after your side's edit reached it, so a teammate checks it first."). Held items store their reason as rev 1's `needs_human_reason`. `CUT_OFF_CONSULT` and `CUT_OFF_HELD` are the results a consult or held message is owed when the run ends first.
+
+**Edit (steer).**
+- `POST /api/threads/{id}/steers` takes `AddSteer{client_key, as_member_id, body (1..STEER_BODY_MAX_CHARS = 4000), escalation_id?, draft_text? (≤ 20000)}` and answers 202 `SteerStarted{steer_id, escalation_id?, draft_rev?}` (`draft_rev` is the rev the waiting item is being rewritten as). Errors, in order: 409 `member_changed` (with `member`); 422 `invalid` for a blank body; 404 (the thread, or an `escalation_id` that isn't the actor's org's item on it); 403 `not_in_org`; 409 `steer_running` (with `by`), `thread_closed` and `world_retired`.
+- The API runs the Update `steer(SteerRequest{steer_id, side, org_id, member_id, client_key, body, escalation_id?, draft_text?})` with Update id `SteerRequest.update_id` (`steer:{steer_id}:{body digest}`); `steers.steer_id_for(world, org, member, client_key)` makes a retried POST the same steer, and the route answers 422 `invalid` for a key already stored with other text. The validator refuses with `SteerRunning` (`details=[{by_member_id}]`) while that side's last steer runs, `ThreadClosed` on an ended thread or before a reopen begins, and `SteerConflict` (422) for a reused key with different text.
+- The workflow: `record_steer` (`steers.record`, at the next per-side `seq`), then in parallel `write_guidance` and, while the item it names is still open, its rewrite: a consult draft is redrafted by `answer_consult` with the instruction, a held message by `rewrite_held` in place. Then `settle_steer`, which decides the status from the rows the parts wrote. The side's next turn waits for the steer, and an Edit never starts a turn.
+- `write_guidance(SteerPartInput) -> GuidanceWritten`: role `steer`, step 0, from `prompts/steer_guidance.md`, with only members' words (the instruction and the current guidance) and code-written names. `parse_guidance` decides `rejected` (a refusal, unusable output, over `steers.GUIDANCE_MAX_CHARS` = 2000, or `steers.added_details`: a number, date, email, link or name none of those words hold), `unchanged`, or `updated` (`steers.add_guidance` writes the next version).
+- `rewrite_held(SteerPartInput) -> int | None`: role `steer`, step 1, no tools, from `prompts/held_rewrite.md`; the new draft rev, which a person approves.
+- `answer_inputs` reads `steers.current_guidance_quoted` (or "None.") under "# What your teammates told the representative"; the notes section and `_notes_text` are gone, so no comment reaches any model.
+- **Reads.** `ThreadWorkspace.steers: SteerView{id, kind, author, body, created_at, status, escalation_id?, draft_rev?, guidance_outcome?, guidance_version?, draft_outcome?, failure_reason?, version}[]`; `ThreadWorkspace.guidance: GuidanceView{version, text, created_at, steer_id, by, delivered_at?}?` (the current version, and when its block reached the representative); `RepresentativeContext.guidance: DeliveredGuidance[]`; `EscalationDraftView.rewritten_by: RewrittenBy{steer_id, author}?`.
+- **Events.** `steer` (versioned) and `rep_guidance` (append-only) snapshots go to the steering org's thread scope only (the steer's without `draft_text`), and never to the network view's stream (`LENS_HIDDEN_ENTITY_TYPES`). `escalation.redraft_failed` is gone.
+
+**Reopen.**
+- `POST /api/threads/{id}/reopen` takes `ReopenRequest{client_key, as_member_id, body (1..4000, trimmed)}` and answers 202 `ReopenStarted{steer_id, thread_id}`. Errors, in order: 409 `member_changed`; 404; 403 `not_in_org`; 409 `thread_open` (with `reopened_by: ReopenedBy{org, member?}`, `member` only for the same org), `reopen_in_progress`, `closing_in_progress`, `not_reopenable` (with `block`) and `world_retired`. The same member with the same key, or a different key and the same text, gets the first steer's 202.
+- `temporal/reopen.start_reopen` records the steer (kind `reopen`, `working`) and starts `ThreadWorkflow` again under the same id with `ThreadInput{run, carry: ThreadCarry{turns, delivered, consults, owed}, reopen: ReopenInput{steer_id, side, org_id, member_id, body, seq, from_state}, guidance, steer_seq}`, a fresh `max_turns` (carried + 16) and deadline, and the memo `reopen_steer_id` (`MEMO_STEER`).
+- The run: `record_reopen`, `write_guidance` (kind `reopen`), then `begin_reopen` only when the guidance was `updated` (otherwise `settle_steer` with the reason, and the run returns the old state), then the turn loop from the reopening side, then the tail: `end_round` for a run after the first (and `notify_conversation` with `NetworkUpdate.round` when it closed the request), and `finish_run`, always last.
+- `domain/reopens.py`: `reopen_offer(thread, runs, side, *, requester_wrote, now) -> ReopenOffer{state: ReopenOfferState (allowed | wrapping_up | blocked), block?} | None`, `MAX_REOPENS` = 2, `WRAP_UP_GRACE` = 10 min, `begin`, `finish_run` and `end_line` (the reason the guidance writer is told).
+- `ThreadStateInput` gains `end_reason`, `closed_by` and `last_turn`. The `closed` notice is queued by `set_thread_state` only when the call that ends the thread is a last turn's refusal (`last_turn` with `closed_by`); a `close` queues its own.
+- `requests.end_round(uow, request_id, *, from_workflow) -> RoundEnd{closed, round, conversation_id}` closes a request only when its workflow is done (`workflow_done_at`) and no thread is live. The request workflow's tail calls it with `from_workflow=True`; `set_request_status` is gone.
+- **Reads.** `ThreadSummary` gains `run`, `end_reason`, `ended_at`, `closed_by` and `run_finished_at`. `ThreadDetail` gains `reopen: ReopenOffer?` (per viewer) and `runs: ThreadRunView{run, started_at, reopened: RunReopened{org, side, by?, steer_id?}?, ended: RunEnded{state, end_reason, closed_by, stop_reason, at}?}[]` (the counterparty sees `by` and `steer_id` null). `ThreadWorkspace.earlier_summaries: EarlierSummary{run, text}[]` holds the actor's side's archived summaries. `NetworkEdge` gains `end_reason` and `closed_by` (parties only).
+- **The conversation.** `ConversationWorkflow` takes each (request, round) once: `ConversationCarry.closed_request_rounds` replaces `closed_request_ids`, which is still read as round 1, and `undelivered_updates` carries `closed` updates a turn took but never stored.
+
+**Card results (FEEDBACK_R2_PLAN §1.8, `agents/tools/internal.py`).** The `send_network_request` result once its card is settled:
+- approved: "Approved and sent: request R to A and B." or, in a chat that sends without review, "Sent without review (this chat's setting): request R to …", each followed by `AFTER_SEND`: "Their progress shows on the request's card in this chat, and anything that needs {member} will come up here as a question; you'll be told here when every conversation has ended. There's nothing to check now: in a sentence, tell {member} it's out and stop.";
+- the card's Decline: "Declined: {member} decided not to send this request[, and said: {reason}]" then "Nothing went out. Don't propose it again unless {member} asks.";
+- a message typed while the card waited: "rejected: <message>";
+- an auto card that couldn't be sent: "Couldn't send: {reason}. Nothing went out." (an error result).
+
+`OutreachCardItem.rejected_with` is `decline` | `message`, or null: older rejected rows read `message`, and a card an automatic send rejected gives null.
+
+**Tool rows (`domain/conversations.py`).** A tool row shows a present-tense label while it runs ("Searching the Harmony network…", "Searching your organization's knowledge", "Reading a document", "Checking on the request"), then the past-tense label with its outcome after "·": "1 strong, 2 possible of 14", "2 possible fits of 14", "No fits among 14"; "3 matches", "1 match", "No matches". The need or query is the row's detail, on a second line.
+
+**Switching and not-found.**
+- Every write from the request view (`/notes`, `/steers`, `/reopen`) carries `as_member_id`; a mismatch with the session's member is 409 `member_changed` with `member`, checked first, and writes nothing.
+- `GET /api/demo/whose?chat=<id>` or `?thread=<id>` → `DemoWhose{kind: chat | thread, orgs: DemoWhoseOrg{org, people: DemoPerson{member_id, name}[]}[]}`: for ids in the session's own live world only. A chat names its owner; a thread its requester's then its responder's people who can open it (admins, then `thread_access` rows), at most 3 (`WHOSE_MAX_PEOPLE`). Any other id is 404, and neither or both parameters 422.
+- Tabs share `{type: "member_changed", sessionId, epoch, memberId}` and `{type: "locked"}` on the `BroadcastChannel`; `dispatcher.onMemberChanged(listener)` is new.
+
+**`harmony run`.** `--edit ORG:COUNTERPARTY:N:TEXT` (repeatable; TEXT may hold colons) has a member of ORG tell its Claude TEXT, an Edit, once ORG's thread with COUNTERPARTY has N messages. The report adds the engine checks `consults_after_send`, `closes_after_refused_consult` (in the same turn), `status_checks_after_send` and, with `--edit`, `guidance_followed`: each Edit's guidance and the first message its side sent after it, flagged when no guidance was written, nothing was sent, or the message mentions it.

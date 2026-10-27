@@ -12,6 +12,8 @@ Templates are plain text with `{placeholders}`, drafted by the coordinator:
 | `consult_redraft.md`| what a redraft adds to `consult.md`: the draft it revises  |
 | `sharing_check.md`  | the sharing check on a draft consult answer                |
 | `screener.md`       | one discovery screener call                                |
+| `steer_guidance.md` | a steer's guidance call: the guidance from a member's Edit |
+| `held_rewrite.md`   | a steer's rewrite of a held message (no tools)             |
 
 Syntax: `{name}` (lowercase letters, digits and underscores) is a placeholder; `{{` and
 `}}` are literal braces. Any other brace is a malformed template.
@@ -44,6 +46,8 @@ PromptName = Literal[
     "consult_redraft",
     "sharing_check",
     "screener",
+    "steer_guidance",
+    "held_rewrite",
 ]
 
 # One token per match: an escaped brace, a placeholder, or a stray brace (an error).

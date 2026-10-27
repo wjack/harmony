@@ -5,10 +5,16 @@ story's beats came:
 - closes: `early_closes` (a close before the counterparty's first message: the guard
   failed), `close_refusals` (the guard fired), `waiting_closes` (a close whose summary
   still waits on someone, or in the same turn as a question the side just asked);
-- turns: `empty_turn_failures` and `empty_end_turns_handled` (`end_turn` responses of
+- consults: `consults_after_send` (a `consult` refused because its turn had already sent
+  a message) and `closes_after_refused_consult` (a `close` called after that refusal, in
+  the same turn);
+- `status_checks_after_send`: `get_request_status` calls in an internal turn after it
+  resumed on its card's request going out, where its result says there's nothing to
+  check (FEEDBACK_R2_PLAN decision 7);
+- turns: `empty_turn_nudges` and `empty_end_turns_handled` (`end_turn` responses of
   internal and representative turns that say nothing, thinking alone included: on the
-  first call of a run, which fail it unless its opening asks for no answer, and on
-  later ones, which end it),
+  first call of a run, which the runtime asks once more (`runtime.EMPTY_NUDGE`) unless
+  its opening asks for no answer, and on later ones, which end it),
   `multi_send_turns` (with the second and later messages), `silent_turn_pairs`;
 - messages: `meta_notes` (notes about the conversation sent as messages),
   `cross_mentions` (a requester naming another recipient of its request),
@@ -20,7 +26,11 @@ story's beats came:
   `duplicate_auto_recipients` (an auto request to an org an earlier request from its chat
   was still in touch with);
 - drafts: those with no `short_question` or one over 20 words, and routes with an
-  assignee but no why.
+  assignee but no why;
+- Edits (`harmony run --edit`): `guidance_followed`, each Edit's guidance and the first
+  message its side sent after it, flagged when no guidance was written, nothing was
+  sent, or the message mentions it. Whether it follows the guidance is the reader's
+  call (EDIT.md §9's opt-in live check).
 
 Collection is SQL; the rules are pure functions over the rows.
 """
@@ -43,8 +53,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from harmony.agents.consult import HELD_DECLINED
 from harmony.agents.models import OutreachCardPayload, Route
 from harmony.agents.runtime import NOT_RUN, NOT_RUN_YET, echo_content, says_nothing
-from harmony.agents.tools.internal import AUTO_SEND_FITS, SEND_NETWORK_REQUEST
-from harmony.agents.tools.rep import NOT_REPLIED, NOTHING_SENT
+from harmony.agents.tools.internal import (
+    AUTO_SEND_FITS,
+    GET_REQUEST_STATUS,
+    SEND_NETWORK_REQUEST,
+)
+from harmony.agents.tools.rep import (
+    CLOSE,
+    CONSULT,
+    CONSULT_AFTER_SEND,
+    NOT_REPLIED,
+    NOTHING_SENT,
+)
 from harmony.db import repo
 from harmony.db.models import (
     AgentTurn,
@@ -57,9 +77,11 @@ from harmony.db.models import (
     ModelCall,
     NetworkRequest,
     Org,
+    RepGuidance,
     RepSession,
     RepTranscript,
     Screening,
+    Steer,
     Thread,
     ThreadMessage,
 )
@@ -74,7 +96,13 @@ WAITING: Final = re.compile(
     r"(?i)await|waiting (for|on)|next step|pending (their|a) (reply|response|confirmation)"
     r"|will (review|follow up)"
 )
-META_NOTE: Final = re.compile(r"(?i)^\s*\[|awaiting your reply|note for |sent by claude for")
+# Notes and narration about the conversation (section 5 bug 2: "I'm waiting", "nothing
+# further to send").
+META_NOTE: Final = re.compile(
+    r"(?i)^\s*\[|awaiting your reply|note for |sent by claude for|nothing further to send"
+    r"|\bI['’]?m (?:now )?(?:waiting|not sending)\b|ending my turn"
+    r"|leav(?:e|ing) the (?:thread|conversation) open"
+)
 # What a thread's first message to a recipient must not say, by scenario and recipient
 # (section 5.2): another recipient's part of the request.
 OPENER_LEAKS: Final[Mapping[str, Mapping[str, re.Pattern[str]]]] = {
@@ -92,8 +120,14 @@ _CLOSE_REFUSED: Final = (
     NOT_REPLIED.partition("{counterparty} ")[2],
     NOTHING_SENT.partition("{counterparty}")[2],
 )
+_CONSULT_REFUSED: Final = CONSULT_AFTER_SEND.partition("{counterparty}")[0]
 _NOT_RUN: Final = (NOT_RUN.partition(":")[0], NOT_RUN_YET.partition(":")[0])
 _INVALID_SEND: Final = f"Invalid input for {SEND_NETWORK_REQUEST}"
+# A message that tells the counterparty about its guidance instead of following it.
+GUIDANCE_MENTION: Final = re.compile(
+    r"(?i)\bguidance\b|\binstruct(?:ed|ions?)\b|\bI(?:'ve| have| was)(?: been)? (?:asked|told) to\b"
+    r"|\bmy (?:side|team|colleagues?|organi[sz]ation) (?:has |have )?(?:asked|told|wants?)\b"
+)
 _NOTHING_NEW: Final = re.compile(
     re.escape(NOTHING_NEW.partition("{counterparty}")[0])
     + ".+"
@@ -142,12 +176,37 @@ class SentRequest:
     recipients: list[UUID]
 
 
+@dataclass(frozen=True, slots=True)
+class FollowedEdit:
+    """An Edit, its guidance, and the first message its side sent once it was written."""
+
+    side: str
+    instruction: str
+    # None when the steer wrote none (`outcome` says why).
+    guidance: str | None
+    outcome: str
+    next_message: str | None
+
+    @property
+    def problem(self) -> str | None:
+        if self.guidance is None:
+            return f"no guidance ({self.outcome})"
+        if self.next_message is None:
+            return "nothing sent after it"
+        if GUIDANCE_MENTION.search(self.next_message):
+            return "the next message mentions it"
+        return None
+
+
 @dataclass
 class EngineChecks:
     early_closes: list[str] = field(default_factory=list[str])
     close_refusals: int = 0
+    consults_after_send: int = 0
+    closes_after_refused_consult: int = 0
+    status_checks_after_send: int = 0
     waiting_closes: list[str] = field(default_factory=list[str])
-    empty_turn_failures: int = 0
+    empty_turn_nudges: int = 0
     empty_end_turns_handled: int = 0
     # Per turn that sent several messages: the second and later ones.
     multi_send_turns: list[list[str]] = field(default_factory=list[list[str]])
@@ -167,6 +226,7 @@ class EngineChecks:
     auto_send_breaches: list[str] = field(default_factory=list[str])
     auto_requests_per_turn: int = 0
     duplicate_auto_recipients: list[str] = field(default_factory=list[str])
+    guidance_followed: list[FollowedEdit] = field(default_factory=list[FollowedEdit])
 
 
 # --- Collecting -----------------------------------------------------------------------
@@ -194,12 +254,15 @@ async def engine_checks(sessionmaker: Sessionmaker, world_id: UUID, scenario: st
             for row in await repo.list_in_world(session, RepSession, world_id)
         }
         checks.close_refusals = await _close_refusals(session, world_id)
+        await _consults_after_send(session, world_id, checks)
         await _empty_end_turns(session, world_id, checks)
         checks.silent_turn_pairs = await _silent_turn_pairs(session, world_id, messages)
         await _sends(session, world_id, checks)
+        checks.status_checks_after_send = await _status_checks_after_send(session, world_id)
         requests = list(await repo.list_in_world(session, NetworkRequest, world_id))
         await _drafts(session, world_id, checks)
         await _auto_sends(session, world_id, names, checks)
+        checks.guidance_followed = await _guidance_followed(session, world_id, names)
     _closes(threads, messages, summaries, names, checks)
     _messages(threads, messages, names, slugs, scenario, checks)
     from_chats = {r.id: r for r in requests if r.conversation_id is not None}
@@ -223,6 +286,22 @@ async def _close_refusals(session: AsyncSession, world_id: UUID) -> int:
         )
     )
     return sum(_tool_results(text).count(r) for text in rows for r in _CLOSE_REFUSED)
+
+
+async def _consults_after_send(session: AsyncSession, world_id: UUID, checks: EngineChecks) -> None:
+    refused_turns = select(RepTranscript.turn_id).where(
+        RepTranscript.world_id == world_id,
+        RepTranscript.role == "user",
+        RepTranscript.content_text.contains(_CONSULT_REFUSED, autoescape=True),
+    )
+    rows = await session.execute(
+        select(RepTranscript.turn_id, RepTranscript.role, RepTranscript.content_text)
+        .where(RepTranscript.world_id == world_id, RepTranscript.turn_id.in_(refused_turns))
+        .order_by(RepTranscript.thread_id, RepTranscript.side, RepTranscript.seq)
+    )
+    refused, closes = consults_after_send([(turn_id, role, text) for turn_id, role, text in rows])
+    checks.consults_after_send = refused
+    checks.closes_after_refused_consult = closes
 
 
 async def _empty_end_turns(session: AsyncSession, world_id: UUID, checks: EngineChecks) -> None:
@@ -254,8 +333,8 @@ async def _empty_end_turns(session: AsyncSession, world_id: UUID, checks: Engine
     }
     for turn_id, step_idx, request_text in bodies:
         call = _empty_end_turn(turn_id, step_idx, request_text)
-        if empty_end_turn_failed(call, sent_cards):
-            checks.empty_turn_failures += 1
+        if empty_end_turn_nudged(call, sent_cards):
+            checks.empty_turn_nudges += 1
         else:
             checks.empty_end_turns_handled += 1
 
@@ -344,6 +423,25 @@ async def _sends(session: AsyncSession, world_id: UUID, checks: EngineChecks) ->
             text = _result_text(block)
             checks.not_run_sends += text.startswith(_NOT_RUN)
             checks.missing_field_errors += text.startswith(_INVALID_SEND)
+
+
+async def _status_checks_after_send(session: AsyncSession, world_id: UUID) -> int:
+    sent_cards = {
+        (card.turn_id, card.tool_use_id)
+        for card in await repo.list_in_world(session, Card, world_id)
+        if card.status == "approved"
+    }
+    rows = await session.execute(
+        select(ChatMessage.turn_id, ChatMessage.role, ChatMessage.content_text)
+        .where(
+            ChatMessage.world_id == world_id,
+            ChatMessage.turn_id.in_([turn_id for turn_id, _ in sent_cards]),
+        )
+        .order_by(ChatMessage.conversation_id, ChatMessage.seq)
+    )
+    return status_checks_after_send(
+        [(turn_id, role, text) for turn_id, role, text in rows], sent_cards
+    )
 
 
 async def _drafts(session: AsyncSession, world_id: UUID, checks: EngineChecks) -> None:
@@ -440,9 +538,9 @@ async def _thread_ends(session: AsyncSession, world_id: UUID) -> dict[tuple[UUID
 # --- The rules ------------------------------------------------------------------------
 
 
-def empty_end_turn_failed(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, str], bool]) -> bool:
-    """Whether the runtime failed the turn on this empty `end_turn` rather than ending it
-    (3.13 E1b, `TurnContext.quiet_opening`): it was a run's first call (step 0, or the
+def empty_end_turn_nudged(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, str], bool]) -> bool:
+    """Whether the runtime asked again after this empty `end_turn` rather than ending the
+    turn (3.13 E1b, `TurnContext.quiet_opening`): it was a run's first call (step 0, or the
     step a turn resumes at, which opens on its card's result alone), and the opening
     asked for an answer. A resumed turn's opening asks for none once its card was
     approved or sent without review, unless notices came with it; a representative's
@@ -464,6 +562,62 @@ def empty_end_turn_failed(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, st
     # A held bare-text reply's decline answers no call, so it comes as text.
     declined = [*texts, *(_result_text(block) for block in results)]
     return not declined or any(text != HELD_DECLINED for text in declined)
+
+
+def consults_after_send(rows: Iterable[tuple[UUID | None, str, str]]) -> tuple[int, int]:
+    """`consult` calls refused because their turn had already sent a message
+    (`CONSULT_AFTER_SEND`, FEEDBACK_R2_PLAN decision 1), and `close` calls made after one
+    of those refusals in the same turn, which the refusal told the model not to make.
+    `rows` are representative transcript rows (turn, role, content) in the order each
+    side stored them; a close in the same response as the refused consult came before
+    its refusal and isn't counted."""
+    consults: set[str] = set()
+    refused_turns: set[UUID | None] = set()
+    refused = closes = 0
+    for turn_id, role, content_text in rows:
+        blocks = objects(json.loads(content_text))
+        if role == "assistant":
+            calls = [block for block in blocks if block.get("type") == "tool_use"]
+            consults |= {as_str(b.get("id")) or "" for b in calls if b.get("name") == CONSULT}
+            if turn_id in refused_turns:
+                closes += sum(1 for b in calls if b.get("name") == CLOSE)
+            continue
+        for block in blocks:
+            if (
+                block.get("type") == "tool_result"
+                and block.get("tool_use_id") in consults
+                and _result_text(block).startswith(_CONSULT_REFUSED)
+            ):
+                refused += 1
+                refused_turns.add(turn_id)
+    return refused, closes
+
+
+def status_checks_after_send(
+    rows: Iterable[tuple[UUID | None, str, str]], sent_cards: Set[tuple[UUID, str]]
+) -> int:
+    """`get_request_status` calls a turn made after it resumed on its card's result
+    once the request went out (approved, or sent without review), which says there's
+    nothing to check. `rows` are chat transcript rows (turn, role, content) in order;
+    `sent_cards`, each sent card's (turn, tool call)."""
+    resumed: set[UUID | None] = set()
+    checks = 0
+    for turn_id, role, content_text in rows:
+        blocks = objects(json.loads(content_text))
+        if role == "user":
+            if any(
+                block.get("type") == "tool_result"
+                and (turn_id, as_str(block.get("tool_use_id")) or "") in sent_cards
+                for block in blocks
+            ):
+                resumed.add(turn_id)
+        elif role == "assistant" and turn_id in resumed:
+            checks += sum(
+                1
+                for block in blocks
+                if block.get("type") == "tool_use" and block.get("name") == GET_REQUEST_STATUS
+            )
+    return checks
 
 
 def silent_turn_pairs(
@@ -543,6 +697,61 @@ def duplicate_auto_recipients(
                         f"{names.get(org_id, str(org_id))}: request {later.id} while request "
                         f"{earlier.id} was still in touch"
                     )
+    return found
+
+
+async def _guidance_followed(
+    session: AsyncSession, world_id: UUID, names: Mapping[UUID, str]
+) -> list[FollowedEdit]:
+    edits = await session.scalars(
+        select(Steer)
+        .where(Steer.world_id == world_id, Steer.kind == "edit")
+        .order_by(Steer.created_at, Steer.seq)
+    )
+    written = {
+        row.steer_id: row for row in await repo.list_in_world(session, RepGuidance, world_id)
+    }
+    found: list[FollowedEdit] = []
+    for steer in edits:
+        thread = await repo.get_required(session, Thread, world_id, steer.thread_id)
+        counterparty = (
+            thread.responder_org_id
+            if steer.org_id == thread.requester_org_id
+            else thread.requester_org_id
+        )
+        guidance = written.get(steer.id)
+        next_message = None
+        if guidance is not None:
+            next_message = await session.scalar(
+                select(ThreadMessage.body)
+                .where(
+                    ThreadMessage.world_id == world_id,
+                    ThreadMessage.thread_id == steer.thread_id,
+                    ThreadMessage.from_org_id == steer.org_id,
+                    ThreadMessage.kind == "message",
+                    ThreadMessage.created_at > guidance.created_at,
+                )
+                .order_by(ThreadMessage.seq)
+                .limit(1)
+            )
+        outcome = ", ".join(
+            part
+            for part in (
+                steer.status,
+                steer.guidance_outcome and f"guidance {steer.guidance_outcome}",
+                steer.failure_reason,
+            )
+            if part
+        )
+        found.append(
+            FollowedEdit(
+                side=f"{names.get(steer.org_id, '?')} with {names.get(counterparty, '?')}",
+                instruction=steer.body,
+                guidance=guidance.text if guidance is not None else None,
+                outcome=outcome,
+                next_message=next_message,
+            )
+        )
     return found
 
 
@@ -687,8 +896,11 @@ def engine_check_lines(checks: EngineChecks) -> list[str]:
     lines = [
         *listed("early_closes", checks.early_closes),
         f"  close_refusals: {checks.close_refusals}",
+        f"  consults_after_send: {checks.consults_after_send}",
+        f"  closes_after_refused_consult: {checks.closes_after_refused_consult}",
+        f"  status_checks_after_send: {checks.status_checks_after_send}",
         *listed("waiting_closes", checks.waiting_closes),
-        f"  empty_turn_failures: {checks.empty_turn_failures}",
+        f"  empty_turn_nudges: {checks.empty_turn_nudges}",
         f"  empty_end_turns_handled: {checks.empty_end_turns_handled}",
         f"  multi_send_turns: {len(checks.multi_send_turns)}",
         *(f"    - then: {_one_line(text)}" for later in checks.multi_send_turns for text in later),
@@ -708,7 +920,19 @@ def engine_check_lines(checks: EngineChecks) -> list[str]:
         *listed("auto_send_breaches", checks.auto_send_breaches),
         f"  auto_requests_per_turn (max): {checks.auto_requests_per_turn}",
         *listed("duplicate_auto_recipients", checks.duplicate_auto_recipients),
+        f"  guidance_followed: {len(checks.guidance_followed)}",
+        *(line for edit in checks.guidance_followed for line in _followed_lines(edit)),
     ]
+    return lines
+
+
+def _followed_lines(edit: FollowedEdit) -> list[str]:
+    verdict = edit.problem or "sent without mentioning it; read whether it follows it"
+    lines = [f"    - {edit.side}: {verdict}", f"      instruction: {_one_line(edit.instruction)}"]
+    if edit.guidance is not None:
+        lines.append(f"      guidance: {_one_line(edit.guidance)}")
+    if edit.next_message is not None:
+        lines.append(f"      next message: {_one_line(edit.next_message)}")
     return lines
 
 
@@ -718,11 +942,15 @@ def _one_line(text: str, limit: int = 160) -> str:
 
 
 __all__ = [
+    "GUIDANCE_MENTION",
     "META_NOTE",
     "OPENER_LEAKS",
     "WAITING",
     "EngineChecks",
+    "FollowedEdit",
+    "consults_after_send",
     "engine_check_lines",
     "engine_checks",
     "opener_leak",
+    "status_checks_after_send",
 ]
