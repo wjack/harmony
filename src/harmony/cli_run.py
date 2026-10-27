@@ -7,9 +7,12 @@ rules or as drafted (`--interactive` asks instead, `--approve all` approves ever
 recipient). `--message TEXT` sends that instead, as `--as` or the story's member, and
 follows whatever requests come of it to their end (the 10-org sim: `--message ... --as
 <member> --approve all`). `--send-without-confirmation` starts the chat sending without
-review. Prints each beat as it is seen, waits for the requests to close and Claude's
-summary, then prints the transcripts, every agent turn with its latency and cost, how
-the engine ran (`storyrun.report`, `storyrun.checks`) and harmony's spend.
+review. `--edit ORG:COUNTERPARTY:N:TEXT` has a member of ORG tell its Claude TEXT (an
+Edit) once ORG's thread with COUNTERPARTY has N messages, and the report's
+`guidance_followed` shows what that side sent next (EDIT.md §9). Prints each beat as it
+is seen, waits for the requests to close and Claude's summary, then prints the
+transcripts, every agent turn with its latency and cost, how the engine ran
+(`storyrun.report`, `storyrun.checks`) and harmony's spend.
 
 The app runs in process. So does the Temporal worker, playing the cassettes
 (`MODEL_MODE=scripted`, the default) or calling the API (`--live`, which spends). It
@@ -50,6 +53,7 @@ from harmony.seeds.loader import (
 )
 from harmony.seeds.schema import ScenarioError, StorySpec
 from harmony.storyrun.beats import free_form, recast
+from harmony.storyrun.edits import PlannedEdit, parse_edit
 
 if TYPE_CHECKING:
     from decimal import Decimal
@@ -85,6 +89,8 @@ class RunOptions:
     message: str | None = None
     approve: ApproveChoice = "story"
     send_without_confirmation: bool = False
+    # `--edit` as typed: `planned_edits` reads them once the scenario is loaded.
+    edits: tuple[str, ...] = ()
 
 
 @app.command()
@@ -126,6 +132,14 @@ def run(
             help="Start the chat sending requests without review.",
         ),
     ] = False,
+    edit: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--edit",
+            help="ORG:COUNTERPARTY:N:TEXT: once ORG's thread with COUNTERPARTY has N "
+            "messages, a member of ORG tells its Claude TEXT (an Edit). Repeatable.",
+        ),
+    ] = None,
     interactive: Annotated[
         bool,
         typer.Option("--interactive", help="Ask at each decision instead of following the story."),
@@ -158,13 +172,15 @@ def run(
         message=message,
         approve="all" if approve == "all" else "story",
         send_without_confirmation=send_without_confirmation,
+        edits=tuple(edit or ()),
     )
     try:
         if interactive and options.approve == "all":
             raise SetupError("--interactive asks at each decision; drop --approve all")
         loaded, spec = load_story(options)
+        edits = planned_edits(loaded, options.edits)
         settings = run_settings(get_settings(), options)
-        code = asyncio.run(_run(options, loaded, spec, settings))
+        code = asyncio.run(_run(options, loaded, spec, settings, edits))
     except SetupError as exc:
         typer.echo(f"harmony run: {exc}", err=True)
         raise typer.Exit(code=2) from exc
@@ -190,6 +206,14 @@ def load_story(options: RunOptions) -> tuple[Scenario, StorySpec]:
             f"scenario {scenario.name} has story {story.name!r}, not {options.story!r}"
         )
     return scenario, cast_story(scenario, story, options)
+
+
+def planned_edits(scenario: Scenario, values: tuple[str, ...]) -> tuple[PlannedEdit, ...]:
+    slugs = frozenset(org.slug for org in scenario.orgs)
+    try:
+        return tuple(parse_edit(value, slugs) for value in values)
+    except ValueError as exc:
+        raise SetupError(f"--edit: {exc}") from exc
 
 
 def message_story(scenario: Scenario, message: str, member: str | None) -> StorySpec:
@@ -244,7 +268,11 @@ def run_settings(settings: Settings, options: RunOptions) -> Settings:
 
 
 async def _run(
-    options: RunOptions, scenario: Scenario, story: StorySpec, settings: Settings
+    options: RunOptions,
+    scenario: Scenario,
+    story: StorySpec,
+    settings: Settings,
+    edits: tuple[PlannedEdit, ...],
 ) -> int:
     # Imported here: `harmony run --help` shouldn't load the app, Temporal or the SDK.
     from harmony.storyrun import report
@@ -277,6 +305,7 @@ async def _run(
                     failures=worker.log.failures if worker is not None else None,
                     send_without_review=options.send_without_confirmation,
                     on_poll=meter.sample,
+                    edits=edits,
                 )
                 try:
                     result = await player.play()

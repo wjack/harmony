@@ -8,6 +8,8 @@ models built here:
   either direction, on new turns only; a retried call carries the same notice (3.10).
 - A representative's bare text after a code-written "nothing new" stays private, while
   text answering a message goes out (3.13 E3).
+- A consult after the turn sent a message is refused: the send is the turn's one effect
+  (FEEDBACK_R2_PLAN decision 1).
 - A background org's chat streams `stream.chat_delta` like a featured one's (3.1).
 - A request's end is noted to internal Claude once, however often a failed turn's
   updates are handed on.
@@ -37,6 +39,7 @@ from harmony.agents.runtime import MessageHeld, MessageSent, TurnIncomplete
 from harmony.db.models import (
     Card,
     ChatMessage,
+    Consult,
     Escalation,
     Event,
     Member,
@@ -601,6 +604,53 @@ async def test_text_after_a_refused_close_is_never_sent_or_streamed(
             .where(ThreadMessage.world_id == world_id, ThreadMessage.thread_id == turn.thread_id)
         )
     assert written == 0
+
+
+async def test_a_consult_after_a_send_is_refused_and_the_turn_ends_with_the_send(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    """Decision 1: Northlake replies, then consults in the same turn. The consult is
+    refused and writes nothing, so the turn's one effect is the message and Henderson
+    moves next; `harmony run` counts the refusal."""
+    sm = db_sessionmaker
+    world_id = await seeded_world(sm)
+    send = ToolUseBlock(
+        type="tool_use", name="send_message", input={"text": "Yes, we can run it by Nov 6."}
+    )
+    consult = ToolUseBlock(
+        type="tool_use", name="consult", input={"question": "Tell Helen we said yes."}
+    )
+    entries = dict(
+        [
+            _entry("northlake", "representative", THREAD, 1, 0, send),
+            _entry("northlake", "representative", THREAD, 1, 1, consult),
+            _entry("northlake", "representative", THREAD, 1, 2, TextBlock(type="text", text="Ok.")),
+        ]
+    )
+    turn = await _thread_turn(sm, world_id)
+
+    result = await _env().run(_agents(sm, _Recording(entries), _Publisher()).rep_turn, turn)
+
+    assert result.stop == "end_turn"
+    assert [type(effect) for effect in result.effects] == [MessageSent]
+    async with sm() as session:
+        thread = await session.get(Thread, (world_id, turn.thread_id))
+        assert thread is not None
+        assert thread.side_to_move == "requester"
+        bodies = await session.scalars(
+            select(ThreadMessage.body)
+            .where(ThreadMessage.world_id == world_id, ThreadMessage.thread_id == turn.thread_id)
+            .order_by(ThreadMessage.seq)
+        )
+        assert list(bodies)[1:] == ["Yes, we can run it by Nov 6."]
+        asked = await session.scalar(
+            select(func.count())
+            .select_from(Consult)
+            .where(Consult.world_id == world_id, Consult.thread_id == turn.thread_id)
+        )
+        assert asked == 0
+    checks = await engine_checks(sm, world_id, SCENARIO)
+    assert (checks.consults_after_send, checks.closes_after_refused_consult) == (1, 0)
 
 
 ACK: Final = "Understood. I won't send that."

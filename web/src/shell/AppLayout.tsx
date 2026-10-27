@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 
 import type { SessionView } from "../api/types";
 import { useRealtime } from "../app/context";
@@ -92,13 +92,20 @@ function LiveShell() {
   const failing = useRealtime((state) => state.failures > 0);
   const streamDown = useStreamDown();
   const current = session.data ?? null;
+  // A switch leaves the previous member's own item before the new member's frame mounts.
+  // A page this frame first meets then would fetch as them after the server has moved
+  // on (a 404 for their organization's settings), so it waits for the new frame.
+  const { key } = useLocation();
+  const [shownKey, setShownKey] = useState(key);
+  if (!resetting && shownKey !== key) setShownKey(key);
+  const leaving = resetting && shownKey !== key;
   return (
     <ShellFrame
       session={current}
       status={resetting ? (failing ? "offline" : "switching") : "live"}
       streamDown={streamDown}
     >
-      <Outlet />
+      {leaving ? <div className="h-full" aria-busy="true" /> : <Outlet />}
       <DemoControls session={current} />
       <ResetDemoDialog />
     </ShellFrame>

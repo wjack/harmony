@@ -1,7 +1,6 @@
 /** Claude-styled primitives shared by every surface (shell, chat, requests, network). */
 export { Avatar, OrgAvatar } from "./Avatar";
 export { Button, IconButton, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
-export { ClampedText } from "./ClampedText";
 export { cx } from "./cx";
 export {
   Menu,

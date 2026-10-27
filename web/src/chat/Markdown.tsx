@@ -39,15 +39,13 @@ const COMPONENTS: Components = { a: ExternalLink, img: ImageText, table: Scrolli
 
 interface MarkdownProps {
   children: string;
-  /** `sm` is the compact sans prose inside cards. */
-  size?: "md" | "sm";
   className?: string;
 }
 
 /** Claude's reply body: GitHub-flavored markdown, serif. Raw HTML and images are never rendered. */
-export function Markdown({ children, size = "md", className }: MarkdownProps) {
+export function Markdown({ children, className }: MarkdownProps) {
   return (
-    <div className={cx(size === "md" ? "chat-prose" : "chat-prose-sm", className)}>
+    <div className={cx("chat-prose", className)}>
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
         {children}
       </ReactMarkdown>

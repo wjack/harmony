@@ -1,7 +1,8 @@
 /**
  * Turns a conversation's `ChatItem`s into what the transcript draws: tool activity and
  * thinking from one turn collapse into one "activity" line (Claude's "Used Slack
- * integration ›"), and each reply ends with the copy / feedback row.
+ * integration ›"), a card a newer draft replaced folds to one "earlier version" row
+ * under the message that asked for it, and each reply ends with the copy / feedback row.
  */
 import type { CommittedStep } from "./stream";
 import type {
@@ -23,6 +24,7 @@ export type Block =
   | { kind: "assistant"; key: string; item: AssistantTextItem; endOfReply: boolean }
   | { kind: "activity"; key: string; items: ActivityItem[] }
   | { kind: "outreach"; key: string; item: OutreachCardItem }
+  | { kind: "earlier"; key: string; item: OutreachCardItem }
   | { kind: "request"; key: string; item: RequestStatusItem }
   | { kind: "question"; key: string; item: InlineQuestionItem };
 
@@ -51,7 +53,15 @@ export function toBlocks(items: readonly ChatItem[]): Block[] {
         blocks.push({ kind: "assistant", key: item.id, item, endOfReply: false });
         break;
       case "outreach_card":
-        blocks.push({ kind: "outreach", key: item.id, item });
+        if (wasReplaced(item)) {
+          blocks.push({ kind: "earlier", key: item.id, item });
+          // The message that turned it down is stored as its feedback, not as a message.
+          if (item.status === "rejected" && item.feedback !== null) {
+            blocks.push({ kind: "user", key: `${item.id}:message`, item: messageOf(item, item.feedback), pending: false });
+          }
+        } else {
+          blocks.push({ kind: "outreach", key: item.id, item });
+        }
         break;
       case "request_status":
         blocks.push({ kind: "request", key: item.id, item });
@@ -63,6 +73,18 @@ export function toBlocks(items: readonly ChatItem[]): Block[] {
   }
   markEndsOfReplies(blocks);
   return blocks;
+}
+
+/**
+ * Whether a card gave way to a newer draft: Claude proposed another in its place, or a
+ * message typed while it waited asked for one. A Decline isn't: it means don't send.
+ */
+export function wasReplaced(card: OutreachCardItem): boolean {
+  return card.status === "superseded" || card.rejected_with === "message";
+}
+
+function messageOf(card: OutreachCardItem, text: string): UserTextItem {
+  return { id: `${card.id}:message`, at: card.at, type: "user_text", text, member_id: null };
 }
 
 /** A reply runs from one member message to the next; its last text gets the action row. */
@@ -80,7 +102,7 @@ function markEndsOfReplies(blocks: Block[]): void {
 }
 
 /**
- * The outreach card waiting on the member, drawn above the composer; null when none is.
+ * The outreach card waiting on the member, drawn in the transcript; null when none is.
  * A card the chat sends without review is pending only while it goes out: nobody
  * answers it (LIVE_DEMO_PLAN 3.10).
  */

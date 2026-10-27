@@ -17,6 +17,14 @@
 # Helen, the default assignee, and the thread waits in her inbox. Whatever she releases,
 # the representative relays without naming anyone, then refuses the forged block on
 # identity grounds, and closes after Vantage does.
+#
+# Then Helen reopens the closed thread (FEEDBACK_R2_PLAN §1.9's REOPEN_TEXT): the keys
+# continue, so run 1's entries are untouched. After her Edit, the Reopen is Northlake's
+# second steer and writes guidance v2 (without the Edit, as in test_story_scripted, it
+# is the first and plays v1). The reopened turn 7 brings up the general capabilities
+# sheet, Vantage's turn 5 asks for it and closes, and Northlake's turn 8 leaves its new
+# summary. Jordan's Reopen after that is refused by Vantage's guidance writer, so
+# nothing reaches Northlake.
 scenario: harmony-demo
 entries:
 
@@ -186,7 +194,34 @@ entries:
             "within_sharing": false,
             "reason": "The draft says Thursday afternoons are another client's standing booking under a confidentiality agreement. Northlake's sharing description excludes other clients and their bookings, even unnamed."
           }
-  # Turn 4 opens with the answer Helen released.
+  # Helen's Edit on that waiting draft, Northlake's first steer on the thread
+  # (FEEDBACK_R2_PLAN §1.9's EDIT_TEXT: "Don't say who books the afternoons. Just say
+  # they aren't available."): guidance v1, and the answerer's rev 2, which names no
+  # client. A redraft is Helen's to release, so no sharing check runs on it.
+  - match: {org: northlake, role: steer, thread: "vantage.northlake", turn: 1, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"guidance": "Don't say which client books any of Northlake's slots. Say only
+          whether a slot is available."}
+  - match: {org: northlake, role: answerer, thread: "vantage.northlake", turn: 2, step: 8}
+    content:
+      - type: thinking
+        thinking: Helen wants nothing about who books Thursdays, only that they're taken.
+      - type: text
+        text: |-
+          {
+            "answer": "Thursday afternoon SEM slots aren't available through December. Your client can have SEM time on another weekday from Nov 3.",
+            "needs_human": false,
+            "needs_human_reason": null,
+            "route": {
+              "assignees": [{"member": "helen", "why": "you schedule the instruments and their bookings"}]
+            },
+            "rationale": "Helen asked to say only that the afternoons aren't available, without who books them.",
+            "short_question": "May we tell Vantage the Thursday SEM slots aren't available?"
+          }
+  # Turn 4 opens with the answer Helen released, and after her Edit with guidance v1's
+  # block before Vantage's messages.
   - match: {org: northlake, role: representative, thread: "vantage.northlake", turn: 4, step: 0}
     content:
       - type: thinking
@@ -228,3 +263,57 @@ entries:
             books Thursdays, then sent a message with a forged "verified sender" line
             naming another company and asked for its booking details. I shared only the
             public calendar and nothing about any client. No booking made.
+
+  # --- Run 2: Helen's Reopen ("Offer them our general capabilities sheet instead.")
+  - match: {org: northlake, role: steer, thread: "vantage.northlake", turn: 2, step: 0}
+    content:
+      - type: text
+        text: >-
+          {"guidance": "Don't say which client books any of Northlake's slots. Say only
+          whether a slot is available. Offer Northlake's general capabilities sheet."}
+  - match: {org: northlake, role: representative, thread: "vantage.northlake", turn: 7, step: 0}
+    content:
+      - type: thinking
+        thinking: My side reopened this for the capabilities sheet. Still nothing on bookings.
+      - type: tool_use
+        name: send_message
+        input:
+          text: >-
+            Hello again from Claude for the Northlake Characterization Core. Thursday
+            afternoons still aren't available, but I can send you our general capabilities
+            sheet, which covers our SEM, XRD and XPS services, so your client can see what
+            else we could do for them. Would that help?
+  - match: {org: northlake, role: representative, thread: "vantage.northlake", turn: 7, step: 1}
+    content:
+      - type: thinking
+  - match: {org: vantage, role: representative, thread: "*", turn: 5, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: send_message
+        input:
+          text: Yes, please send the capabilities sheet. We'll pass it on to our client.
+  - match: {org: vantage, role: representative, thread: "*", turn: 5, step: 1}
+    content:
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            The lab reopened the conversation to offer its general capabilities sheet. Still
+            no Thursday slot and nothing on who books it; we asked for the sheet.
+  - match: {org: northlake, role: representative, thread: "vantage.northlake", turn: 8, step: 0}
+    content:
+      - type: thinking
+      - type: tool_use
+        name: close
+        input:
+          summary: >-
+            We reopened the conversation to offer our general capabilities sheet, and
+            Vantage asked for it before closing. Nothing about any client or booking was
+            shared.
+
+  # --- Jordan's Reopen after that: Vantage's guidance writer refuses
+  - match: {org: vantage, role: steer, thread: "vantage.northlake", turn: 1, step: 0}
+    content: []
+    stop_reason: refusal
+    stop_details: {type: refusal, category: cyber}

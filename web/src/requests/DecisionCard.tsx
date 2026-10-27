@@ -1,22 +1,35 @@
 /**
- * The decision card (LIVE_DEMO_PLAN 3.9): an open item, inline after the last transcript
- * row and read in full with it, never docked and never scrolled on its own. Whose it
- * is, the short question, why it came to the viewer (with Reassign), Claude's whole
- * draft (editable), what Claude looked at and its reasoning. The actions are the view's
- * one composer.
+ * The decision card (EDIT.md §8.3, composer.html): an open item, inline after the last
+ * transcript row and read in full with it, never scrolled on its own. Whose it is (with
+ * Reassign), what it asks and why it waits; Claude's whole draft, edited where it
+ * stands; what Claude looked at; and a foot that sticks while the card is taller than
+ * the view, with only Decline and Approve and send. Telling Claude what to change is
+ * the box's Edit, below.
  */
-import { ChevronLeft, ChevronRight, Eye, FileText, Lock, MessageCircleQuestion, Search, ShieldAlert, Wrench } from "lucide-react";
-import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { ChevronRight, CircleHelp, Eye, FileText, Pencil, Search, Sparkles, Wrench } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
+import { CardFoot, CardHint, DeclineStep, EditableText, PartLabel, useApproveShortcut } from "../cards";
+import { BudgetStrip } from "../chat/BudgetStrip";
 import { useHarmonySettings } from "../customize/api";
+import { MODE_INFO } from "../customize/modes";
 import { sharingPath } from "../customize/sections";
-import { useCalendar } from "../demo/worldClock";
-import { IconButton, Spark, cx } from "../shell/ui";
+import { cx } from "../shell/ui";
 import { ReassignMenu } from "./ReassignMenu";
-import { useAutoHeight } from "./autoHeight";
-import { cardTitle, eyebrow, lookedAtSummary, routingOf, whyHeading } from "./decision";
-import { longAge } from "./format";
+import {
+  ANSWER_MAX_CHARS,
+  AUTONOMY_PATH,
+  approveHint,
+  cardTitle,
+  declineCopy,
+  draftLabel,
+  eyebrow,
+  lookedAtSummary,
+  modeLine,
+  reasonLine,
+  sharingLabel,
+} from "./decision";
 import type { ActivityLine, EscalationDraft, MemberView, OrgRef } from "./types";
 import type { Decision } from "./useDecision";
 
@@ -28,187 +41,212 @@ interface DecisionCardProps {
   /** Our org's members, for Reassign. */
   members: readonly MemberView[];
   memberId: string | undefined;
+  /** The viewer can change what our side shares; anyone else reads it. */
+  admin: boolean;
+  /** The box below holds an instruction to Claude that isn't sent yet. */
+  unsentEdit: boolean;
 }
 
-export function DecisionCard({ decision, threadId, us, them, members, memberId }: DecisionCardProps) {
-  const { escalation, consult, rev, drafts } = decision;
-  const flaggedBySharing = consult?.needs_human === false && consult.sharing_check?.within_sharing === false;
-  const settings = useHarmonySettings(us.slug).data;
-  const routing = routingOf(escalation, memberId, us, settings && (settings.default_assignee?.id ?? null));
-  const whyId = useId();
+export function DecisionCard({ decision, threadId, us, them, members, memberId, admin, unsentEdit }: DecisionCardProps) {
+  const { escalation, consult, rev, rewriting, blocked } = decision;
+  const card = useRef<HTMLElement>(null);
+  const [declining, setDeclining] = useState(false);
+  const held = escalation.kind === "outbound_review";
+  const reason = reasonLine(escalation);
+  useApproveShortcut(card, decision.approve, !declining && !rewriting && blocked === null);
 
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      decision.approve();
-    } else if (event.key === "Escape" && decision.editing) {
-      event.stopPropagation();
-      decision.setEditing(false);
-    }
-  };
+  // A held message waits because of how our side works with them: say which mode, and where to change it.
+  const settings = useHarmonySettings(us.slug).data;
+  const autonomy =
+    settings?.trusted_organizations.find((row) => row.counterparty.id === them.id)?.autonomy ?? settings?.autonomy;
+
+  let hintRight: ReactNode = (
+    <>
+      {approveHint(escalation, them, decision.edited)}
+      <span className="text-faint"> · ⌘↵</span>
+    </>
+  );
+  if (blocked !== null) hintRight = "Approving and declining wait until the budget is back";
+  else if (rewriting) hintRight = "You can approve once the new draft is here";
+
+  let hintLeft: ReactNode;
+  if (unsentEdit) hintLeft = <CardHint tone="unsent_edit">Your instruction to Claude isn't sent yet · Tell Claude first?</CardHint>;
+  else if (held && autonomy !== undefined) {
+    hintLeft = (
+      <span>
+        {modeLine(MODE_INFO[autonomy].label, them)} ·{" "}
+        <Link to={AUTONOMY_PATH} className="text-link hover:underline">
+          Change
+        </Link>
+      </span>
+    );
+  }
+
+  const decline = declineCopy(escalation, them);
 
   return (
-    <section
-      aria-label="Needs your decision"
-      onKeyDown={onKeyDown}
-      className="rounded-composer border border-border-strong bg-surface shadow-card"
-    >
-      <header className="flex items-start gap-2 pt-4 pr-3 pb-1 pl-5">
-        <div className="min-w-0 flex-1">
-          <p className="flex items-start gap-1.5 text-[13px] leading-5 text-secondary">
-            <MessageCircleQuestion size={14} strokeWidth={1.75} aria-hidden className="mt-[3px] shrink-0 text-warning" />
-            <span>{eyebrow(escalation, them, memberId)}</span>
-          </p>
-          <h2 className="mt-1.5 text-[16px] leading-[1.45] font-medium break-words whitespace-pre-wrap text-ink">
+    <div className="relative">
+      {blocked !== null && <BudgetStrip line={blocked} />}
+      <section
+        ref={card}
+        aria-label="Needs your decision"
+        className="relative rounded-composer border border-border-strong bg-surface shadow-card"
+      >
+        <div className="flex flex-col gap-1.5 px-4 pt-3.5 pb-4">
+          <div className="flex items-start gap-3">
+            <p className="flex min-w-0 flex-1 items-start gap-1.5 text-ui-sm text-muted">
+              <CircleHelp size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+              <span>{eyebrow(escalation, them, memberId)}</span>
+            </p>
+            <ReassignMenu escalation={escalation} threadId={threadId} memberId={memberId} us={us} members={members} />
+          </div>
+          <h2 className="text-ui-title font-medium break-words whitespace-pre-wrap text-ink">
             {cardTitle(escalation, rev, consult, them)}
           </h2>
-        </div>
-        {drafts.length > 1 && <RevPager index={decision.index} count={drafts.length} onChange={decision.showRev} />}
-      </header>
+          {reason !== null && <CardHint tone="reason">{reason}</CardHint>}
 
-      <div className="flex flex-col gap-4 px-5 pt-2 pb-4">
-        <section aria-labelledby={whyId} className="flex flex-col gap-1 text-[14px] leading-[1.55]">
-          <h3 id={whyId} className={LABEL}>
-            {whyHeading(escalation, memberId)}
-          </h3>
-          {escalation.reason !== "" && (
-            <p className="flex items-start gap-2 text-ink">
-              {flaggedBySharing ? (
-                <ShieldAlert size={14} strokeWidth={1.75} aria-hidden className="mt-[3px] shrink-0 text-warning" />
-              ) : (
-                <Lock size={14} strokeWidth={1.75} aria-hidden className="mt-[3px] shrink-0 text-warning" />
-              )}
-              <span>
-                {escalation.reason}
-                {flaggedBySharing && <span className="text-muted"> (the sharing check)</span>}
-              </span>
-            </p>
-          )}
-          <p className="flex flex-wrap items-baseline gap-x-1.5 pl-[22px] text-[13.5px] text-muted">
-            <span>{routing.line}</span>
-            {routing.with !== null && (
-              <>
-                <span aria-hidden>·</span>
-                <span>{routing.with}</span>
-              </>
-            )}
-            <span aria-hidden>·</span>
-            <ReassignMenu
-              escalation={escalation}
-              threadId={threadId}
-              memberId={memberId}
-              us={us}
-              members={members}
-            />
-          </p>
-        </section>
+          <div className="mt-2 border-t border-border pt-3">
+            <DraftLabel decision={decision} label={draftLabel(escalation)} unsentEdit={unsentEdit} />
+            <Draft decision={decision} label={draftLabel(escalation)} unsentEdit={unsentEdit} />
+          </div>
 
-        <Draft decision={decision} isConsult={escalation.kind === "consult"} />
-
-        {rev !== null && rev.activity.length > 0 && <LookedAt rev={rev} />}
-
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-          {/* A held message's rationale is its reason, already shown above. */}
-          {rev !== null && rev.rationale !== "" && rev.rationale !== escalation.reason ? (
-            <Reasoning text={rev.rationale} />
-          ) : (
-            <span />
-          )}
+          {rev !== null && rev.activity.length > 0 && <LookedAt rev={rev} />}
           <Link
             to={sharingPath(them.id)}
-            className="text-[12.5px] text-muted underline decoration-border-strong underline-offset-[3px] hover:text-ink hover:decoration-ink"
+            className="self-start text-ui-xs text-muted underline decoration-border-strong underline-offset-[3px] hover:text-ink hover:decoration-ink"
           >
-            Edit what you share with {them.name}
+            {sharingLabel(admin, them)}
           </Link>
+          {decision.notice !== null && (
+            <p
+              role={decision.notice.tone === "error" ? "alert" : "status"}
+              className={cx(
+                "mt-1 rounded-control px-3 py-2 text-ui-sm",
+                decision.notice.tone === "error" ? "bg-danger-soft text-danger" : "bg-info-soft text-link",
+              )}
+            >
+              {decision.notice.text}
+            </p>
+          )}
         </div>
-      </div>
-    </section>
+
+        {declining ? (
+          <DeclineStep
+            required
+            title={decline.title}
+            caption={decline.caption}
+            pending={decision.busy}
+            onCancel={() => {
+              setDeclining(false);
+            }}
+            onConfirm={(text) => {
+              decision.decline(text, () => {
+                setDeclining(false);
+              });
+            }}
+          />
+        ) : (
+          <CardFoot
+            onDecline={() => {
+              decision.clearNotice();
+              setDeclining(true);
+            }}
+            onApprove={decision.approve}
+            approveDisabled={decision.busy || rewriting || blocked !== null}
+            declineDisabled={decision.busy || blocked !== null}
+            hintLeft={hintLeft}
+            hintRight={hintRight}
+          />
+        )}
+      </section>
+    </div>
   );
 }
 
-function RevPager({ index, count, onChange }: { index: number; count: number; onChange: (index: number) => void }) {
-  return (
-    <div className="flex items-center gap-0.5 pt-0.5 text-[12.5px] text-muted tabular-nums">
-      <IconButton
-        label="Earlier draft"
-        size="sm"
-        disabled={index === 0}
-        onClick={() => {
-          onChange(index - 1);
-        }}
-      >
-        <ChevronLeft size={15} strokeWidth={1.5} />
-      </IconButton>
-      <span aria-live="polite">
-        {index + 1} of {count}
+/**
+ * The draft part's label row: what the draft is and where it came from (rewritten by
+ * Claude, edited by you, unchanged), or that Claude is rewriting it, or that an
+ * unsent Edit will; on the right, the controls, else how to change the wording.
+ */
+function DraftLabel({ decision, label, unsentEdit }: { decision: Decision; label: string; unsentEdit: boolean }) {
+  const { drafts, index, rewriting, edited, unchanged } = decision;
+  if (rewriting) {
+    return (
+      <p className="flex items-center gap-1.5 text-ui-sm text-link">
+        <Sparkles size={13} strokeWidth={1.75} aria-hidden />
+        Claude is rewriting…
+      </p>
+    );
+  }
+  const pager = drafts.length > 1;
+  let right: ReactNode = null;
+  if (unsentEdit) {
+    right = (
+      <span className="inline-flex items-center gap-1 text-link">
+        <Sparkles size={13} strokeWidth={1.75} aria-hidden />
+        Claude rewrites this when you tell it
       </span>
-      <IconButton
-        label="Later draft"
-        size="sm"
-        disabled={index === count - 1}
-        onClick={() => {
-          onChange(index + 1);
-        }}
-      >
-        <ChevronRight size={15} strokeWidth={1.5} />
-      </IconButton>
-    </div>
-  );
-}
-
-/** A part's small label: "Why it came to you", "Draft reply". */
-const LABEL = "text-[12.5px] font-medium text-secondary";
-
-const DRAFT_TEXT = "font-serif text-[16px] leading-[1.6] break-words whitespace-pre-wrap text-ink";
-
-/** "Draft reply": the whole draft as text, or a field that grows to fit it while editing. */
-function Draft({ decision, isConsult }: { decision: Decision; isConsult: boolean }) {
-  const calendar = useCalendar();
-  const { rev, answer, editing, redrafting } = decision;
+    );
+  } else if (!edited && !pager) {
+    right = (
+      <span className="inline-flex items-center gap-1 text-faint">
+        <Pencil size={12} strokeWidth={1.75} aria-hidden />
+        Click the text to change the wording
+      </span>
+    );
+  }
   return (
-    <div className="border-t border-border pt-3.5">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[12.5px] text-muted">
-        <Spark size={13} animated={redrafting} />
-        <h3 className={LABEL}>{redrafting ? "Claude is redrafting…" : rev === null ? "Your answer" : "Draft reply"}</h3>
-        {rev !== null && !redrafting && <span>· {longAge(rev.created_at, calendar)}</span>}
-        {decision.edited && <span className="rounded-full bg-hover px-1.5 text-[11px] text-secondary">Edited</span>}
+    <div className="flex items-center gap-3 text-ui-sm">
+      <div className="min-w-0 flex-1">
+        <PartLabel
+          label={unchanged ? `${label} · unchanged` : label}
+          rewritten={
+            pager
+              ? {
+                  index,
+                  count: drafts.length,
+                  onPrev: () => {
+                    decision.showRev(index - 1);
+                  },
+                  onNext: () => {
+                    decision.showRev(index + 1);
+                  },
+                }
+              : undefined
+          }
+          edited={edited ? { onUndo: decision.undoEdits } : undefined}
+        />
       </div>
-      {editing ? (
-        <GrowingField label={isConsult ? "Answer" : "Reply"} value={answer} onChange={decision.setAnswer} />
-      ) : (
-        // While Claude redrafts, the draft being replaced stays readable, dimmed.
-        <p
-          onDoubleClick={() => {
-            decision.setEditing(true);
-          }}
-          aria-busy={redrafting}
-          className={cx(DRAFT_TEXT, redrafting && "opacity-50")}
-        >
-          {answer === "" ? <span className="text-muted">No draft yet. Write the answer yourself.</span> : answer}
-        </p>
-      )}
+      {right !== null && <span className="shrink-0">{right}</span>}
     </div>
   );
 }
 
-/** A textarea as tall as its text, so the card never scrolls inside itself. */
-function GrowingField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  const field = useAutoHeight(value);
+/**
+ * The whole draft, edited where it stands. While an unsent Edit will rewrite it, it's
+ * marked in blue; while Claude rewrites it, it stays readable, dimmed and locked.
+ */
+function Draft({ decision, label, unsentEdit }: { decision: Decision; label: string; unsentEdit: boolean }) {
+  const { rev, answer, rewriting } = decision;
   return (
-    <textarea
-      ref={field}
-      aria-label={label}
-      autoFocus
-      rows={1}
-      value={value}
-      onChange={(event) => {
-        onChange(event.target.value);
-      }}
+    <div
+      aria-busy={rewriting}
       className={cx(
-        DRAFT_TEXT,
-        "block w-full resize-none overflow-hidden rounded-control border border-border-strong bg-canvas px-3 py-2 outline-none focus:border-muted",
+        "mt-1.5 rounded-control",
+        rewriting && "opacity-50",
+        unsentEdit && !rewriting && "bg-info-soft/50 px-2 shadow-[inset_2px_0_0_var(--info)]",
       )}
-    />
+    >
+      <EditableText
+        value={answer}
+        original={rev?.answer ?? ""}
+        onChange={decision.setAnswer}
+        label={label}
+        disabled={rewriting}
+        maxLength={ANSWER_MAX_CHARS}
+      />
+      {rev === null && answer === "" && <p className="text-ui-sm text-muted">No draft yet. Write the answer yourself.</p>}
+    </div>
   );
 }
 
@@ -221,14 +259,14 @@ const TOOL_ICON: Readonly<Record<string, ReactNode>> = {
 function LookedAt({ rev }: { rev: EscalationDraft }) {
   const [open, setOpen] = useState(false);
   return (
-    <section aria-label="What Claude looked at">
+    <section aria-label="What Claude looked at" className="mt-1">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => {
           setOpen((value) => !value);
         }}
-        className="flex w-full min-w-0 items-center gap-1.5 text-left text-[13px] leading-5 text-muted hover:text-ink"
+        className="flex w-full min-w-0 items-center gap-1.5 text-left text-ui-sm text-muted hover:text-ink"
       >
         <Eye size={14} strokeWidth={1.6} aria-hidden className="shrink-0" />
         <span className="min-w-0 truncate">Looked at: {lookedAtSummary(rev)}</span>
@@ -249,7 +287,7 @@ function ActivityList({ lines }: { lines: readonly ActivityLine[] }) {
     <ul className="mt-2 flex flex-col gap-1 pl-5">
       {lines.map((line, index) => (
         // Lines have no id; a draft rev's activity never changes.
-        <li key={`${String(index)}:${line.tool}`} className="flex items-start gap-2 text-[13px] leading-5">
+        <li key={`${String(index)}:${line.tool}`} className="flex items-start gap-2 text-ui-sm">
           <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[4px] bg-hover text-secondary">
             {TOOL_ICON[line.tool] ?? <Wrench size={12} strokeWidth={1.75} />}
           </span>
@@ -260,25 +298,5 @@ function ActivityList({ lines }: { lines: readonly ActivityLine[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function Reasoning({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="min-w-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((value) => !value);
-        }}
-        className="flex items-center gap-1 text-[12.5px] text-muted hover:text-ink"
-      >
-        Claude's reasoning
-        <ChevronRight size={13} strokeWidth={1.5} aria-hidden className={cx("transition-transform", open && "rotate-90")} />
-      </button>
-      {open && <p className="mt-1.5 text-[13px] leading-[1.6] text-secondary">{text}</p>}
-    </div>
   );
 }

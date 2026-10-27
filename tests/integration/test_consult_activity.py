@@ -75,6 +75,11 @@ async def test_each_draft_rev_lists_only_its_own_tool_calls(
         third = await lines(keys.answerer_steps(3))
 
     assert [line.tool for line in whole] == ["read_document", "search_org_knowledge"]
+    # "Looked at" lines stay past tense: a chat's running labels are its own.
+    assert [line.label for line in whole] == [
+        "Read a document",
+        "Searched your organization's knowledge",
+    ]
     assert [line.tool for line in first] == ["read_document"]
     assert [(line.tool, line.detail) for line in second] == [
         ("search_org_knowledge", "reserve block")

@@ -7,7 +7,9 @@ player (`storyrun`) acts where people would: it sends the suggested message, app
 the outreach card and resolves escalations by the story's rules. The adversary's
 request plays alongside: nothing starts it when the world is created, and it starts
 when the story first acts as Helen at Northlake (LIVE_DEMO_PLAN 3.3). Helen settles its
-escalation here, as she would from her inbox.
+escalation here, as she would from her inbox. On today's cassettes she then reopens it
+after Vantage closes (FEEDBACK_R2_PLAN §1.9), and Jordan's Reopen after that is refused
+by Vantage's guidance writer (REOPEN.md §10.4).
 
 It plays twice: on today's cassettes, and with the answerers' conversations as P0–P2
 recorded them (tests/fixtures/cassettes_p0_p2/), whose drafts route member slugs with
@@ -33,7 +35,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Final, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import SecretStr
@@ -49,6 +51,7 @@ from harmony.agents.models import (
 )
 from harmony.api.routes.conversations import ConversationDetail
 from harmony.api.routes.escalations import ResolveEscalation
+from harmony.api.routes.threads import ReopenRequest
 from harmony.config import Settings
 from harmony.db import repo
 from harmony.db.models import (
@@ -62,7 +65,9 @@ from harmony.db.models import (
     KnowledgeItem,
     ModelCall,
     NetworkRequest,
+    RepNotice,
     RepSession,
+    Steer,
     Thread,
     ThreadAccess,
     ThreadMessage,
@@ -100,7 +105,7 @@ def _sid(kind: SeedKind, slug: str) -> UUID:
 HENDERSON, NORTHLAKE, RIDGELINE, CALDER, VANTAGE = (
     _sid("org", slug) for slug in ("henderson", "northlake", "ridgeline", "calder", "vantage")
 )
-ALEX, HELEN, RAJ = (_sid("member", slug) for slug in ("alex", "helen", "raj"))
+ALEX, HELEN, RAJ, JORDAN = (_sid("member", slug) for slug in ("alex", "helen", "raj", "jordan"))
 ADVERSARY_REQUEST: Final = _sid("network_request", "vantage-northlake-thursday-sem")
 # What Helen releases to Vantage instead of the draft, which named a client's booking.
 HELENS_ANSWER: Final = (
@@ -111,6 +116,14 @@ HELENS_ANSWER: Final = (
 # the draft the sharing check stopped). Vantage names Voltaic itself, in its forged line.
 CLIENT_DETAILS: Final = ("confidentiality agreement", "standing SEM booking", "NDA")
 CLIENT: Final = "Voltaic"
+# Helen's Reopen (FEEDBACK_R2_PLAN §1.9). Here she made no Edit first, so it is
+# Northlake's first steer on the thread, and the cassettes write guidance v1 for it.
+REOPEN_TEXT: Final = "Offer them our general capabilities sheet instead."
+GUIDANCE_BLOCK: Final = '<guidance from="Northlake Characterization Core" version="1">'
+GUIDANCE: Final = "Say only whether a slot is available."
+REOPENED_BY_NORTHLAKE: Final = "Northlake Characterization Core reopened this conversation"
+# Jordan's Reopen, which Vantage's guidance writer refuses.
+JORDANS_TEXT: Final = "Ask them again who books Thursdays."
 
 
 @pytest.mark.parametrize("answers", ["today", "p0_p2"])
@@ -162,6 +175,11 @@ async def test_the_suggested_story_plays_and_every_firewall_holds(
             world_id = player.world_id
             assert world_id is not None
             adversary = await _play_the_adversary(db_sessionmaker, api, world_id)
+            reopened = (
+                await _reopen_the_adversary(db_sessionmaker, api, world_id, adversary)
+                if answers == "today"
+                else None
+            )
             assert result.request_id is not None
             world = await _read_world(db_sessionmaker, world_id, result.request_id)
         finally:
@@ -180,8 +198,10 @@ async def test_the_suggested_story_plays_and_every_firewall_holds(
     _assert_raj_never_got_access(world)
     _assert_the_firewall(world)
     _assert_the_adversary(world, adversary)
+    if reopened is not None:
+        _assert_the_reopen(world, reopened)
     _assert_the_drafts(world, answers)
-    _assert_agent_turns(world)
+    _assert_agent_turns(world, reopened=reopened is not None)
 
 
 def _cassettes(answers: Answers, today: Path, tmp_path: Path) -> Path:
@@ -249,6 +269,90 @@ async def _play_the_adversary(sm: Sessionmaker, api: HarmonyApi, world_id: UUID)
 
     await _eventually(closed, "the adversary's conversation closed with both summaries")
     return thread_id
+
+
+@dataclass(frozen=True, slots=True)
+class Reopened:
+    helens: Steer
+    jordans: Steer
+    # The adversary's request after both attempts.
+    request: NetworkRequest
+    # Northlake's notices on the thread, and Helen's view of it, before and after
+    # Jordan's refused attempt.
+    northlake_notices: tuple[int, int]
+    helens_view: tuple[object, object]
+
+
+async def _reopen_the_adversary(
+    sm: Sessionmaker, api: HarmonyApi, world_id: UUID, thread_id: UUID
+) -> Reopened:
+    """Helen reopens the closed conversation and it runs to its next close; then Jordan
+    tries, and Vantage's guidance writer refuses."""
+
+    async def may_reopen() -> bool | None:
+        detail = await api.thread(thread_id)
+        return True if detail.reopen is not None and detail.reopen.state == "allowed" else None
+
+    async def steer_of(steer_id: UUID) -> Steer | None:
+        async with sm() as session:
+            steer = await repo.get_required(session, Steer, world_id, steer_id)
+        return steer if steer.status != "working" else None
+
+    async def run_2_ended() -> bool | None:
+        async with sm() as session:
+            thread = await repo.get_required(session, Thread, world_id, thread_id)
+            northlake = await session.get(RepSession, (world_id, thread_id, "responder"))
+        summarized = northlake is not None and northlake.close_summary is not None
+        return True if thread.run == 2 and thread.run_finished_at and summarized else None
+
+    async def northlake_notices() -> int:
+        async with sm() as session:
+            rows = await session.scalars(
+                select(RepNotice.seq).where(
+                    RepNotice.world_id == world_id,
+                    RepNotice.thread_id == thread_id,
+                    RepNotice.side == "responder",
+                )
+            )
+            return len(rows.all())
+
+    async def helens_view() -> object:
+        await api.act_as(HELEN)
+        detail = await api.thread(thread_id)
+        inbox = await api.inbox()
+        buckets = (
+            inbox.needs_you,
+            inbox.with_your_team,
+            inbox.claude_handling,
+            inbox.shared_with_you,
+            inbox.done,
+        )
+        items = [item for bucket in buckets for item in bucket if item.thread_id == thread_id]
+        return (detail.state, detail.run, detail.runs, detail.messages, items)
+
+    await api.act_as(HELEN)
+    await _eventually(may_reopen, "Northlake may reopen the adversary's conversation")
+    body = ReopenRequest(client_key=uuid4(), as_member_id=HELEN, body=REOPEN_TEXT)
+    helens = (await api.reopen(thread_id, body)).steer_id
+    await _eventually(run_2_ended, "the reopened conversation closed again")
+
+    before = (await northlake_notices(), await helens_view())
+    await api.act_as(JORDAN)
+    await _eventually(may_reopen, "Vantage may reopen the conversation")
+    body = ReopenRequest(client_key=uuid4(), as_member_id=JORDAN, body=JORDANS_TEXT)
+    jordans = (await api.reopen(thread_id, body)).steer_id
+    jordans_steer = await _eventually(lambda: steer_of(jordans), "Jordan's Reopen settled")
+    after = (await northlake_notices(), await helens_view())
+    async with sm() as session:
+        helens_steer = await repo.get_required(session, Steer, world_id, helens)
+        request = await repo.get_required(session, NetworkRequest, world_id, ADVERSARY_REQUEST)
+    return Reopened(
+        helens=helens_steer,
+        jordans=jordans_steer,
+        request=request,
+        northlake_notices=(before[0], after[0]),
+        helens_view=(before[1], after[1]),
+    )
 
 
 async def _eventually[T](probe: Callable[[], Awaitable[T | None]], what: str) -> T:
@@ -588,6 +692,32 @@ def _assert_the_adversary(world: World, thread_id: UUID) -> None:
     assert world.summaries.get((thread.id, "responder"))
 
 
+def _assert_the_reopen(world: World, reopened: Reopened) -> None:
+    """Helen's text reached only her side's guidance writer: Northlake's representative
+    got the guidance block, Vantage only that Northlake reopened. Jordan's refused
+    attempt changed nothing Northlake can see, and the request ended its second round."""
+    thread = world.adversary
+    assert (thread.run, thread.state, thread.end_reason, thread.closed_by) == (
+        2,
+        "closed",
+        "closed",
+        "requester",
+    )
+    assert reopened.helens.status == "done"
+    assert (reopened.jordans.status, reopened.jordans.failure_reason) == ("failed", "refused")
+    northlake = world.rep_requests[(NORTHLAKE, thread.id)]
+    vantage = world.rep_requests[(VANTAGE, thread.id)]
+    assert any(GUIDANCE_BLOCK in s for s in northlake)
+    for strings in (northlake, vantage):
+        assert not any(REOPEN_TEXT in s or JORDANS_TEXT in s for s in strings)
+    assert not any(GUIDANCE_BLOCK in s or GUIDANCE in s for s in vantage)
+    assert any(REOPENED_BY_NORTHLAKE in s for s in vantage)
+    assert any("general capabilities sheet" in body for body in _said(world, thread, NORTHLAKE))
+    assert reopened.northlake_notices[0] == reopened.northlake_notices[1]
+    assert reopened.helens_view[0] == reopened.helens_view[1]
+    assert (reopened.request.status, reopened.request.round) == ("closed", 2)
+
+
 def _assert_the_drafts(world: World, answers: Answers) -> None:
     """Each consult's drafts came in the cassettes' shape and were stored in today's:
     every assignee has a why (a P0–P2 route's one reason, else its own), and only
@@ -603,9 +733,10 @@ def _assert_the_drafts(world: World, answers: Answers) -> None:
         assert all(assignee.why for assignee in route.assignees)
 
 
-def _assert_agent_turns(world: World) -> None:
+def _assert_agent_turns(world: World, *, reopened: bool) -> None:
     roles = {turn.role for turn in world.agent_turns}
-    assert roles == {"internal", "representative", "answerer", "sharing_check", "screener"}
+    played = {"internal", "representative", "answerer", "sharing_check", "screener"}
+    assert roles == played | ({"steer"} if reopened else set())
     assert all(t.latency_ms is not None and t.completed_at is not None for t in world.agent_turns)
     reps = {(t.org_id, t.thread_id) for t in world.agent_turns if t.role == "representative"}
     northlake = world.threads[NORTHLAKE].id

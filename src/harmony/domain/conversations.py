@@ -10,7 +10,10 @@ in turn order, so a member message never lands between a request and its respons
   results and "No new message from the member." are hidden); assistant `text` →
   `assistant_text`; summarized `thinking` → `thinking_summary`; each `tool_use` →
   `tool_activity` (status from its `tool_result`), except `send_network_request`, which
-  renders as its card;
+  renders as its card. A tool row reads in the present tense until its result is
+  stored ("Searching the Harmony network…"), then in the past with what a search found
+  ("2 possible fits of 14"); its `detail` is what it worked on (the need, the query,
+  the record's title);
 - `cards` (by `tool_use_id`) → `outreach_card`, followed by a `request_status` item
   once it is approved. A recipient row is `selected` when it is in the request: every
   listed row while the card awaits the member or once it was rejected; the rows the
@@ -75,6 +78,7 @@ from harmony.db.models import (
     RepPolicy,
     Thread,
 )
+from harmony.db.models.choices import CardRejectedWith
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards as cards_domain
 from harmony.domain import escalations, records, requests
@@ -85,11 +89,20 @@ TITLE_MAX_CHARS = 80
 # The fixed user turn that opens a turn woken by a network update (§2.2).
 NO_MEMBER_MESSAGE: Final = "No new message from the member."
 CARD_TOOLS: Final = frozenset(("send_network_request",))
+# (label, the input key its detail reads). Past tense: consults' "Looked at" lines read
+# them too, and those tools have always finished.
 _TOOL_LABELS: Final[Mapping[str, tuple[str, str | None]]] = {
-    "search_org_knowledge": ("Searched your organization's knowledge", "query"),
-    "read_document": ("Read a document", None),
-    "search_network": ("Searched the Harmony network", None),
+    records.SEARCH_ORG_KNOWLEDGE: ("Searched your organization's knowledge", "query"),
+    records.READ_DOCUMENT: ("Read a document", None),
+    "search_network": ("Searched the Harmony network", "need"),
     "get_request_status": ("Checked on the request", None),
+}
+# A chat's row while its tool runs (no result stored yet).
+_RUNNING_LABELS: Final[Mapping[str, str]] = {
+    records.SEARCH_ORG_KNOWLEDGE: "Searching your organization's knowledge",
+    records.READ_DOCUMENT: "Reading a document",
+    "search_network": "Searching the Harmony network…",
+    "get_request_status": "Checking on the request",
 }
 
 
@@ -487,56 +500,85 @@ def _transcript_item(
             return None
         return _card_item(card, row.created_at, request_by_card, orgs)
     result = results.get(tool_use_id)
-    label, detail = tool_label(
-        name, block.get("input"), titles, result=None if result is None else result.content
-    )
+    label, detail = tool_label(name, block.get("input"), titles)
+    if result is None:
+        return ToolActivityItem(
+            id=item_id,
+            at=row.created_at,
+            tool=name,
+            label=_RUNNING_LABELS.get(name, label),
+            detail=detail,
+            status="running",
+            outcome=None,
+            turn_id=row.turn_id,
+        )
     return ToolActivityItem(
         id=item_id,
         at=row.created_at,
         tool=name,
         label=label,
         detail=detail,
-        status="running" if result is None else result.status,
+        status=result.status,
+        outcome=_outcome(name, result.content) if result.status == "done" else None,
         turn_id=row.turn_id,
     )
 
 
 def tool_label(
-    name: str,
-    tool_input: JsonValue | None,
-    titles: Mapping[UUID, str],
-    *,
-    result: JsonValue = None,
+    name: str, tool_input: JsonValue | None, titles: Mapping[UUID, str]
 ) -> tuple[str, str | None]:
-    """A tool call as an activity line: its label, and what details it. For
-    `read_document`, the title of the record it read (from `titles`); for
-    `search_network`, how many organizations it screened (from its `result`), since the
-    need it searched for is internal Claude's own long wording; else the input that
-    names it."""
+    """A tool call as a past-tense activity line: its label, and what it worked on. For
+    `read_document`, the title of the record it read (from `titles`); else the input
+    that names it (the need searched for, the query)."""
     if name == records.READ_DOCUMENT:
         ref = records.read_ref(tool_input)
         return _TOOL_LABELS[name][0], titles.get(ref) if ref is not None else None
-    if name == "search_network":
-        return _TOOL_LABELS[name][0], _screened(result)
     label, detail_key = _TOOL_LABELS.get(name, (name.replace("_", " ").capitalize(), None))
     detail = tool_input.get(detail_key) if isinstance(tool_input, dict) and detail_key else None
     return label, detail if isinstance(detail, str) else None
 
 
-class _SearchResult(BaseModel):
-    """The part of `search_network`'s result (a `discovery.Shortlist`) a line reads."""
+class _Shortlist(BaseModel):
+    """The part of `search_network`'s result (a `discovery.Shortlist`) a row reads."""
 
     screened: ScreenedCounts
 
 
-def _screened(result: JsonValue) -> str | None:
-    if not isinstance(result, str):
+class _Matches(BaseModel):
+    """The part of `search_org_knowledge`'s result a row reads."""
+
+    results: list[JsonValue]
+
+
+def _outcome(name: str, content: JsonValue) -> str | None:
+    """What a finished search found, from its stored result; None for other tools, and
+    for a result this can't read."""
+    if not isinstance(content, str):
         return None
     try:
-        total = _SearchResult.model_validate_json(result).screened.total
+        match name:
+            case "search_network":
+                return _fits(_Shortlist.model_validate_json(content).screened)
+            case records.SEARCH_ORG_KNOWLEDGE:
+                if content.startswith(records.NO_MATCHES):
+                    return "No matches"
+                found = len(_Matches.model_validate_json(content).results)
+                return "1 match" if found == 1 else f"{found} matches"
+            case _:
+                return None
     except ValidationError:
         return None
-    return f"{total} organization" if total == 1 else f"{total} organizations"
+
+
+def _fits(screened: ScreenedCounts) -> str:
+    """ "1 strong, 2 possible of 14", "2 possible fits of 14", "No fits among 14"."""
+    strong, possible, total = screened.strong, screened.possible, screened.total
+    if strong and possible:
+        return f"{strong} strong, {possible} possible of {total}"
+    if strong or possible:
+        count, kind = (strong, "strong") if strong else (possible, "possible")
+        return f"{count} {kind} {'fit' if count == 1 else 'fits'} of {total}"
+    return f"No fits among {total}" if total else "No fits"
 
 
 def _card_item(
@@ -578,9 +620,18 @@ def _card_item(
         ],
         screened=payload.screened,
         feedback=resolution.feedback if resolution and card.status == "rejected" else None,
+        rejected_with=_rejected_with(card, resolution),
         request_id=request.id if request is not None else None,
         version=card.version,
     )
+
+
+def _rejected_with(card: Card, resolution: CardResolution | None) -> CardRejectedWith | None:
+    if card.status != "rejected" or card.auto or resolution is None:
+        return None
+    # A row from before `rejected_with` always carried text, which Claude read as a
+    # message (`_card_applied`).
+    return resolution.rejected_with or "message"
 
 
 def _in_request(

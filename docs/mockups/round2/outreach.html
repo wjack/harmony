@@ -1,0 +1,1167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outreach approval card</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  /* Tokens and patterns from turn_states.html (the
+     revised baseline), on its one type scale: 12 meta, 13 secondary, 14 UI, 15 medium
+     titles, 16/24 serif for messages and drafts. Buttons 32px, 14px, never wrap.
+     Shared decision-card parts (edit-in-place outline, "edited by you", Undo my edits,
+     "rewritten by Claude" with its pager, the sticky action bar, the right-aligned hint,
+     the Decline step) are copied from composer.html so both cards match. */
+  :root {
+    --surface-0: #faf9f5; --surface-1: #f0eee6; --surface-2: #ffffff; --sidebar: #f5f4ee;
+    --border: #e8e6dc; --border-strong: #d9d6ca;
+    --text: #141413; --text-secondary: #3d3d3a; --text-muted: #73726c; --text-faint: #a3a198;
+    --text-accent: #2c6fbb; --fill-control: #efede5; --fill-primary: #141413; --on-primary: #fff;
+    --bg-warning: #f8e7df; --text-warning: #b8532f; --danger: #b93a32;
+    --bg-success: #e2f0e6; --text-success: #2f7d4f;
+    --bg-info: #e3eefa; --bg-info-soft: #f4f8fd; --text-info: #2c6fbb;
+    --send: #c6613f; --bubble: #f0eee6;
+    --sans: Inter, system-ui, sans-serif; --serif: "Source Serif 4", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-1); color: var(--text); font: 14px/20px var(--sans); }
+  code { font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--fill-control); padding: 1px 4px; border-radius: 4px; }
+  .page { max-width: 1340px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font: 500 16px/24px var(--sans); margin: 0 0 4px; }
+  .lede { color: var(--text-muted); margin: 0 0 16px; max-width: 820px; }
+  .lede b { font-weight: 500; color: var(--text-secondary); }
+
+  /* Radio tabs: the page works where scripts don't run. */
+  .page > input { position: absolute; opacity: 0; pointer-events: none; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 20px; position: sticky; top: 0; z-index: 5; background: var(--surface-1); padding: 8px 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--fill-control); padding: 3px; border-radius: 10px; }
+  .tabs label { font: 14px/20px var(--sans); color: var(--text-secondary); padding: 5px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; user-select: none; }
+  .tabs label:hover { color: var(--text); }
+  .push { margin-left: auto; }
+
+  .state { display: none; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; margin-bottom: 40px; }
+  @media (max-width: 1100px) { .state { grid-template-columns: minmax(0, 1fr); } .push { margin-left: 0; } }
+  .state > h3 { grid-column: 1 / -1; margin: 0 0 -12px; font: 500 14px/20px var(--sans); color: var(--text-secondary); }
+  .frame { width: 100%; max-width: 1000px; margin: 0 auto; }
+  #w-phone:checked ~ .states .frame, .frame.forcephone { max-width: 390px; }
+  .explain { color: var(--text-secondary); font-size: 13px; line-height: 18px; }
+  .explain h2 { font: 500 14px/20px var(--sans); margin: 0 0 6px; color: var(--text); }
+  .explain p { margin: 0 0 10px; }
+  .explain b { font-weight: 500; color: var(--text); }
+  .explain .was { color: var(--text-muted); border-top: 0.5px solid var(--border-strong); padding-top: 10px; }
+  .prec { border-top: 0.5px solid var(--border-strong); padding-top: 10px; margin-top: 4px; }
+  .prec-h { font-size: 12px; line-height: 16px; color: var(--text-muted); margin-bottom: 4px; }
+  .prec p { margin: 0 0 6px; color: var(--text-muted); }
+  .prec a { color: var(--text-accent); text-decoration: none; }
+
+  /* The app window: sidebar, chat header, transcript, composer. */
+  .app { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 760px; border: 0.5px solid var(--border-strong); border-radius: 12px; overflow: hidden; background: var(--surface-0); position: relative; }
+  #h-full:checked ~ .states .app:not(.device) { height: auto; overflow: visible; }
+  #h-full:checked ~ .states .app:not(.device) .transcript { overflow: visible; }
+  .side { background: var(--sidebar); border-right: 0.5px solid var(--border); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--text-secondary); }
+  .side .mark { font: 22px/28px var(--serif); color: var(--text); padding: 0 8px 12px; }
+  .side .nav { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; white-space: nowrap; }
+  .side .nav i { font-size: 18px; color: var(--text-secondary); }
+  .side .gap { height: 10px; }
+  .side .sec { font-size: 12px; line-height: 16px; color: var(--text-muted); padding: 14px 8px 4px; }
+  .side .rec { padding: 6px 8px; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .side .rec.on { background: var(--fill-control); color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .side .rec.on span { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .side .rec.on b { width: 7px; height: 7px; border-radius: 4px; background: var(--send); flex: none; }
+  .side .me { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 10px 8px 0; border-top: 0.5px solid var(--border); }
+  .side .me .av { width: 32px; height: 32px; border-radius: 16px; background: #5a6b86; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .side .me div { line-height: 18px; } .side .me small { display: block; font-size: 12px; color: var(--text-muted); line-height: 16px; }
+
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .chead { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 0.5px solid var(--border); min-width: 0; flex: none; }
+  .chead .burger { display: none; font-size: 20px; color: var(--text-secondary); }
+  .chead .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--text); }
+  .chead .title i { color: var(--text-muted); }
+  .chead .b { margin-left: auto; }
+  .transcript { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+  .col { max-width: 768px; margin: 0 auto; padding: 24px 24px 24px; display: flex; flex-direction: column; gap: 18px; }
+
+  .ububble { align-self: flex-end; max-width: 78%; background: var(--bubble); border-radius: 12px; padding: 10px 14px; font: 16px/24px var(--sans); }
+  .cmsg { font: 16px/24px var(--serif); }
+  .cmsg p { margin: 0 0 10px; } .cmsg p:last-child { margin: 0; }
+  .cmsg ul { margin: 0 0 10px; padding-left: 22px; } .cmsg li { margin-bottom: 6px; }
+  .cmsg b { font-weight: 600; }
+  .toolrow { font-size: 13px; line-height: 18px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; min-width: 0; }
+  .toolrow span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toolrow i { flex: none; }
+
+  /* Every event is the same quiet row: an icon and 13px text. */
+  .event { display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 8px; font-size: 13px; line-height: 18px; color: var(--text-muted); }
+  .event i { font-size: 16px; line-height: 18px; text-align: center; }
+  .event b { font-weight: 500; color: var(--text-secondary); }
+  .event a { color: var(--text-accent); text-decoration: none; white-space: nowrap; }
+
+  /* The decision card (the request view's family). */
+  .card { border: 0.5px solid var(--border-strong); border-radius: 12px; background: var(--surface-2); padding: 16px 16px 0; }
+  .card.closed { padding-bottom: 14px; }
+  .eyebrow { font-size: 13px; line-height: 18px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .eyebrow > i { font-size: 15px; line-height: 18px; flex: none; }
+  .eyebrow h3 { font: inherit; margin: 0; color: var(--text-secondary); white-space: nowrap; }
+  .eyebrow .what { min-width: 0; }
+  .eyebrow .spacer { flex: 1; }
+  .fold { display: inline-flex; align-items: center; gap: 4px; height: 32px; min-width: 32px; justify-content: center; margin: -7px -8px -7px 0; padding: 0 8px; border-radius: 8px; color: var(--text-secondary); font-size: 14px; white-space: nowrap; flex: none; cursor: pointer; }
+  .fold i { font-size: 16px; }
+  .fold:hover { background: var(--fill-control); }
+  .question { font-size: 15px; line-height: 22px; font-weight: 500; margin: 6px 0 4px; }
+  .route { font-size: 13px; line-height: 18px; color: var(--text-muted); }
+  .modewrap { position: relative; }
+  .mode { font-size: 13px; line-height: 18px; color: var(--text-muted); display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
+  .mode i { font-size: 15px; line-height: 18px; flex: none; }
+  .mode a { color: var(--text-accent); text-decoration: none; white-space: nowrap; }
+  .mode.open a { text-decoration: underline; }
+  .pill { font-size: 12px; line-height: 16px; border-radius: 8px; padding: 1px 8px; white-space: nowrap; flex: none; }
+  .pill.wait { background: var(--bg-warning); color: var(--text-warning); }
+  .pill.sent { background: var(--bg-success); color: var(--text-success); }
+
+  /* Section labels, marks and the pager: the composer card's. */
+  .label { font-size: 13px; line-height: 18px; color: var(--text-muted); border-top: 0.5px solid var(--border); margin-top: 14px; padding-top: 14px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
+  .flabel { font-size: 13px; line-height: 18px; color: var(--text-muted); margin-top: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
+  .label b, .flabel b { font-weight: 400; color: var(--text-secondary); }
+  .sub { color: var(--text-secondary); white-space: nowrap; }
+  .sub.new { color: var(--text-info); }
+  .note { margin-left: auto; color: var(--text-faint); display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; text-decoration: none; }
+  .note i { font-size: 14px; }
+  .note.undo { color: var(--text-accent); }
+  .pager { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; line-height: 16px; color: var(--text-muted); margin-left: 4px; white-space: nowrap; }
+  .pager i { font-size: 14px; color: var(--text-secondary); } .pager i.off { color: var(--text-faint); }
+  .draft { margin: 6px -8px 0; padding: 4px 8px; border-radius: 8px; cursor: text; }
+  .draft.editing { margin: 6px -9px 0; padding: 7px 8px; border: 1px solid var(--border-strong); box-shadow: 0 0 0 3px rgba(20, 20, 19, 0.05); }
+  .prose { font: 16px/24px var(--serif); }
+  .prose p { margin: 0 0 10px; } .prose p:last-child { margin-bottom: 0; }
+  .caret { display: inline-block; width: 1.5px; height: 1.1em; background: var(--text); vertical-align: -0.15em; margin-left: 1px; }
+
+  .rcpt { padding-top: 14px; }
+  .rcpt + .rcpt { margin-top: 14px; border-top: 0.5px dashed var(--border); }
+  .rhead { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+  .tick { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+  .chk { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--surface-2); display: inline-flex; align-items: center; justify-content: center; flex: none; color: transparent; }
+  .chk i { font-size: 12px; }
+  .chk.on { background: var(--fill-primary); border-color: var(--fill-primary); color: #fff; }
+  .oav { width: 22px; height: 22px; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .rname { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+  .fit { font-size: 12px; line-height: 16px; border-radius: 10px; padding: 2px 8px; white-space: nowrap; flex: none; }
+  .fit.possible { background: var(--bg-warning); color: var(--text-warning); }
+  .fit.strong { background: var(--bg-success); color: var(--text-success); }
+  .rbody { padding-left: 26px; }
+  .why { font-size: 13px; line-height: 18px; color: var(--text-muted); margin-top: 4px; }
+  /* Read-only: each organization reads its subject exactly as written. */
+  .subject { margin-top: 4px; }
+  .subject.editing { margin: 4px -9px 0; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border-strong); box-shadow: 0 0 0 3px rgba(20, 20, 19, 0.05); display: flex; align-items: center; }
+  .subject .count { margin-left: auto; padding-left: 12px; font-size: 12px; line-height: 16px; color: var(--text-muted); flex: none; }
+  .rcpt.out .rhead .rname, .rcpt.out .rhead .oav, .rcpt.out .rhead .fit, .rcpt.out .why { opacity: .5; }
+  .folded { font-size: 13px; line-height: 18px; color: var(--text-muted); margin-top: 8px; }
+
+  /* The action bar: Decline left, Approve and send right, the hint right-aligned under
+     them. It sticks to the window's bottom edge while the card is in view (the composer
+     card's .actbar.sticky: a top border, no shadow). */
+  .cfoot { position: sticky; bottom: 0; z-index: 2; background: var(--surface-2); margin: 16px -16px 0; padding: 10px 16px 12px; border-top: 0.5px solid var(--border); border-radius: 0 0 12px 12px; }
+  #h-full:checked ~ .states .app:not(.device) .cfoot { position: static; }
+  .actions { display: flex; align-items: center; gap: 8px; }
+  .actions .spacer { flex: 1; }
+  .hint { font-size: 12px; line-height: 16px; color: var(--text-muted); margin-top: 8px; text-align: right; }
+  .b { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 14px/20px var(--sans); height: 32px; padding: 0 12px; border-radius: 8px; border: 0.5px solid var(--border-strong); background: var(--surface-2); color: var(--text); white-space: nowrap; flex: none; }
+  .b i { font-size: 16px; }
+  .b.primary { background: var(--fill-primary); color: var(--on-primary); border-color: var(--fill-primary); }
+  .b.danger { background: var(--danger); color: var(--on-primary); border-color: var(--danger); }
+  .b.ghost { border-color: transparent; background: none; color: var(--text-secondary); padding: 0 8px; }
+  .b.off { opacity: .45; }
+
+  /* Decline: the same small step as the request view's card, where the buttons were. */
+  .decline { border: 0.5px solid var(--border-strong); border-radius: 12px; background: var(--surface-0); padding: 12px; }
+  .decline .q { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
+  .decline .q i { font-size: 16px; }
+  .decline .field { margin-top: 6px; min-height: 44px; color: var(--text-faint); }
+  .decline .field.typed { color: var(--text); }
+  .decline .bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .decline .bar .note { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 16px; color: var(--text-muted); white-space: normal; display: block; }
+
+  /* The budget strip (today's BudgetStrip), on the card's top edge. */
+  .stripwrap .card { position: relative; z-index: 1; }
+  .bstrip { margin: 0 10px -12px; display: flex; align-items: center; gap: 8px; border-radius: 14px 14px 0 0; background: var(--bubble); padding: 8px 12px 20px 16px; font-size: 14px; line-height: 20px; color: var(--text-secondary); }
+  .bstrip i { font-size: 15px; color: var(--text-warning); flex: none; }
+
+  /* How this chat sends requests: a menu under the line on a computer, a sheet on a phone. */
+  .pop { position: absolute; left: -6px; top: calc(100% + 6px); width: 360px; max-width: calc(100% + 12px); background: var(--surface-2); border: 0.5px solid var(--border-strong); border-radius: 12px; box-shadow: 0 8px 28px rgba(20,20,19,.14); padding: 6px; z-index: 4; }
+  .pop-h { font-size: 12px; line-height: 16px; color: var(--text-muted); padding: 6px 8px 4px; }
+  .opt { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; padding: 8px; border-radius: 8px; }
+  .opt:hover { background: var(--fill-control); }
+  .opt .radio { width: 16px; height: 16px; border-radius: 8px; border: 1px solid var(--border-strong); margin-top: 2px; }
+  .opt.on .radio { border: 5px solid var(--fill-primary); }
+  .opt .ol { font-size: 14px; line-height: 20px; }
+  .opt .od { font-size: 13px; line-height: 18px; color: var(--text-muted); }
+  .pop-f { font-size: 12px; line-height: 16px; color: var(--text-muted); padding: 8px 8px 6px; border-top: 0.5px solid var(--border); margin-top: 4px; }
+  .pop-f a { color: var(--text-accent); text-decoration: none; }
+  .scrim, .sheet { display: none; }
+  .scrim { position: absolute; inset: 0; background: rgba(20, 20, 19, .32); z-index: 6; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; background: var(--surface-0); border-radius: 16px 16px 0 0; padding: 6px 12px 16px; box-shadow: 0 -8px 28px rgba(20,20,19,.14); }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 0 auto 6px; }
+  .sheet .sh { display: grid; grid-template-columns: 32px minmax(0, 1fr) 32px; align-items: center; margin-bottom: 8px; }
+  .sheet .sh .ib { border-radius: 16px; }
+  .sheet .sh h4 { margin: 0; font: 500 15px/22px var(--sans); text-align: center; }
+  .sheet .group { background: var(--surface-2); border: 0.5px solid var(--border); border-radius: 12px; }
+  .sheet .so { display: grid; grid-template-columns: minmax(0, 1fr) 20px; gap: 10px; padding: 10px 12px; align-items: center; }
+  .sheet .so + .so { border-top: 0.5px solid var(--border); }
+  .sheet .so i { font-size: 18px; color: var(--text); }
+  .sheet .pop-f { border: 0; margin: 0; padding: 10px 4px 0; }
+
+  /* Claude's chat composer. */
+  .foot { padding: 4px 16px 10px; flex: none; }
+  .foot .inner { max-width: 720px; margin: 0 auto; }
+  .composer { border: 0.5px solid var(--border-strong); border-radius: 14px; background: var(--surface-2); padding: 10px 10px 8px 14px; box-shadow: 0 1px 6px rgba(20,20,19,.04); position: relative; }
+  .composer .field { min-height: 24px; color: var(--text-faint); font-size: 16px; line-height: 24px; }
+  .composer .field.typed { color: var(--text); }
+  .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .composer .bar .spacer { flex: 1; }
+  .composer.off { background: var(--surface-0); }
+  .composer.off .field, .composer.off .ib, .composer.off .model { opacity: .55; }
+  .ib { width: 32px; height: 32px; border-radius: 8px; border: 0.5px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; color: var(--text-secondary); flex: none; background: var(--surface-2); }
+  .ib i { font-size: 16px; }
+  .model { font-size: 13px; color: var(--text-secondary); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+  .send { width: 32px; height: 32px; border-radius: 8px; background: var(--send); color: #fff; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .send.off { opacity: .45; }
+  .caption { font-size: 12px; line-height: 16px; color: var(--text-muted); margin-top: 6px; text-align: center; }
+  .strip { display: flex; align-items: center; gap: 10px; background: var(--bubble); border-radius: 14px 14px 0 0; padding: 6px 8px 14px 14px; margin: 0 10px -10px; color: var(--text-secondary); }
+  .strip span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .strip .b { flex: none; }
+  .mini { border: 0.5px solid var(--border-strong); border-radius: 12px; background: var(--surface-0); padding: 12px; margin: 4px 0 10px; }
+  .mini .composer { padding: 8px 10px 6px 12px; }
+  .mini .composer .field { font-size: 14px; line-height: 20px; }
+  .mini .flabel { margin-top: 0; }
+
+  /* A phone with the on-screen keyboard up (a drawing: 390 x 812, keyboard 336). */
+  .app.device { height: 812px; }
+  .keyboard { flex: none; height: 336px; background: #d3d5db; padding: 0 3px; }
+  .keyboard .acc { height: 44px; margin: 0 -3px; padding: 0 14px; background: #f1f2f4; border-top: 0.5px solid #c6c8ce; display: flex; align-items: center; gap: 18px; color: var(--text-secondary); font-size: 16px; }
+  .keyboard .acc .done { margin-left: auto; font-weight: 600; color: var(--text); }
+  .krow { display: flex; gap: 6px; justify-content: center; margin-top: 11px; }
+  .key { height: 42px; flex: 1 1 0; max-width: 33px; background: #fff; border-radius: 5px; box-shadow: 0 1px 0 rgba(0,0,0,.28); display: flex; align-items: center; justify-content: center; font: 20px/1 var(--sans); color: var(--text); }
+  .key.w { max-width: 44px; background: #adb1bb; font-size: 15px; }
+  .key.space { max-width: none; flex: 5 1 0; font-size: 15px; }
+  .key.ret { max-width: 88px; flex: 2 1 0; background: #adb1bb; font-size: 15px; }
+  .krow.r2 { padding: 0 18px; }
+  .ksys { display: flex; justify-content: space-between; padding: 14px 20px 0; font-size: 24px; color: var(--text-secondary); }
+  .cfoot.compact .hint { display: none; }
+
+  /* Phone rules are generated (gen3.py) for the Phone tab, the always-phone frame and a
+     real phone, so they stay identical. */
+  .sheet .ol { font-size: 14px; line-height: 20px; }
+  .sheet .od { font-size: 13px; line-height: 18px; color: var(--text-muted); }
+
+  /* Phone tab */
+  #w-phone:checked ~ .states .app { grid-template-columns: minmax(0, 1fr); }
+  #w-phone:checked ~ .states .side { display: none; }
+  #w-phone:checked ~ .states .chead .burger { display: inline; }
+  #w-phone:checked ~ .states .chead .b { display: none; }
+  #w-phone:checked ~ .states .col { padding: 16px 14px; }
+  #w-phone:checked ~ .states .foot { padding: 4px 10px 8px; }
+  #w-phone:checked ~ .states .label .note:not(.undo), #w-phone:checked ~ .states .flabel .note:not(.undo) { display: none; }
+  #w-phone:checked ~ .states .note.undo > span { display: none; }
+  #w-phone:checked ~ .states .fold span, #w-phone:checked ~ .states .kbd { display: none; }
+  #w-phone:checked ~ .states .card { position: relative; }
+  #w-phone:checked ~ .states .fold { position: absolute; top: 10px; right: 8px; margin: 0; }
+  #w-phone:checked ~ .states .eyebrow { padding-right: 30px; }
+  #w-phone:checked ~ .states .eyebrow .what { display: none; }
+  #w-phone:checked ~ .states .rbody { padding-left: 0; }
+  #w-phone:checked ~ .states .tick { flex: 1 1 100%; }
+  #w-phone:checked ~ .states .fit { margin-left: 26px; }
+  #w-phone:checked ~ .states .pop { display: none; }
+  #w-phone:checked ~ .states .scrim, #w-phone:checked ~ .states .sheet { display: block; }
+  #w-phone:checked ~ .states .decline .bar { flex-wrap: wrap; }
+  #w-phone:checked ~ .states .decline .bar .note { flex-basis: 100%; }
+  #w-phone:checked ~ .states .decline .bar .note + .b { margin-left: auto; }
+  /* The always-phone frame (tab 9) */
+  .states .forcephone .app { grid-template-columns: minmax(0, 1fr); }
+  .states .forcephone .side { display: none; }
+  .states .forcephone .chead .burger { display: inline; }
+  .states .forcephone .chead .b { display: none; }
+  .states .forcephone .col { padding: 16px 14px; }
+  .states .forcephone .foot { padding: 4px 10px 8px; }
+  .states .forcephone .label .note:not(.undo), .states .forcephone .flabel .note:not(.undo) { display: none; }
+  .states .forcephone .note.undo > span { display: none; }
+  .states .forcephone .fold span, .states .forcephone .kbd { display: none; }
+  .states .forcephone .card { position: relative; }
+  .states .forcephone .fold { position: absolute; top: 10px; right: 8px; margin: 0; }
+  .states .forcephone .eyebrow { padding-right: 30px; }
+  .states .forcephone .eyebrow .what { display: none; }
+  .states .forcephone .rbody { padding-left: 0; }
+  .states .forcephone .tick { flex: 1 1 100%; }
+  .states .forcephone .fit { margin-left: 26px; }
+  .states .forcephone .pop { display: none; }
+  .states .forcephone .scrim, .states .forcephone .sheet { display: block; }
+  .states .forcephone .decline .bar { flex-wrap: wrap; }
+  .states .forcephone .decline .bar .note { flex-basis: 100%; }
+  .states .forcephone .decline .bar .note + .b { margin-left: auto; }
+  @media (max-width: 700px) {
+    .page { padding: 16px 16px 32px; }
+    .frame { margin: 0 -16px; width: calc(100% + 32px); max-width: none; }
+    .app { border-radius: 0; border-left: 0; border-right: 0; }
+    .controls { position: static; }
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side { display: none; }
+  .chead .burger { display: inline; }
+  .chead .b { display: none; }
+  .col { padding: 16px 14px; }
+  .foot { padding: 4px 10px 8px; }
+  .label .note:not(.undo), .flabel .note:not(.undo) { display: none; }
+  .note.undo > span { display: none; }
+  .fold span, .kbd { display: none; }
+  .card { position: relative; }
+  .fold { position: absolute; top: 10px; right: 8px; margin: 0; }
+  .eyebrow { padding-right: 30px; }
+  .eyebrow .what { display: none; }
+  .rbody { padding-left: 0; }
+  .tick { flex: 1 1 100%; }
+  .fit { margin-left: 26px; }
+  .pop { display: none; }
+  .scrim, .sheet { display: block; }
+  .decline .bar { flex-wrap: wrap; }
+  .decline .bar .note { flex-basis: 100%; }
+  .decline .bar .note + .b { margin-left: auto; }
+  }
+
+  #s-all:checked ~ .controls label[for="s-all"],
+  #s-wait:checked ~ .controls label[for="s-wait"],
+  #s-min:checked ~ .controls label[for="s-min"],
+  #s-sub:checked ~ .controls label[for="s-sub"],
+  #s-edit:checked ~ .controls label[for="s-edit"],
+  #s-told:checked ~ .controls label[for="s-told"],
+  #s-pop:checked ~ .controls label[for="s-pop"],
+  #s-dec:checked ~ .controls label[for="s-dec"],
+  #s-bud:checked ~ .controls label[for="s-bud"],
+  #s-kb:checked ~ .controls label[for="s-kb"],
+  #s-sent:checked ~ .controls label[for="s-sent"],
+  #w-desk:checked ~ .controls label[for="w-desk"],
+  #w-phone:checked ~ .controls label[for="w-phone"],
+  #h-win:checked ~ .controls label[for="h-win"],
+  #h-full:checked ~ .controls label[for="h-full"] { background: var(--surface-2); color: var(--text); box-shadow: 0 0 0 0.5px var(--border-strong); }
+  #s-all:checked ~ .states .state,
+  #s-wait:checked ~ .states .s-wait,
+  #s-min:checked ~ .states .s-min,
+  #s-sub:checked ~ .states .s-sub,
+  #s-edit:checked ~ .states .s-edit,
+  #s-told:checked ~ .states .s-told,
+  #s-pop:checked ~ .states .s-pop,
+  #s-dec:checked ~ .states .s-dec,
+  #s-bud:checked ~ .states .s-bud,
+  #s-kb:checked ~ .states .s-kb,
+  #s-sent:checked ~ .states .s-sent { display: grid; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Harmony Network Request: approving it in the chat</h1>
+  <p class="lede"><b>As built (round 2):</b> desktop only. The "Phone keyboard" tab (9), the Phone width and the phone sheet are out of scope (FEEDBACK_R2_PLAN E7) and weren't built; the send-mode menu is a menu everywhere. Subjects stay read-only (decision 9), so tab 4's editable subject wasn't taken.</p>
+  <p class="lede">Claude's proposed request becomes one card at the end of the chat, built from the same parts as the request view's decision card: <b>Decline</b> on the left, <b>Approve and send</b> on the right, everything in full, and wording changed by clicking into it. The chevron folds it away. The box at the bottom asks what Claude should do differently. The content is Henderson Lab's real card from the preview.</p>
+
+  <input type="radio" name="s" id="s-all">
+  <input type="radio" name="s" id="s-wait" checked>
+  <input type="radio" name="s" id="s-min">
+  <input type="radio" name="s" id="s-sub">
+  <input type="radio" name="s" id="s-edit">
+  <input type="radio" name="s" id="s-told">
+  <input type="radio" name="s" id="s-pop">
+  <input type="radio" name="s" id="s-dec">
+  <input type="radio" name="s" id="s-bud">
+  <input type="radio" name="s" id="s-kb">
+  <input type="radio" name="s" id="s-sent">
+  <input type="radio" name="w" id="w-desk" checked>
+  <input type="radio" name="w" id="w-phone">
+  <input type="radio" name="h" id="h-win" checked>
+  <input type="radio" name="h" id="h-full">
+
+  <div class="controls">
+    <div class="tabs" aria-label="State">
+      <label for="s-all">All states</label>
+      <label for="s-wait">1 · Waiting for you</label>
+      <label for="s-min">2 · Collapsed</label>
+      <label for="s-sub">3 · Leave one out</label>
+      <label for="s-edit">4 · Change the wording</label>
+      <label for="s-told">5 · Tell Claude</label>
+      <label for="s-pop">6 · Ask first or not</label>
+      <label for="s-dec">7 · Decline</label>
+      <label for="s-bud">8 · Budget used up</label>
+      <label for="s-kb">9 · Phone keyboard</label>
+      <label for="s-sent">10 · Sent</label>
+    </div>
+    <div class="tabs push" aria-label="Width">
+      <label for="w-desk">1000 px</label>
+      <label for="w-phone">Phone</label>
+    </div>
+    <div class="tabs" aria-label="Height">
+      <label for="h-win">Window</label>
+      <label for="h-full">Whole card</label>
+    </div>
+  </div>
+
+  <div class="states">
+    <section class="state s-wait">
+      <h3>1 · Waiting for you: the chat stays readable above the card</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow" data-anchor="12" data-anchor-phone="8"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card" aria-label="Harmony Network Request" data-phone-anchor="56">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="note"><i class="ti ti-pencil"></i><span>Click the brief or an ask to change the wording</span></span></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Overall budget is about $3,000 across both services. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. The holder cost should stay within the overall budget of about $3,000 shared with the characterization work.</p></div></div>
+              </div></div>
+            <div class="cfoot">
+              <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+              <div class="hint">Starts a conversation with each of them<span class="kbd"> · ⌘↵</span></div>
+            </div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>One card, in the chat</h2>
+        <p>Claude's proposed request is a card at the end of the transcript, built from the same parts as the request view's decision card. It covers nothing: the chat above scrolls with it.</p>
+        <p>When the card arrives, the chat scrolls so Claude's lead-in sits near the top, and stops there. It never jumps to the card's end.</p>
+        <p>Everything shows in full: the brief, and for each organization why Claude picked it, the subject it sees and the ask Claude works from. No "View more", and no box that scrolls inside the card.</p>
+        <p><b>Decline</b> sits on the left and <b>Approve and send</b> on the right, with what Approve does right-aligned under them, as on the request view's card. The bar stays pinned to the window's bottom edge while the card is in view, so a long request never hides it.</p>
+        <p>Under the title, one line says how this chat sends requests, with <b>Change</b> (tab 6).</p>
+        <p class="was">Before: an ask-user card over the composer, with three numbered options, a "Something else" row and Skip, and the brief cut to three lines. The same request also sat in the transcript behind it.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/2eb6c9a1-64f2-46a8-9cf8-ba9b1897ba86">Claude</a>: a tool's permission is asked on the call itself, in the chat</p><p><a href="https://mobbin.com/screens/24dd3fb3-0f9d-4cc4-8e81-6040e88bd9ca">Sana AI</a>: a drafted email sits in full in the transcript</p><p><a href="https://mobbin.com/screens/0c79d28b-8330-423c-ab01-0c281b07f528">Mailchimp</a>: one review lists To, Subject and Content before sending</p></div>
+      </aside>
+    </section>
+    <section class="state s-min">
+      <h3>2 · Collapsed: the whole chat reads at once</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript" data-end="1"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card closed" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="pill wait">Waiting for you</span><span class="spacer"></span><span class="fold"><i class="ti ti-chevron-down"></i><span>Show</span></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">To Northlake Characterization Core and Ridgeline Fabrication</div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>Fold it away</h2>
+        <p>The chevron at the card's top right folds it to its title and who it goes to. <b>Show</b> opens it again in place, with every tick and edit kept.</p>
+        <p>Approving needs the card open, so you always approve what you can see.</p>
+        <p>Whenever the waiting card is out of view (you scrolled up to reread), today's strip sits on the composer, and <b>Review</b> scrolls to the card and opens it:</p>
+        <div class="mini"><div class="strip"><span>Send this request to 2 organizations?</span><span class="b">Review</span></div><div class="composer"><div class="field">What should Claude do differently?</div></div></div>
+        <p>The chevron belongs to the shared card, so the request view's card can fold the same way when a draft runs long.</p>
+        <p class="was">Before: × and Esc put the card away behind that strip, and putting it away was the only way to read the chat.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/2c8a196a-de8f-403c-a06a-5cb746cf7e9a">Emergent</a>: the agent's questions fold to one "Waiting for answers" row in the transcript</p><p><a href="https://mobbin.com/screens/ca1f0060-e1ab-4ba2-98f9-6a9789f2afc4">Unify</a>: the ask-user card over the composer has a minimize control</p><p><a href="https://mobbin.com/screens/16b71c74-387d-4aa8-83ca-8b542a5c4876">Claude</a>: "Claude has some questions →" as one quiet line in the chat</p></div>
+      </aside>
+    </section>
+    <section class="state s-sub">
+      <h3>3 · Leave one out: untick an organization</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript" data-end="1"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2; you've chosen 1.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="note"><i class="ti ti-pencil"></i><span>Click the brief or an ask to change the wording</span></span></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Overall budget is about $3,000 across both services. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 1 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt out"><div class="rhead"><label class="tick"><span class="chk"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div><div class="rbody"><div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div><div class="folded">Left out: Ridgeline gets nothing from this request. Tick it to add it back.</div></div></div>
+            <div class="cfoot">
+              <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+              <div class="hint">Starts a conversation with Northlake only<span class="kbd"> · ⌘↵</span></div>
+            </div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>Choose who gets it</h2>
+        <p>Every organization has a tick on its own row. Untick Ridgeline and its subject and ask fold away, the count reads "1 of 2", and the line under the buttons names who it goes to.</p>
+        <p>Organizations Claude listed but didn't suggest start unticked, with their reasons, so you can add them. In the scripted story that is Calder Computational, "Not a fit".</p>
+        <p>With nothing ticked, Approve and send is off and the line reads "Tick at least one organization".</p>
+        <p>On a phone the organization's full name wraps if it must, and its fit sits on the line under it.</p>
+        <p class="was">Before: "Send to a subset…" swapped the card for a separate panel with its own Back and Send buttons, in a box that scrolled.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/0c79d28b-8330-423c-ab01-0c281b07f528">Mailchimp</a>: the recipients are one row of the review, changed where they sit</p><p><a href="https://mobbin.com/screens/1bf2ba3d-44c9-4580-b59e-ced6656114ba">Customer.io</a>: the review shows Recipients, then Content, each editable in place</p></div>
+      </aside>
+    </section>
+    <section class="state s-edit">
+      <h3>4 · Change the wording: click into the text</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript" data-end="1"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Keep the total under $2,400. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+                <div class="draft editing"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. Keep the holder under $600.<span class="caret"></span></p></div></div>
+              </div></div>
+            <div class="cfoot">
+              <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+              <div class="hint">Starts a conversation with each of them, with your edits<span class="kbd"> · ⌘↵</span></div>
+            </div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>Edit in place</h2>
+        <p>Click into the brief or an ask and type. The text keeps its size and the card grows with it. No field has its own scrollbar, so long text gets the whole window, and the page scrolls.</p>
+        <p>The field you're in gets a plain outline, the same as the request view's draft. Each changed part says "edited by you", with <b>Undo my edits</b>. Blue marks are kept for Claude's own changes ("rewritten by Claude", tab 5).</p>
+        <p>Here Alex took the shared $3,000 out of the brief and gave each organization its own limit in its ask.</p>
+        <p>Subjects stay read-only, as today: each organization sees its subject exactly as written. Making them editable is a separate decision for you (it needs <code>titles</code> on approve). If you want it, a subject would edit like this:</p>
+        <div class="mini"><div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div><div class="subject editing"><span>Argon-sealed transfer holder for XRD and SEM/EDS</span><span class="caret"></span><span class="count">48/60</span></div></div>
+        <p class="was">Before: "Edit brief…" swapped the card for 7-row boxes in a panel capped at 56% of the window, so each box and the panel both scrolled.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/20da60e5-a867-4e27-a808-fe5d8929412d">Trello</a>: click the description to edit it where it is</p><p><a href="https://mobbin.com/screens/3588719c-3ac1-4bd3-9996-f366f2c0241e">Superhuman</a>: the AI's draft is edited directly where it sits</p><p><a href="https://mobbin.com/screens/d40e653e-fb05-406b-bb99-169064a36c05">Klaviyo</a>: a subject line is its own short field with a count</p></div>
+      </aside>
+    </section>
+    <section class="state s-told">
+      <h3>5 · Tell Claude what to do differently: the box at the bottom</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><div class="event" data-anchor="12" data-anchor-phone="8"><i class="ti ti-send"></i><span><b>Earlier version</b> of this request · not sent · <a href="#">Show</a></span></div><div class="ububble">Leave the budget out of the brief. Tell Northlake to stay under $2,400 and Ridgeline under $600, in their own asks.</div><div class="cmsg"><p>Done. The brief no longer mentions a budget, and each ask now carries its own limit: $2,400 for Northlake and $600 for Ridgeline. Everything else is unchanged.</p></div><section class="card" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="sub new">· rewritten by Claude</span><span class="pager"><i class="ti ti-chevron-left"></i>2 of 2<i class="ti ti-chevron-right off"></i></span></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span><span class="sub new">· rewritten by Claude</span><span class="pager"><i class="ti ti-chevron-left"></i>2 of 2<i class="ti ti-chevron-right off"></i></span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Keep the total under $2,400. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span><span class="sub new">· rewritten by Claude</span><span class="pager"><i class="ti ti-chevron-left"></i>2 of 2<i class="ti ti-chevron-right off"></i></span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. Keep the holder under $600.</p></div></div>
+              </div></div>
+            <div class="cfoot">
+              <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+              <div class="hint">Starts a conversation with each of them<span class="kbd"> · ⌘↵</span></div>
+            </div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>The box at the bottom</h2>
+        <p>In a chat, the box at the bottom always talks to Claude. While a request waits, it asks the request view's <b>Edit</b> question: "What should Claude do differently?" Nobody else reads this chat, so there is no Comment mode here.</p>
+        <p>Sending asks Claude to redraft, as today. The old card folds into one quiet row, <b>Earlier version of this request · not sent · Show</b>, which reads in order whatever Claude does next. The new card lands at the end.</p>
+        <p>Each part Claude changed says "rewritten by Claude" with ‹ 2 of 2 ›: the request view's label and pager, in the same place. ‹ shows Claude's earlier wording of that part. What shows is what goes out; an earlier wording goes as your edit.</p>
+        <p>If you had already changed ticks or wording, they go to Claude with your message, so the redraft starts from your version.</p>
+        <p>Claude's reply here is sample text, not model output.</p>
+        <p class="was">Before: the card took the composer's place, and typing in "Something else" did the same thing from inside the card.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/0ca0b550-c8f4-47eb-8d52-059738f8db48">ClickUp Brain</a>: "Tell AI what to do next" sits under the draft</p><p><a href="https://mobbin.com/screens/4078e5e8-7eac-4ea9-bbaa-8b4ee150abe3">Unify</a>: a chat message rewrites one recipient's draft, and the draft updates</p><p><a href="https://mobbin.com/screens/e5d6b988-c4f4-4b06-9680-998ab1e7badc">Confluence</a>: the AI's version and yours stay distinct, and you can go back</p></div>
+      </aside>
+    </section>
+    <section class="state s-pop">
+      <h3>6 · How this chat sends requests: Change opens the same choices as + › Harmony</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card" aria-label="Harmony Network Request" data-anchor="16" data-anchor-phone="16">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode open"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div><div class="pop" role="menu" aria-label="Harmony Network Requests in this chat">
+                <div class="pop-h">Harmony Network Requests in this chat</div>
+                <div class="opt"><span class="radio"></span><div><div class="ol">Organization default</div><div class="od">Henderson Lab reviews before sending</div></div></div>
+                <div class="opt on"><span class="radio"></span><div><div class="ol">Review before sending</div><div class="od">Claude shows you each request first. Nothing goes out until you approve.</div></div></div>
+                <div class="opt"><span class="radio"></span><div><div class="ol">Send without review</div><div class="od">Claude sends each request as soon as it writes it, to the organizations it chose. Spend limits still apply.</div></div></div>
+                <div class="pop-f">Applies from Claude's next request; this one still waits for you. Admins set the default in <a href="#">Customize › Harmony</a>.</div>
+              </div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="note"><i class="ti ti-pencil"></i><span>Click the brief or an ask to change the wording</span></span></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Overall budget is about $3,000 across both services. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. The holder cost should stay within the overall budget of about $3,000 shared with the characterization work.</p></div></div>
+              </div></div>
+            <div class="cfoot">
+              <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+              <div class="hint">Starts a conversation with each of them<span class="kbd"> · ⌘↵</span></div>
+            </div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      <div class="scrim"></div>
+      <div class="sheet" role="dialog" aria-label="Harmony Network Requests in this chat">
+        <div class="grab"></div>
+        <div class="sh"><span class="ib"><i class="ti ti-x"></i></span><h4>Requests in this chat</h4><span></span></div>
+        <div class="group">
+          <div class="so"><div><div class="ol">Organization default</div><div class="od">Henderson Lab reviews before sending</div></div><span></span></div>
+          <div class="so"><div><div class="ol">Review before sending</div><div class="od">Claude shows you each request first. Nothing goes out until you approve.</div></div><i class="ti ti-check"></i></div>
+          <div class="so"><div><div class="ol">Send without review</div><div class="od">Claude sends each request as soon as it writes it, to the organizations it chose. Spend limits still apply.</div></div><span></span></div>
+        </div>
+        <div class="pop-f">Applies from Claude's next request; this one still waits for you. Admins set the default in <a href="#">Customize › Harmony</a>.</div>
+      </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Send without review, where you decide</h2>
+        <p>Today the per-chat switch is in the composer's + menu › Harmony, and the org default in Customize › Harmony › Autonomy. Both stay. The card adds a way in at the moment it matters: the line under its title says how this chat sends requests, and <b>Change</b> opens the same three choices as the + menu.</p>
+        <p>On a computer they open under that line, over the brief, never over the buttons. On a phone (under 560 px) they come up as a bottom sheet, like Claude's own model picker.</p>
+        <p>A change applies from Claude's next request. This card still waits for you.</p>
+        <p>With Send without review on, the composer shows the amber "Sends without review" chip as today, and a request that went out unreviewed reads "Sent without review".</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/16cc5d91-2f00-4a92-9777-6dd57a63a6a4">Claude</a>: per-chat options live in the composer's + menu</p><p><a href="https://mobbin.com/screens/e7e22711-6762-4d26-83aa-041f3f622fda">Claude (iOS)</a>: "Select model" opens as a bottom sheet with a tick on the choice</p><p><a href="https://mobbin.com/screens/cc2d87ca-3164-40ad-9cff-296095ed5de7">Google Meet</a>: "Allow while visiting the site" or "Allow this time", offered when it asks</p></div>
+      </aside>
+    </section>
+    <section class="state s-dec">
+      <h3>7 · Decline: the same small step as the request view</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript" data-end="1"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="note"><i class="ti ti-pencil"></i><span>Click the brief or an ask to change the wording</span></span></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Overall budget is about $3,000 across both services. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. The holder cost should stay within the overall budget of about $3,000 shared with the characterization work.</p></div></div>
+              </div></div>
+            <div class="cfoot">
+              <div class="decline">
+                <div class="q"><i class="ti ti-circle-x"></i>Don't send this request</div>
+                <div class="field typed">We&#x27;re holding this until the PI confirms the budget.<span class="caret"></span></div>
+                <div class="bar"><span class="note">Only Claude in this chat sees this. No organization hears about it. You can leave it empty.</span><span class="b ghost">Cancel</span><span class="b danger">Decline</span></div>
+              </div>
+            </div>
+          </section>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude redrafts the request from what you send. Nothing goes out until you approve.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>Decline, with an optional reason</h2>
+        <p>Decline opens a small step where the buttons were, as on the request view's card: "Don't send this request", a field for why, <b>Cancel</b> and <b>Decline</b>. Cancel puts the buttons back with every tick and edit.</p>
+        <p>The reason is optional and goes only to Claude in this chat. No organization hears about it, and the caption says so. That is the one difference from the request view, where a reason may reach the other organization.</p>
+        <p>Decline means don't send. Claude says so in a line and doesn't redraft unless you ask; with no reason it may say nothing. For a different request, type what should change in the box at the bottom (tab 5).</p>
+        <p>The card then folds to a "Not sent" record, like tab 10.</p>
+        <p class="was">Before: Skip or Esc put the card away without deciding, and typing "Something else" turned it down as a redraft.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/e5d6b988-c4f4-4b06-9680-998ab1e7badc">Confluence</a>: Discard sits beside the AI's suggestion, one step away</p></div>
+      </aside>
+    </section>
+    <section class="state s-bud">
+      <h3>8 · Budget used up: nothing that starts Claude's turn can run</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><div class="stripwrap" data-anchor="12" data-anchor-phone="8"><p class="bstrip" role="status"><i class="ti ti-alert-circle"></i><span>Today's demo budget is used up</span></p><section class="card" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Keep the total under $2,400. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. The holder cost should stay within the overall budget of about $3,000 shared with the characterization work.</p></div></div>
+              </div></div>
+            <div class="cfoot">
+              <div class="actions"><span class="b ghost off" aria-disabled="true">Decline</span><span class="spacer"></span><span class="b primary off" aria-disabled="true">Approve and send</span></div>
+              <div class="hint">Nothing goes out until the budget is back</div>
+            </div>
+          </section></div>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer off">
+            <div class="field">What should Claude do differently?</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude can't redraft until the budget is back. Ticking and changing the wording still work.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>When the live-model budget is used up</h2>
+        <p>Approve and send and Decline both start Claude's next turn, so both are off, the same as on the request view. The strip on the card's top edge is today's BudgetStrip with today's <code>budgetLine</code>, read from <code>useBudgetState</code>.</p>
+        <p>Ticking and changing the wording still work, so the request is ready when the budget is back. The buttons come back by themselves once the budget reads ok.</p>
+        <p>The line under the buttons says why, for when the strip has scrolled out of view.</p>
+        <p>The box at the bottom is off too, because a message would set Claude redrafting. One strip shows at a time: on the waiting card while there is one, otherwise on the box, as today.</p>
+        <p class="was">Before (round 3): the strip sat on the ask-user card, and only the options that start a turn were held.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/e4c51fae-e8b6-4e42-8a4c-23d1ec12b06a">Claude (iOS)</a>: "Limit reached" is a strip on the top edge of what it holds</p></div>
+      </aside>
+    </section>
+    <section class="state s-kb">
+      <h3>9 · On a phone with the keyboard up: the text gets the room</h3>
+      <div class="frame forcephone"><div class="app device">
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders</span>
+        </div>
+        <div class="transcript" data-end="1"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="what">· Claude needs your OK before sending</span><span class="spacer"></span><span class="fold" title="Collapse"><i class="ti ti-chevron-up"></i></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Claude screened 14 organizations and picked 2.</div>
+            <div class="modewrap"><div class="mode"><i class="ti ti-shield-check"></i><span>This chat: review before sending · <a href="#">Change</a></span></div></div>
+            <div class="label"><b>Brief</b><span>· Claude works from this in every conversation</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+            <div class="draft"><div class="prose"><p>We are Henderson Lab, a university research group. We need two related services, with results needed by November 11, 2026: (1) XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders, and (2) an airtight sample holder fabricated so the powders can be transferred from our argon glovebox to the instruments without air exposure. The samples are moisture- and air-sensitive within minutes of exposure and are currently stored in an argon glovebox. Your representative may share our general requirements, timing, and the number of samples. Do not share sample compositions, synthesis details, or any unpublished results. Your representative may gather quotes, availability, and technical details, but must not agree to any price, purchase, or booking without Alex Chen&#x27;s approval.</p></div></div>
+            <div class="label"><b>Who gets it</b><span>· 2 of 2</span><span class="note"><span>Untick to leave one out</span></span></div>
+            <div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#9b7d45">N</span><span class="rname">Northlake Characterization Core</span></label><span class="fit possible">Possible fit</span></div>
+              <div class="rbody">
+                <div class="why">Has XRD with air-free dome holders and SEM/EDS, matching both techniques, and turnaround fits the deadline. Inert-glovebox transfer is not stated, so it needs confirming.</div>
+                <div class="flabel"><b>Subject</b><span>· Northlake sees this as written</span></div>
+                <div class="subject">XRD and SEM/EDS for 14 air-sensitive powders</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Northlake only</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+                <div class="draft"><div class="prose"><p>Ask whether you can run XRD and SEM/EDS on 14 air-sensitive powders by November 11, 2026, with the samples kept under inert atmosphere from loading through measurement. Confirm how air-free handling is done (glovebox, air-free dome holders, or other), the turnaround, and a per-sample and total quote for 14 samples with XRD and SEM/EDS. Keep the total under $2,400. Report the quote to Alex Chen before agreeing to anything.</p></div></div>
+              </div></div><div class="rcpt"><div class="rhead"><label class="tick"><span class="chk on"><i class="ti ti-check"></i></span><span class="oav" style="background:#625d9c">R</span><span class="rname">Ridgeline Fabrication</span></label><span class="fit strong">Strong fit</span></div>
+              <div class="rbody">
+                <div class="why">Offers vacuum and airtight sample holders and transfer vessels with a 3-5 day turnaround, which fits the need. Argon sealing and XRD/SEM compatibility are unconfirmed.</div>
+                <div class="flabel"><b>Subject</b><span>· Ridgeline sees this as written</span></div>
+                <div class="subject">Airtight sample holder for XRD/SEM transfer</div>
+                <div class="flabel"><b>Ask</b><span>· Claude works from this with Ridgeline only</span><span class="sub">· edited by you</span><a class="note undo" href="#"><i class="ti ti-arrow-back-up"></i><span>Undo my edits</span></a></div>
+                <div class="draft editing"><div class="prose"><p>Ask whether you can fabricate an airtight sample holder that seals under argon and works with XRD and SEM/EDS instruments, for powder samples transferred from a glovebox. Confirm the design, compatibility with XRD and SEM stages, the turnaround to meet November 11, 2026, and a quote for the fabrication (including quantity if several holders are needed). Report the quote to Alex Chen before agreeing to anything. Keep the holder under $600.<span class="caret"></span></p></div></div>
+              </div></div>
+            <div class="cfoot compact">
+              <div class="actions"><span class="b ghost">Decline</span><span class="spacer"></span><span class="b primary">Approve and send</span></div>
+              <div class="hint"><span class="kbd"> · ⌘↵</span></div>
+            </div>
+          </section>
+        </div></div>
+        <div class="keyboard" aria-hidden="true"><div class="acc"><i class="ti ti-chevron-up"></i><i class="ti ti-chevron-down"></i><span class="done">Done</span></div><div class="krow"><span class="key">q</span><span class="key">w</span><span class="key">e</span><span class="key">r</span><span class="key">t</span><span class="key">y</span><span class="key">u</span><span class="key">i</span><span class="key">o</span><span class="key">p</span></div><div class="krow r2"><span class="key">a</span><span class="key">s</span><span class="key">d</span><span class="key">f</span><span class="key">g</span><span class="key">h</span><span class="key">j</span><span class="key">k</span><span class="key">l</span></div><div class="krow"><span class="key w">⇧</span><span class="key">z</span><span class="key">x</span><span class="key">c</span><span class="key">v</span><span class="key">b</span><span class="key">n</span><span class="key">m</span><span class="key w">⌫</span></div><div class="krow"><span class="key w">123</span><span class="key w">☺</span><span class="key space">space</span><span class="key ret">return</span></div><div class="ksys"><i class="ti ti-world"></i><i class="ti ti-microphone"></i></div></div>
+      </div>
+      </div></div>
+      <aside class="explain">
+        <h2>Typing on a phone</h2>
+        <p>While a field in the card has focus on a narrow screen (under 560 px), the box at the bottom and its caption step aside, and the card's bar keeps only its two buttons. They come back when the field loses focus.</p>
+        <p>In this drawing (390 × 812, keyboard and its Done bar 336 px), the text being edited gets about 380 px between the header and the bar. With the box, its caption and the full bar it would get about 220.</p>
+        <p>The chat follows <code>visualViewport</code>, so the caret stays above the keyboard.</p>
+        <p>This is a drawing: headless Chromium has no on-screen keyboard. It needs a check on a real phone, or with a visualViewport resize, before it ships.</p>
+        <p>This tab always shows a phone.</p>
+      </aside>
+    </section>
+    <section class="state s-sent">
+      <h3>10 · Sent: the card becomes a record</h3>
+      <div class="frame"><div class="app">
+      <nav class="side" aria-label="Sidebar">
+        <div class="mark">Claude</div>
+        <div class="nav"><i class="ti ti-plus"></i>New chat</div>
+        <div class="nav"><i class="ti ti-search"></i>Search</div>
+        <div class="nav"><i class="ti ti-briefcase"></i>Customize</div>
+        <div class="gap"></div>
+        <div class="nav"><i class="ti ti-message-circle"></i>Chats</div>
+        <div class="nav"><i class="ti ti-inbox"></i>Requests</div>
+        <div class="nav"><i class="ti ti-affiliate"></i>Network</div>
+        <div class="nav"><i class="ti ti-folder"></i>Projects</div>
+        <div class="nav"><i class="ti ti-category"></i>Artifacts</div>
+        <div class="nav"><i class="ti ti-code"></i>Code</div>
+        <div class="sec">Recent requests</div>
+        <div class="rec">Powder XRD on 6 precursors</div>
+        <div class="rec">All requests</div>
+        <div class="sec">Recents</div>
+        <div class="rec on"><span>Find a lab that can run XRD and SEM/EDS</span><b></b></div>
+        <div class="me"><span class="av">AC</span><div>Alex Chen<small>Henderson Lab</small></div></div>
+      </nav>
+      <div class="main">
+        <div class="chead">
+          <i class="ti ti-menu-2 burger"></i>
+          <span class="title">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders <i class="ti ti-chevron-down"></i></span>
+          <span class="b">Share</span>
+        </div>
+        <div class="transcript" data-end="1"><div class="col">
+            <div class="ububble">Find a lab that can run XRD and SEM/EDS on 14 air-sensitive sodium-ion cathode powders by Nov 11, and get an airtight sample holder made for the transfer. Budget is about $3,000.</div>
+            <div class="cmsg"><p>I&#x27;ll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p></div>
+            <div class="toolrow"><i class="ti ti-chevron-right"></i><span>Searched the Harmony network for 2 needs, searched your organization&#x27;s knowledge</span></div>
+            <div class="cmsg"><p>Our records have the sample context (synthesized October 2026, stored in an argon glovebox, moisture-sensitive within minutes). The dopant composition note is unpublished, so I&#x27;ll keep compositions out of the request. Two providers fit: Northlake for XRD and SEM/EDS, and Ridgeline for the airtight holder. I&#x27;m proposing one request to both.</p></div><section class="card closed" aria-label="Harmony Network Request">
+            <div class="eyebrow"><i class="ti ti-send"></i><h3>Harmony Network Request</h3><span class="pill sent">Sent</span><span class="spacer"></span><span class="fold"><i class="ti ti-chevron-down"></i><span>Show what was sent</span></span></div>
+            <div class="question">XRD/SEM-EDS for air-sensitive cathode powders, plus holder</div>
+            <div class="route">Sent to Northlake Characterization Core and Ridgeline Fabrication · 6:59 PM</div>
+          </section><div class="cmsg"><p>It&#x27;s out to Northlake Characterization Core and Ridgeline Fabrication; their progress shows on the request&#x27;s card.</p></div>
+        </div></div>
+        <div class="foot"><div class="inner">
+          <div class="composer">
+            <div class="field">Reply…</div>
+            <div class="bar"><span class="ib"><i class="ti ti-plus"></i></span><span class="spacer"></span><span class="model">Haiku 5.5 · Adaptive <i class="ti ti-chevron-down"></i></span><span class="send off"><i class="ti ti-arrow-up"></i></span></div>
+          </div>
+          <div class="caption">Claude is AI and can make mistakes. Please double-check responses.</div>
+        </div></div>
+      </div>
+      
+      </div></div>
+      <aside class="explain">
+        <h2>After you decide</h2>
+        <p>Approve and send folds the card to a record: what went out, to whom, when, and "with your edits" if you changed it. <b>Show what was sent</b> opens it read-only, in full.</p>
+        <p>Decline folds it the same way, as "Not sent".</p>
+        <p>The request's status card follows, as today. Claude then says one sentence: it's out, and where progress shows. It doesn't check the status, restate the asks or promise to check back: it is told when something needs you and when every conversation has ended.</p><div class="prec"><div class="prec-h">Precedent on Mobbin</div><p><a href="https://mobbin.com/screens/3d205a5d-5ead-4787-af2c-9b0a36ed2fc7">Rox</a>: a drafted email stays in the chat as one compact card</p><p><a href="https://mobbin.com/screens/2c8a196a-de8f-403c-a06a-5cb746cf7e9a">Emergent</a>: an answered question folds to a single row</p></div>
+      </aside>
+    </section>
+  </div>
+</div>
+<script>
+  // Optional: start each window where the real app would put it (Claude's lead-in near the
+  // top when a card arrives, the end of the chat otherwise). Without scripts, windows start
+  // at the top and still scroll.
+  function place() {
+    document.querySelectorAll('.state').forEach(function (s) {
+      if (getComputedStyle(s).display === 'none') return;
+      var t = s.querySelector('.transcript');
+      if (!t || t.scrollHeight <= t.clientHeight) return;
+      if (t.dataset.end) { t.scrollTop = t.scrollHeight; return; }
+      var phone = t.clientWidth < 500;
+      var a = (phone && s.querySelector('[data-phone-anchor]')) || s.querySelector('[data-anchor]');
+      if (!a) { t.scrollTop = 0; return; }
+      var off = a.dataset.phoneAnchor || (phone && a.dataset.anchorPhone) || a.dataset.anchor;
+      t.scrollTop += a.getBoundingClientRect().top - t.getBoundingClientRect().top - Number(off || 0);
+    });
+  }
+  document.addEventListener('change', function () { requestAnimationFrame(place); });
+  window.addEventListener('load', place);
+  if (document.fonts) document.fonts.ready.then(place);
+</script>
+</body>
+</html>

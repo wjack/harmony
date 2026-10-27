@@ -3,9 +3,12 @@
  * read off a `Calendar` (the session's world calendar, `useCalendar`), so it matches the
  * World date; a time of day or an age is the same on either calendar.
  */
+import type { EndReason } from "../api/types";
+import type { BudgetState } from "../app/budget";
+import { stoppedLine, type FailureReason } from "../chat/failureCopy";
 import type { Calendar } from "../demo/worldClock";
-import { firstName } from "../shell/names";
-import type { EscalationKind, InboxItem, Side, ThreadState } from "./types";
+import { firstName, shortOrgName } from "../shell/names";
+import type { EscalationKind, InboxItem, OrgRef, Side, ThreadState } from "./types";
 
 // --- Time --------------------------------------------------------------------------------
 
@@ -78,6 +81,11 @@ export function representativeName(orgName: string): string {
   return `Claude for ${orgName}`;
 }
 
+/** "only Northlake sees this", for a transcript row nobody outside our org sees. */
+export function onlyUs(us: OrgRef): string {
+  return `only ${shortOrgName(us.name)} sees this`;
+}
+
 /** "Henderson Lab's", "Cascade Thin Films'". */
 export function possessive(name: string): string {
   return name.endsWith("s") ? `${name}'` : `${name}'s`;
@@ -105,36 +113,72 @@ export interface Standing {
 }
 
 /**
- * Where a thread stands, from our side. A thread waits on a principal while one side
- * checks with its team: ours, or the counterparty's, which is theirs to answer.
+ * Where a thread stands, from our side. While the move is the counterparty's it reads
+ * "Waiting on {them}", whether their Claude is writing or checking with its own team;
+ * however it ended, it reads "Closed" (REOPEN.md §2.2).
  */
 export function stateLabel({ state, side, side_to_move }: Standing, counterparty: string): string {
-  switch (state) {
-    case "active":
-      return "Claude is handling";
-    case "awaiting_principal":
-      return side_to_move === null || side_to_move === side ? "Checking with the team" : `Waiting on ${counterparty}`;
-    case "closed":
-      return "Closed";
-    case "expired":
-      return "Expired";
-  }
+  if (isTerminal(state)) return "Closed";
+  if (side_to_move !== null && side_to_move !== side) return `Waiting on ${counterparty}`;
+  return state === "awaiting_principal" ? "Checking with the team" : "Claude is handling";
 }
 
 /**
  * The inbox row's subtitle after the counterparty's name. `needsYou` is the row's
  * section: an open item assigned to someone else reads as theirs, not yours. As in the
- * view's pill, a thread that stopped or ended says so before who shared it.
+ * view's pill, a thread that ended says so before who shared it.
  */
 export function rowStatus(item: InboxItem, needsYou: boolean): string {
   const open = item.escalation !== null && item.escalation.status === "open" ? item.escalation : null;
   if (open !== null && needsYou) return needsLabel(open.kind);
-  if (item.stop_reason != null) return "Stopped";
-  const where = { state: item.thread_state, side: item.side, side_to_move: item.side_to_move };
-  if (isTerminal(item.thread_state)) return stateLabel(where, item.counterparty.name);
+  if (item.stop_reason != null || isTerminal(item.thread_state)) return "Closed";
   if (item.shared_by !== null) return `Shared by ${firstName(item.shared_by.name)}`;
   if (open !== null && open.assignees.length > 0) {
     return `Waiting on ${open.assignees.map((assignee) => firstName(assignee.name)).join(", ")}`;
   }
-  return stateLabel(where, item.counterparty.name);
+  return stateLabel({ state: item.thread_state, side: item.side, side_to_move: item.side_to_move }, item.counterparty.name);
+}
+
+// --- Why a run ended ---------------------------------------------------------------------
+
+/** How one run of a thread ended: `ThreadRunView.ended`, or the thread's own fields. */
+export interface Ending {
+  endReason: EndReason | null;
+  closedBy: Side | null;
+  stopReason: FailureReason | null;
+}
+
+const REASON: Record<Exclude<EndReason, "closed" | "stopped">, string> = {
+  quiet: "both sides went quiet",
+  unsent: "nothing was sent",
+  turn_limit: "it reached its turn limit",
+  deadline: "it reached its deadline",
+};
+
+/**
+ * Why a run ended, in the words after "Closed · {date} ·" (REOPEN.md §2.1). `closer`
+ * names the side that closed it; a close nobody is named for (a seeded one) and a stop
+ * with no reason say nothing more.
+ */
+export function reasonLine(
+  { endReason, stopReason }: Pick<Ending, "endReason" | "stopReason">,
+  closer: string | null,
+  budget: BudgetState,
+): string | null {
+  switch (endReason) {
+    case null:
+      return null;
+    case "closed":
+      return closer === null ? null : `${closer} closed it`;
+    case "stopped":
+      return stopReason === null ? null : stoppedLine(stopReason, budget);
+    default:
+      return REASON[endReason];
+  }
+}
+
+/** `reasonLine` from our side: our own close reads "Claude closed it", theirs names them. */
+export function endLine(ending: Ending, side: Side, counterparty: string, budget: BudgetState): string | null {
+  const closer = ending.closedBy === null ? null : ending.closedBy === side ? "Claude" : counterparty;
+  return reasonLine(ending, closer, budget);
 }

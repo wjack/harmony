@@ -16,7 +16,10 @@ describe("approveBody", () => {
 
   it("sends the member's edit, trimmed", () => {
     const edits = { answer: "  Yes, Wednesday.  " };
-    expect(isEdited(edits)).toBe(true);
+    expect(isEdited(rev, edits)).toBe(true);
+    // Typed back to Claude's wording, it's no longer an edit.
+    expect(isEdited(rev, { answer: rev.answer })).toBe(false);
+    expect(isEdited(rev, {})).toBe(false);
     expect(approveBody("consult", rev, edits)).toEqual({
       ok: true,
       body: { action: "approve", text: "Yes, Wednesday.", draft_rev: 2 },

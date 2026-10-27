@@ -9,7 +9,7 @@
 name: harmony-ci
 
 x-app: &app
-  image: harmony:ci
+  image: ${HARMONY_CI_IMAGE:-harmony:ci}
   build:
     context: .
   environment:

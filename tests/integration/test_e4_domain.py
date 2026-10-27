@@ -19,6 +19,7 @@ from harmony.agents.models import (
     CardResolution,
     EscalationResolution,
     InlineQuestionItem,
+    OutreachCardItem,
     OutreachEdits,
     Route,
     RouteAssignee,
@@ -49,6 +50,7 @@ from harmony.domain import (
     conversations,
     escalations,
     notes,
+    records,
     requests,
     routing,
     threads,
@@ -201,18 +203,32 @@ async def test_a_stranger_cannot_write_to_a_thread(db_sessionmaker: Sessionmaker
             )
 
 
-async def test_a_terminal_thread_keeps_its_state(db_sessionmaker: Sessionmaker) -> None:
+async def test_a_terminal_thread_keeps_its_state_and_how_it_ended(
+    db_sessionmaker: Sessionmaker,
+) -> None:
     world_id = await seeded_world(db_sessionmaker)
     outreach = await approved_outreach(db_sessionmaker, world_id, NORTHLAKE)
     thread_id = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
     async with unit_of_work(db_sessionmaker, world_id) as uow:
+        with pytest.raises(ValueError, match="end_reason"):
+            await threads.set_state(uow, thread_id, "closed")
         await threads.set_state(uow, thread_id, "awaiting_principal", side_to_move="responder")
-        await threads.set_state(uow, thread_id, "closed")
+        await threads.set_state(
+            uow, thread_id, "closed", end_reason="closed", closed_by="responder"
+        )
         await threads.set_state(uow, thread_id, "active", side_to_move="requester")
-        await threads.set_state(uow, thread_id, "expired")
+        await threads.set_state(
+            uow, thread_id, "expired", end_reason="stopped", stop_reason="model_error"
+        )
         await uow.commit()
     thread = await _thread(db_sessionmaker, world_id, thread_id)
     assert (thread.state, thread.side_to_move) == ("closed", None)
+    assert (thread.end_reason, thread.closed_by, thread.stop_reason) == (
+        "closed",
+        "responder",
+        None,
+    )
+    assert thread.ended_at is not None
 
 
 async def test_cassette_keys_count_only_unseeded_threads_per_pair(
@@ -353,6 +369,45 @@ async def test_a_card_resolves_once(db_sessionmaker: Sessionmaker) -> None:
             )
 
 
+async def test_a_rejected_card_says_whether_a_decline_or_a_message_turned_it_down(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    """The chat folds a Decline into a "Not sent" record, and a card a message replaced
+    into an earlier version, so its item carries which it was."""
+    world_id = await seeded_world(db_sessionmaker)
+    conversation_id = await start_chat(db_sessionmaker, world_id)
+    declined = await propose(db_sessionmaker, world_id, conversation_id, NORTHLAKE)
+    async with unit_of_work(db_sessionmaker, world_id) as uow:
+        await cards.resolve(
+            uow,
+            CardResolution(
+                card_id=declined, decision="reject", member_id=ALEX, rejected_with="decline"
+            ),
+        )
+        await uow.commit()
+    replaced = await propose(db_sessionmaker, world_id, conversation_id, CALDER)
+    async with unit_of_work(db_sessionmaker, world_id) as uow:
+        await cards.resolve(
+            uow,
+            CardResolution(
+                card_id=replaced,
+                decision="reject",
+                member_id=ALEX,
+                feedback="Ask Calder too.",
+                rejected_with="message",
+            ),
+        )
+        await uow.commit()
+    pending = await propose(db_sessionmaker, world_id, conversation_id, NORTHLAKE)
+    async with db_sessionmaker() as session:
+        conversation = await repo.get_required(session, Conversation, world_id, conversation_id)
+        items = await conversations.chat_items(session, conversation)
+    rejected_with = {
+        item.card_id: item.rejected_with for item in items if isinstance(item, OutreachCardItem)
+    }
+    assert rejected_with == {declined: "decline", replaced: "message", pending: None}
+
+
 async def test_a_chat_is_titled_from_its_first_message_and_lists_its_items(
     db_sessionmaker: Sessionmaker,
 ) -> None:
@@ -395,34 +450,41 @@ async def test_a_chat_is_titled_from_its_first_message_and_lists_its_items(
     assert turns == 1
 
 
-async def test_a_network_search_reads_as_how_many_organizations_it_screened(
+async def test_a_tool_row_runs_in_the_present_and_ends_with_what_it_found(
     db_sessionmaker: Sessionmaker,
 ) -> None:
+    """Decision 5: a row reads "Searching…" until its result is stored, then in the past
+    tense with what a search found; the need or query is its second line."""
     world_id = await seeded_world(db_sessionmaker)
     conversation_id = await start_chat(db_sessionmaker, world_id)
     turn_id = uuid4()
     need = "Powder XRD and SEM/EDS on 12 air-sensitive cathode powders by Nov 6."
-    shortlist = Shortlist(
-        search_id=uuid4(),
-        screened=ScreenedCounts(total=14, strong=2, possible=3, no=8, unknown=1),
-        entries=[],
-    )
+
+    def found(strong: int, possible: int) -> str:
+        counts = ScreenedCounts(
+            total=14, strong=strong, possible=possible, no=14 - strong - possible, unknown=0
+        )
+        return Shortlist(search_id=uuid4(), screened=counts, entries=[]).model_dump_json()
+
+    def use(tool_id: str, name: str, text: str) -> dict[str, object]:
+        key = "need" if name == "search_network" else "query"
+        return {"type": "tool_use", "id": tool_id, "name": name, "input": {key: text}}
+
+    calls: list[tuple[str, str, str, str | None]] = [
+        ("toolu_both", "search_network", need, found(1, 2)),
+        ("toolu_possible", "search_network", need, found(0, 2)),
+        ("toolu_none", "search_network", need, found(0, 0)),
+        ("toolu_running", "search_network", need, None),
+        ("toolu_matches", "search_org_knowledge", "argon holder", '{"results":[{},{}]}'),
+        ("toolu_nothing", "search_org_knowledge", "XPS", f"{records.NO_MATCHES} 'XPS'."),
+        ("toolu_reading", "search_org_knowledge", "XRD", None),
+    ]
     async with unit_of_work(db_sessionmaker, world_id) as uow:
         await conversations.append_assistant_content(
             uow,
             conversation_id,
             turn_id=turn_id,
-            content_text=json.dumps(
-                [
-                    {
-                        "type": "tool_use",
-                        "id": tool_id,
-                        "name": "search_network",
-                        "input": {"need": need},
-                    }
-                    for tool_id in ("toolu_done", "toolu_running")
-                ]
-            ),
+            content_text=json.dumps([use(tool_id, name, text) for tool_id, name, text, _ in calls]),
         )
         await conversations.append_turn_input(
             uow,
@@ -431,11 +493,9 @@ async def test_a_network_search_reads_as_how_many_organizations_it_screened(
             role="user",
             content_text=json.dumps(
                 [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_done",
-                        "content": shortlist.model_dump_json(),
-                    }
+                    {"type": "tool_result", "tool_use_id": tool_id, "content": result}
+                    for tool_id, _, _, result in calls
+                    if result is not None
                 ]
             ),
         )
@@ -443,11 +503,15 @@ async def test_a_network_search_reads_as_how_many_organizations_it_screened(
     async with db_sessionmaker() as session:
         conversation = await repo.get_required(session, Conversation, world_id, conversation_id)
         items = await conversations.chat_items(session, conversation)
-    lines = [item for item in items if isinstance(item, ToolActivityItem)]
-    # The need is internal Claude's own wording: the line counts what it screened.
-    assert [(line.label, line.detail, line.status) for line in lines] == [
-        ("Searched the Harmony network", "14 organizations", "done"),
-        ("Searched the Harmony network", None, "running"),
+    rows = [item for item in items if isinstance(item, ToolActivityItem)]
+    assert [(row.label, row.outcome, row.detail, row.status) for row in rows] == [
+        ("Searched the Harmony network", "1 strong, 2 possible of 14", need, "done"),
+        ("Searched the Harmony network", "2 possible fits of 14", need, "done"),
+        ("Searched the Harmony network", "No fits among 14", need, "done"),
+        ("Searching the Harmony network…", None, need, "running"),
+        ("Searched your organization's knowledge", "2 matches", "argon holder", "done"),
+        ("Searched your organization's knowledge", "No matches", "XPS", "done"),
+        ("Searching your organization's knowledge", None, "XRD", "running"),
     ]
 
 
@@ -755,7 +819,9 @@ async def test_request_status_shows_the_latest_line_and_only_the_requesters_summ
         await uow.commit()
     assert await participant() == "replied"
     async with unit_of_work(db_sessionmaker, world_id) as uow:
-        await threads.set_state(uow, thread_id, "closed")
+        await threads.set_state(
+            uow, thread_id, "closed", end_reason="closed", closed_by="requester"
+        )
         for side, summary in (("requester", "Booked Nov 4."), ("responder", "Sold a slot.")):
             uow.session.add(
                 RepSession(

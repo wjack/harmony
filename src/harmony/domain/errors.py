@@ -65,6 +65,24 @@ class InvalidRoute(HarmonyError):
     assignee."""
 
 
+class SteerConflict(HarmonyError):
+    """A steer id already stored with different content: one client reused its key for
+    different text (422). The class name is `payloads.STEER_CONFLICT_ERROR`."""
+
+    def __init__(self, steer_id: UUID) -> None:
+        super().__init__(f"steer {steer_id} was already recorded with different content")
+        self.steer_id = steer_id
+
+
+class ReopenConflict(HarmonyError):
+    """A reopened run found its thread not ready for it: live, or ended at another run,
+    or still wrapping up (REOPEN.md §4.4). The reopen route's checks make it a bug."""
+
+    def __init__(self, thread_id: UUID, reason: str) -> None:
+        super().__init__(f"thread {thread_id} can't be reopened: {reason}")
+        self.thread_id = thread_id
+
+
 class SettingsConflict(HarmonyError):
     """A settings write lost to another (its version is stale), or would add a trusted
     organization twice (409)."""
@@ -77,5 +95,7 @@ __all__ = [
     "InvalidRoute",
     "NotAdmin",
     "NotInOrg",
+    "ReopenConflict",
     "SettingsConflict",
+    "SteerConflict",
 ]

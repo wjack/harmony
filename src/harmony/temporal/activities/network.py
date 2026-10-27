@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Final
 from uuid import UUID
 
@@ -31,8 +31,9 @@ from temporalio.service import RPCError, RPCStatusCode
 from harmony.agents import consult as answerer
 from harmony.agents import context
 from harmony.agents.keys import chat_key
-from harmony.agents.models import CardResolution, EscalationResolution, RequestStatus
+from harmony.agents.models import CardResolution, EscalationResolution
 from harmony.agents.runtime import OwedResult
+from harmony.agents.tools.internal import declined_result, sent_result
 from harmony.db import repo
 from harmony.db.models import (
     Card,
@@ -44,9 +45,19 @@ from harmony.db.models import (
     Org,
     Thread,
 )
-from harmony.db.models.choices import FailureReason, Side, ThreadState
+from harmony.db.models.choices import EndReason, FailureReason, Side, SteerFailure, ThreadState
 from harmony.db.uow import UnitOfWork, unit_of_work
-from harmony.domain import cards, consults, conversations, escalations, notes, requests, threads
+from harmony.domain import (
+    cards,
+    consults,
+    conversations,
+    escalations,
+    notes,
+    reopens,
+    requests,
+    steers,
+    threads,
+)
 from harmony.domain.errors import (
     CardNotPending,
     ConsultNotOpen,
@@ -54,6 +65,8 @@ from harmony.domain.errors import (
     InvalidRoute,
     NotAdmin,
     NotInOrg,
+    ReopenConflict,
+    SteerConflict,
 )
 from harmony.temporal.policies import ensure_world_live
 from harmony.temporal.start import start_world_workflow
@@ -66,6 +79,9 @@ from harmony.temporal.workflows.payloads import (
     NetworkUpdate,
     Reassigned,
     Reassignment,
+    ReopenInput,
+    SteerRequest,
+    ThreadCarry,
     ThreadInput,
     conversation_workflow_id,
     request_workflow_id,
@@ -81,6 +97,8 @@ DOMAIN_ERRORS: Final = (
     InvalidRoute,
     NotAdmin,
     NotInOrg,
+    ReopenConflict,
+    SteerConflict,
     repo.NotFoundInWorld,
     ValueError,
 )
@@ -152,10 +170,27 @@ class ReassignInput(_Payload):
     reassignment: Reassignment
 
 
-class RedraftFailedInput(_Payload):
+class RecordSteerInput(_Payload):
     world_id: UUID
-    escalation_id: UUID
-    draft_rev: int
+    thread_id: UUID
+    steer: SteerRequest
+    # The rev reserved for the rewrite of the steer's item, if it has one.
+    draft_rev: int | None = None
+
+
+class SteerRecorded(_Payload):
+    # The steer's per-(thread, side) `seq`.
+    seq: int
+    # Its author's name, for the rewrite's prompt.
+    author_name: str
+
+
+class SettleSteerInput(_Payload):
+    world_id: UUID
+    steer_id: UUID
+    # Why a part didn't land, as the workflow saw it: a failed activity's reason, or
+    # `thread_closed` when the thread ended first.
+    failure: SteerFailure | None = None
 
 
 class ThreadStateInput(_Payload):
@@ -163,9 +198,14 @@ class ThreadStateInput(_Payload):
     thread_id: UUID
     state: ThreadState
     side_to_move: Side | None = None
-    # The side that ended the thread (a refusal): when this call ends it, the other
-    # side is queued the `closed` notice for its last turn. A `close` queues its own.
+    # How the run ended (REOPEN.md §2.1): required with a terminal state.
+    end_reason: EndReason | None = None
+    # The side whose representative ended it (a close, a refusal), stored with it.
     closed_by: Side | None = None
+    # When this call ends the thread, `closed_by`'s counterparty is queued the `closed`
+    # notice for its last turn (a refusal after something crossed). A `close` queues its
+    # own.
+    last_turn: bool = False
     # Why the system ended it, when it did (3.5): stored with the terminal state.
     stop_reason: FailureReason | None = None
 
@@ -179,10 +219,43 @@ class UnsummarizedInput(_Payload):
     reason: FailureReason
 
 
-class RequestStatusInput(_Payload):
+class RecordReopenInput(_Payload):
+    world_id: UUID
+    thread_id: UUID
+    reopen: ReopenInput
+
+
+class BeginReopenInput(_Payload):
+    world_id: UUID
+    thread_id: UUID
+    # The run it starts, with what it starts with.
+    run: int
+    steer_id: UUID
+    deadline_at: datetime | None
+    max_turns: int
+
+
+class FinishRunInput(_Payload):
+    world_id: UUID
+    thread_id: UUID
+    run: int
+    carry: ThreadCarry
+
+
+class EndRoundInput(_Payload):
     world_id: UUID
     request_id: UUID
-    status: RequestStatus
+    # The request workflow's tail, which has seen every first run end.
+    from_workflow: bool
+
+
+class RoundEnded(_Payload):
+    """`end_round`'s result: whether the request is closed, in which round, and the
+    chat to tell when it closed."""
+
+    closed: bool
+    round: int
+    conversation_id: UUID | None
 
 
 class NotifyConversationInput(_Payload):
@@ -358,19 +431,46 @@ class NetworkActivities:
         return Reassigned(escalation_id=change.escalation_id, assignees=assignees)
 
     @activity.defn
-    async def report_redraft_failed(self, failed: RedraftFailedInput) -> None:
-        """`escalations.redraft_failed`. A retry after the commit says it again, which
-        the panel takes the same way."""
-        await ensure_world_live(self._sessionmaker, failed.world_id)
-        async with domain_errors(), unit_of_work(self._sessionmaker, failed.world_id) as uow:
-            await escalations.redraft_failed(uow, failed.escalation_id, failed.draft_rev)
+    async def record_steer(self, record: RecordSteerInput) -> SteerRecorded:
+        """`steers.record` for an Edit: stored `working` at the side's next `seq`.
+        Idempotent; a different body under the same id raises `SteerConflict`."""
+        await ensure_world_live(self._sessionmaker, record.world_id)
+        steer = record.steer
+        async with domain_errors(), unit_of_work(self._sessionmaker, record.world_id) as uow:
+            row = await steers.record(
+                uow,
+                steer_id=steer.steer_id,
+                thread_id=record.thread_id,
+                org_id=steer.org_id,
+                kind="edit",
+                author_member_id=steer.member_id,
+                body=steer.body,
+                escalation_id=steer.escalation_id,
+                draft_text=steer.draft_text,
+                draft_rev=record.draft_rev,
+            )
+            author = await repo.get_required(uow.session, Member, uow.world_id, steer.member_id)
+            recorded = SteerRecorded(seq=row.seq, author_name=author.name)
             await uow.commit()
+        return recorded
+
+    @activity.defn
+    async def settle_steer(self, settle: SettleSteerInput) -> int | None:
+        """`steers.settle`: the steer's outcome, read from the rows its parts wrote. A
+        settled steer, or one that was never stored, is left alone. Returns the steer's
+        `seq`, None when it was never stored."""
+        await ensure_world_live(self._sessionmaker, settle.world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, settle.world_id) as uow:
+            steer = await steers.settle(uow, settle.steer_id, failure=settle.failure)
+            seq = steer.seq if steer is not None else None
+            await uow.commit()
+        return seq
 
     @activity.defn
     async def set_thread_state(self, state: ThreadStateInput) -> None:
         """Move the thread. An ended thread's open escalations are cancelled, and when
-        this call is what ends it, `closed_by`'s counterparty is queued the `closed`
-        notice for its last turn."""
+        this call is what ends it for a `last_turn`, `closed_by`'s counterparty is
+        queued the `closed` notice for that turn."""
         await ensure_world_live(self._sessionmaker, state.world_id)
         async with domain_errors(), unit_of_work(self._sessionmaker, state.world_id) as uow:
             thread = await threads.locked(uow, state.thread_id)
@@ -385,11 +485,13 @@ class NetworkActivities:
                 state.thread_id,
                 state.state,
                 side_to_move=state.side_to_move,
+                end_reason=state.end_reason,
+                closed_by=state.closed_by,
                 stop_reason=state.stop_reason,
             )
             if thread.state in threads.TERMINAL_STATES:
                 await _cancel_open_items(uow, thread)
-            if ending and state.closed_by is not None:
+            if ending and state.last_turn and state.closed_by is not None:
                 await _queue_closed_notice(uow, thread, state.closed_by)
             await uow.commit()
 
@@ -408,11 +510,63 @@ class NetworkActivities:
             await uow.commit()
 
     @activity.defn
-    async def set_request_status(self, status: RequestStatusInput) -> None:
-        await ensure_world_live(self._sessionmaker, status.world_id)
-        async with domain_errors(), unit_of_work(self._sessionmaker, status.world_id) as uow:
-            await requests.set_status(uow, status.request_id, status.status)
+    async def record_reopen(self, record: RecordReopenInput) -> int:
+        """`steers.record` for a reopen, as the API recorded it (a commit that failed
+        after the start leaves it to this). Idempotent; returns the steer's `seq`."""
+        await ensure_world_live(self._sessionmaker, record.world_id)
+        reopen = record.reopen
+        async with domain_errors(), unit_of_work(self._sessionmaker, record.world_id) as uow:
+            row = await steers.record(
+                uow,
+                steer_id=reopen.steer_id,
+                thread_id=record.thread_id,
+                org_id=reopen.org_id,
+                kind="reopen",
+                author_member_id=reopen.member_id,
+                body=reopen.body,
+            )
+            seq = row.seq
             await uow.commit()
+        return seq
+
+    @activity.defn
+    async def begin_reopen(self, begin: BeginReopenInput) -> int:
+        """`reopens.begin`: the thread live again as run `run`, in one transaction once
+        its guidance landed (REOPEN.md §4.4). Returns the run's `start_seq`. Raises
+        `ReopenConflict` when the thread isn't ready for it."""
+        await ensure_world_live(self._sessionmaker, begin.world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, begin.world_id) as uow:
+            start_seq = await reopens.begin(
+                uow,
+                thread_id=begin.thread_id,
+                run=begin.run,
+                steer_id=begin.steer_id,
+                deadline_at=begin.deadline_at,
+                max_turns=begin.max_turns,
+            )
+            await uow.commit()
+        return start_seq
+
+    @activity.defn
+    async def finish_run(self, finish: FinishRunInput) -> None:
+        """`reopens.finish_run`: every run's last activity (REOPEN.md §4.6)."""
+        await ensure_world_live(self._sessionmaker, finish.world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, finish.world_id) as uow:
+            await reopens.finish_run(
+                uow, finish.thread_id, finish.run, finish.carry.model_dump(mode="json")
+            )
+            await uow.commit()
+
+    @activity.defn
+    async def end_round(self, end: EndRoundInput) -> RoundEnded:
+        """`requests.end_round`: close the request once nothing on it is live."""
+        await ensure_world_live(self._sessionmaker, end.world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, end.world_id) as uow:
+            ended = await requests.end_round(uow, end.request_id, from_workflow=end.from_workflow)
+            await uow.commit()
+        return RoundEnded(
+            closed=ended.closed, round=ended.round, conversation_id=ended.conversation_id
+        )
 
     @activity.defn
     async def notify_conversation(self, notify: NotifyConversationInput) -> None:
@@ -497,12 +651,17 @@ async def conversation_input(
 
 
 async def run_update[R](
-    handle: WorkflowHandle[Any, Any], update: str, arg: BaseModel, result_type: type[R]
+    handle: WorkflowHandle[Any, Any],
+    update: str,
+    arg: BaseModel,
+    result_type: type[R],
+    *,
+    id: str | None = None,
 ) -> R:
     """`execute_update` by name with a typed result (the SDK's overloads leave the
-    by-name form partly untyped)."""
+    by-name form partly untyped). An `id` makes a repeated call the same Update."""
     result: R = await handle.execute_update(  # pyright: ignore[reportUnknownMemberType]
-        update, arg, result_type=result_type
+        update, arg, id=id, result_type=result_type
     )
     return result
 
@@ -531,7 +690,8 @@ async def _card_applied(
 ) -> CardResolutionApplied:
     """The resolved card as the paused turn's `tool_result`. A card the chat sent
     without review says so (3.10): Claude learns the send went out unreviewed, or why
-    nothing went out."""
+    nothing went out. A member's Decline reads as a decision (`declined_result`); a
+    message typed while the card waited replaced it, and reads as that message."""
     resolution = cards.resolution_of(card)
     if card.status == "rejected" or resolution is None:
         feedback = resolution.feedback if resolution is not None else None
@@ -542,29 +702,37 @@ async def _card_applied(
                 content=f"Couldn't send: {feedback or 'it was refused'}. Nothing went out.",
                 is_error=True,
             )
+        if resolution is not None and resolution.rejected_with == "decline":
+            member = await _member_name(session, card.world_id, resolution.member_id)
+            content = declined_result(member=member, reason=feedback)
+        else:
+            content = f"rejected: {feedback}" if feedback else "rejected"
         return CardResolutionApplied(
             resolved=CardResolved(card_id=card.id, status=card.status),
             tool_use_id=card.tool_use_id,
-            content=f"rejected: {feedback}" if feedback else "rejected",
+            content=content,
         )
     request = await session.scalar(
         repo.in_world(NetworkRequest, card.world_id).where(NetworkRequest.card_id == card.id)
     )
     request_id = request.id if request is not None else request_id
+    if request_id is None:
+        raise LookupError(f"approved card {card.id} has no request")
     names = await _org_names(
         session,
         card.world_id,
         [r.org_id for r in requests.recipients_of(request)] if request else [],
     )
-    content = (
-        f"Sent without review (this chat's setting): request {request_id} to {', '.join(names)}."
-        if card.auto
-        else f"approved; request {request_id} sent to {', '.join(names)}"
-    )
     return CardResolutionApplied(
         resolved=CardResolved(card_id=card.id, status=card.status, request_id=request_id),
         tool_use_id=card.tool_use_id,
-        content=content,
+        content=sent_result(
+            request_id=request_id,
+            orgs=names,
+            # The chat's owner: the member who approved it, or whose chat sent it.
+            member=await _member_name(session, card.world_id, resolution.member_id),
+            auto=card.auto,
+        ),
     )
 
 
@@ -634,8 +802,6 @@ async def _settle_consult(
                 released_by="member",
                 member_id=resolution.member_id,
             )
-        case "revise":
-            raise ValueError("only a held message can be sent back to be revised")
 
 
 async def _apply_held(
@@ -645,18 +811,20 @@ async def _apply_held(
     applied: ApplyResolutionInput,
     side: Side,
 ) -> None:
-    """A message the representative wrote in *Ask*, held for a person: approved, it goes
-    out as written or as the member edited it, under `escalations.held_message_id`,
-    provenance `agent_approved`; `take_over` sends the member's own message instead;
-    `decline` and `revise` send nothing."""
+    """A message held for a person: approved, the rev the member resolved goes out (as
+    they edited it, if they did) under `escalations.held_message_id`, provenance
+    `agent_approved`, stamped with the representative's turn (rev 1's: a later rev is
+    a steer's rewrite); `take_over` sends the member's own message instead; `decline`
+    sends nothing."""
     resolution = applied.resolution
     text = (resolution.text or "").strip()
     match resolution.action:
         case "approve":
-            draft = await escalations.current_draft(uow.session, escalation)
+            draft = await escalations.resolved_draft(uow.session, escalation, resolution)
             written = text or (draft.answer if draft is not None else "")
             if not written:
                 raise ValueError("an approval needs the message to send")
+            drafted = await escalations.first_draft(uow.session, escalation)
             await threads.append_message(
                 uow,
                 thread.id,
@@ -665,7 +833,7 @@ async def _apply_held(
                 kind="message",
                 body=written,
                 provenance="agent_approved",
-                turn_id=draft.turn_id if draft is not None else None,
+                turn_id=drafted.turn_id if drafted is not None else None,
                 approved_by_member_id=resolution.member_id,
             )
         case "take_over":
@@ -679,7 +847,7 @@ async def _apply_held(
                 provenance="human",
                 author_member_id=resolution.member_id,
             )
-        case "decline" | "revise":
+        case "decline":
             pass
 
 
@@ -701,11 +869,12 @@ async def _resolution_result(
         )
         sent = resolution.action == "take_over"
     elif escalation.kind == "outbound_review":
-        draft = await escalations.current_draft(session, escalation)
-        resolver = await repo.get_required(
-            session, Member, escalation.world_id, resolution.member_id
+        # The representative's own text: what crossed is compared with what it wrote.
+        owed, sent = _held_outcome(
+            resolution,
+            await escalations.first_draft(session, escalation),
+            await escalations.resolved_draft(session, escalation, resolution),
         )
-        owed, sent = _held_outcome(resolution, draft, resolver_name=resolver.name)
     return ResolutionApplied(
         resolved=EscalationResolved(
             escalation_id=escalation.id,
@@ -719,17 +888,20 @@ async def _resolution_result(
 
 
 def _held_outcome(
-    resolution: EscalationResolution, draft: EscalationDraft | None, *, resolver_name: str
+    resolution: EscalationResolution,
+    drafted: EscalationDraft | None,
+    resolved: EscalationDraft | None,
 ) -> tuple[OwedResult, bool]:
-    """A resolved hold's result for the representative, and whether a message reached
-    the counterparty."""
+    """A resolved hold's result for the representative, against what it wrote
+    (`drafted`, rev 1), and whether a message reached the counterparty. `resolved` is
+    the rev the member resolved."""
     content = answerer.held_result(
         resolution.action,
         text=resolution.text or "",
-        drafted=draft.answer if draft is not None else "",
-        member_name=resolver_name,
+        drafted=drafted.answer if drafted is not None else "",
+        resolved=resolved.answer if resolved is not None else "",
     )
-    unsent = resolution.action in ("decline", "revise")
+    unsent = resolution.action == "decline"
     return OwedResult(tool_use_id="", content=content, is_error=unsent), not unsent
 
 
@@ -815,6 +987,10 @@ def _not_open(escalation: Escalation) -> EscalationNotOpen:
     )
 
 
+async def _member_name(session: AsyncSession, world_id: UUID, member_id: UUID) -> str:
+    return (await repo.get_required(session, Member, world_id, member_id)).name
+
+
 async def _org_names(session: AsyncSession, world_id: UUID, org_ids: Sequence[UUID]) -> list[str]:
     if not org_ids:
         return []
@@ -827,16 +1003,23 @@ __all__ = [
     "DOMAIN_ERRORS",
     "REQUEST_LIFETIME",
     "ApplyResolutionInput",
+    "BeginReopenInput",
     "CardResolutionApplied",
     "CardResolutionInput",
+    "EndRoundInput",
+    "FinishRunInput",
     "NetworkActivities",
     "NotifyConversationInput",
     "OpenThreadInput",
     "ReassignInput",
-    "RequestStatusInput",
+    "RecordReopenInput",
+    "RecordSteerInput",
     "ResolutionApplied",
+    "RoundEnded",
+    "SettleSteerInput",
     "SettledCardInput",
     "StartRequestInput",
+    "SteerRecorded",
     "ThreadStateInput",
     "UnsummarizedInput",
     "conversation_input",

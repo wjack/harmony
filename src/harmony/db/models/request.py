@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Index, text
+from sqlalchemy import Index, Integer, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from harmony.db.models.base import (
@@ -49,6 +50,12 @@ class NetworkRequest(CreatedAt, VersionedEntity, Base):
     # Approved recipients, with fit, reason, title, ask and suggested as on the card.
     recipients: Mapped[JsonArray] = mapped_column(server_default=text("'[]'::jsonb"))
     status: Mapped[str] = mapped_column(server_default=text("'active'"))
+    # Starts at 1; a reopened thread moves a closed request to the next round
+    # (REOPEN.md §6.2).
+    round: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    # When the request workflow had opened every recipient and seen every first run end:
+    # from then on, whichever thread ends last closes the request.
+    workflow_done_at: Mapped[datetime | None]
 
 
 class Screening(CreatedAt, WorldScoped, Base):

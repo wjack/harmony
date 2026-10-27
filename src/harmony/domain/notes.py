@@ -1,6 +1,7 @@
 """Internal notes: one org's private side-channel on a thread (§10, UI_REFERENCE §6).
 
-Notes are never visible to the counterparty or in a representative's context.
+Notes are never visible to the counterparty, and no Claude reads them: not the
+representative, not the answerer (docs/design/EDIT.md, summary item 5).
 `@mentions` (member slugs) give the mentioned members `shared` thread access with the
 note as the question.
 

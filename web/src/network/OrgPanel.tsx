@@ -77,6 +77,7 @@ function Property({ label, children }: { label: string; children: ReactNode }) {
 function ThreadRow({
   thread,
   counterpart,
+  parties,
   recipient,
   openable,
   now,
@@ -84,6 +85,8 @@ function ThreadRow({
 }: {
   thread: NetworkEdge;
   counterpart: CanvasOrg;
+  /** The thread's two orgs' names, requester first, as `edgeLabel` takes them. */
+  parties: readonly string[];
   /** The thread's recipient's status, in the words its pill uses. */
   recipient: ParticipantStatus | null;
   openable: boolean;
@@ -91,9 +94,9 @@ function ThreadRow({
   budget: BudgetState;
 }) {
   const status = threadStatus(thread.state, recipient);
-  // An ended thread shows our own closing summary if we wrote one, else why the system
-  // stopped it; a live one, its newest line.
-  const line = edgeStyle(thread.state).ended ? closingLine(thread, budget) : thread.latest_line;
+  // An ended thread shows our own closing summary if we wrote one, else why it ended; a
+  // live one, its newest line.
+  const line = edgeStyle(thread.state).ended ? closingLine(thread, parties, budget) : thread.latest_line;
   const body = (
     <>
       <OrgAvatar name={counterpart.name} seed={counterpart.slug} size={24} />
@@ -292,6 +295,7 @@ export function OrgPanel({
                     key={thread.thread_id}
                     thread={thread}
                     counterpart={counterpart}
+                    parties={[thread.from_org_id, thread.to_org_id].flatMap((orgId) => orgs.get(orgId)?.name ?? [])}
                     recipient={orgs.get(thread.to_org_id)?.participant ?? null}
                     openable={world === "desk" && ours}
                     now={now}

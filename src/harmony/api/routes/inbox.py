@@ -283,9 +283,14 @@ class EscalationText(_View):
     reason: str
 
 
-# A held message (`outbound_review`) waits only because the org reviews every message.
 HELD_MESSAGE_QUESTION: Final = "Review the outgoing message"
+# Why a held message (`outbound_review`) waits, for one whose rev 1 doesn't say.
 HELD_MESSAGE_REASON: Final = "A teammate approves every message in Ask mode."
+
+
+def held_reason(rationale: str | None) -> str:
+    """Why a held message waits: the reason its hold gave (rev 1's `rationale`)."""
+    return rationale or HELD_MESSAGE_REASON
 
 
 async def escalation_texts(
@@ -312,6 +317,22 @@ async def escalation_texts(
         else ()
     )
     short_questions = {draft.escalation_id: draft.short_question for draft in drafts}
+    held = [row.id for row in rows if row.consult_id is None]
+    reasons: dict[UUID, str] = (
+        dict(
+            (
+                await db.execute(
+                    select(EscalationDraft.escalation_id, EscalationDraft.rationale).where(
+                        EscalationDraft.world_id == world_id,
+                        EscalationDraft.escalation_id.in_(held),
+                        EscalationDraft.draft_rev == 1,
+                    )
+                )
+            ).tuples()
+        )
+        if held
+        else {}
+    )
     texts: dict[UUID, EscalationText] = {}
     for row in rows:
         consult = asked.get(row.consult_id) if row.consult_id is not None else None
@@ -322,7 +343,9 @@ async def escalation_texts(
                 reason=release.why_needed(consult),
             )
             if consult is not None
-            else EscalationText(question=HELD_MESSAGE_QUESTION, reason=HELD_MESSAGE_REASON)
+            else EscalationText(
+                question=HELD_MESSAGE_QUESTION, reason=held_reason(reasons.get(row.id))
+            )
         )
     return texts
 

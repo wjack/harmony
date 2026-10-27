@@ -9,6 +9,8 @@ export const WORLD_ID = "6f1c2c1e-0000-4000-8000-000000000001";
 export const SESSION_ID = "6f1c2c1e-0000-4000-8000-0000000000aa";
 export const THREAD_ID = "6f1c2c1e-0000-4000-8000-0000000000b1";
 export const ORG_ID = "6f1c2c1e-0000-4000-8000-0000000000c1";
+/** The member `memberChanged` switches to. */
+export const MEMBER_ID = "6f1c2c1e-0000-4000-8000-0000000000d1";
 
 const CONNECTING = 0;
 const OPEN = 1;
@@ -168,7 +170,7 @@ export function memberChanged(seq: number, epoch: number, sessionId = SESSION_ID
     {
       type: "session.member_changed",
       session_id: sessionId,
-      member_id: "6f1c2c1e-0000-4000-8000-0000000000d1",
+      member_id: MEMBER_ID,
       epoch,
     },
     { ...worldScope, kind: "session", session_id: sessionId },

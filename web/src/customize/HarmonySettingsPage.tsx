@@ -6,6 +6,7 @@ import { useSession } from "../app/queries";
 import { showRail } from "../shell/sidebarStore";
 import { toast } from "../shell/toasts";
 import { Button, Spark } from "../shell/ui";
+import { useMediaQuery } from "../shell/useMediaQuery";
 import {
   isForbidden,
   isStaleSave,
@@ -16,7 +17,7 @@ import {
   useSettingsLive,
 } from "./api";
 import { AutonomyPane } from "./AutonomyPane";
-import { CustomizeNav } from "./CustomizeNav";
+import { CUSTOMIZE_NAV, CustomizeNav } from "./CustomizeNav";
 import {
   afterSave,
   applyEdits,
@@ -100,6 +101,8 @@ interface SettingsBodyProps {
   section: HarmonySection;
   focusOrgId: string | null;
   onSection: (section: HarmonySection) => void;
+  /** Customize's own column is hidden (a narrower window). */
+  compact: boolean;
 }
 
 /** What the save bar says: a failure, else what to know before saving, else nothing. */
@@ -120,7 +123,7 @@ function saveMessages(
   return { problem: invalid ?? failed, notice, clashes: clashing.length > 0 };
 }
 
-function SettingsBody({ view, section, focusOrgId, onSection }: SettingsBodyProps) {
+function SettingsBody({ view, section, focusOrgId, onSection, compact }: SettingsBodyProps) {
   const save = useSaveSettings(view);
   const [edits, setEdits] = useState<DraftEdits>({});
   // Kept here rather than read from the mutation: editing clears the message, and
@@ -180,51 +183,57 @@ function SettingsBody({ view, section, focusOrgId, onSection }: SettingsBodyProp
         meta={listMeta(view, edits)}
         unsaved={unsaved}
         editable={editable}
+        compact={compact}
       />
       {/* `w-0`: the pane takes what's left without its content (a long trusted
           organization's name) widening the app frame past the window. */}
-      <div className="scrollbar-quiet relative flex w-0 min-w-0 flex-1 flex-col overflow-y-auto" aria-label={info.label}>
-        <div className="max-w-[808px] flex-1 px-6 pb-10">
-          <header className="flex min-h-12 items-center gap-2.5 pt-2">
-            <info.Icon size={18} strokeWidth={1.5} className="shrink-0 text-secondary" aria-hidden />
-            <h2 className="min-w-0 flex-1 truncate text-[15px] leading-6 font-semibold text-ink">{info.label}</h2>
-          </header>
-          <p className="max-w-[680px] text-[13px] leading-5 text-secondary">{info.description}</p>
-          {!editable && (
-            <Callout icon={<Lock size={14} strokeWidth={1.75} />} className="mt-4">
+      <div className="flex w-0 min-w-0 flex-1 flex-col">
+        {/* Above the scroll area, so a viewer never scrolls the reason away. */}
+        {!editable && (
+          <div className="max-w-[808px] shrink-0 px-6 pt-3">
+            <Callout icon={<Lock size={14} strokeWidth={1.75} />}>
               Only admins can change these settings. Ask {adminNames(view)} if something needs to change.
             </Callout>
-          )}
-          <div className="mt-4">
-            <Pane
-              section={section}
-              focusOrgId={focusOrgId}
-              view={view}
-              draft={draft}
-              edit={edit}
-              editable={editable}
-              onSection={onSection}
-            />
           </div>
-        </div>
-        {(changed.length > 0 || messages.problem !== null) && editable && (
-          <SaveBar
-            problem={messages.problem}
-            notice={messages.notice}
-            saving={saving}
-            blocked={invalid !== null || changed.length === 0}
-            notifiesLive={touchesPrompt(changed) || touchesSharing(changed)}
-            onCancel={onCancel}
-            onSave={onSave}
-            onUseTheirs={
-              messages.clashes
-                ? () => {
-                    setEdits((current) => dropConflicts(view, current));
-                  }
-                : undefined
-            }
-          />
         )}
+        <div className="scrollbar-quiet relative flex min-h-0 flex-1 flex-col overflow-y-auto" aria-label={info.label}>
+          <div className="max-w-[808px] flex-1 px-6 pb-10">
+            <header className="flex min-h-12 items-center gap-2.5 pt-2">
+              <info.Icon size={18} strokeWidth={1.5} className="shrink-0 text-secondary" aria-hidden />
+              <h2 className="min-w-0 flex-1 truncate text-[15px] leading-6 font-semibold text-ink">{info.label}</h2>
+            </header>
+            <p className="max-w-[680px] text-[13px] leading-5 text-secondary">{info.description}</p>
+            <div className="mt-4">
+              <Pane
+                section={section}
+                focusOrgId={focusOrgId}
+                view={view}
+                draft={draft}
+                edit={edit}
+                editable={editable}
+                onSection={onSection}
+              />
+            </div>
+          </div>
+          {(changed.length > 0 || messages.problem !== null) && editable && (
+            <SaveBar
+              problem={messages.problem}
+              notice={messages.notice}
+              saving={saving}
+              blocked={invalid !== null || changed.length === 0}
+              notifiesLive={touchesPrompt(changed) || touchesSharing(changed)}
+              onCancel={onCancel}
+              onSave={onSave}
+              onUseTheirs={
+                messages.clashes
+                  ? () => {
+                      setEdits((current) => dropConflicts(view, current));
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </div>
       </div>
     </>
   );
@@ -261,6 +270,7 @@ export function HarmonySettingsScreen() {
   const section: HarmonySection = isSection(requested) ? requested : "profile";
   // `?org=` names the organization a link came about, e.g. from the Requests inbox.
   const focusOrgId = section === "sharing" ? params.get("org") : null;
+  const navColumn = useMediaQuery(CUSTOMIZE_NAV);
 
   const onSection = (next: HarmonySection) => {
     setParams(
@@ -276,7 +286,7 @@ export function HarmonySettingsScreen() {
 
   return (
     <div className="flex h-full min-h-0 bg-canvas">
-      <CustomizeNav />
+      {navColumn && <CustomizeNav />}
       {settings.data !== undefined ? (
         // A different org (after an account switch) starts from a clean draft.
         <SettingsBody
@@ -285,6 +295,7 @@ export function HarmonySettingsScreen() {
           section={section}
           focusOrgId={focusOrgId}
           onSection={onSection}
+          compact={!navColumn}
         />
       ) : settings.isError ? (
         <LoadError

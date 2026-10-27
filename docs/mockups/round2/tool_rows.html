@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat tool rows</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+  /* The same host tokens docs/mockups/request_view.html reads, filled with UI_REFERENCE §1 values so the file renders on its own. */
+  :root {
+    --surface-0: #FAF9F5; --surface-1: #F5F4EE; --surface-2: #FFFFFF;
+    --border: #E8E6DC; --border-strong: #D9D6CA;
+    --text: #141413; --text-secondary: #3D3D3A; --text-muted: #73726C; --text-faint: #A3A199;
+    --text-accent: #C6613F; --text-success: #2F7D4F; --bg-success: #E6F2EA;
+    --bg-warning: #FBEFD9; --text-warning: #8A5A12; --fill-primary: #141413; --on-primary: #fff;
+    --font-voice: "Source Serif 4", Georgia, serif; --font-ui: Inter, system-ui, sans-serif;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-1); color: var(--text); font-family: var(--font-ui); font-size: 13px; }
+  .page { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 16px; }
+  .panel { min-width: 0; background: var(--surface-0); border: 0.5px solid var(--border); border-radius: 12px; padding: 16px 22px 18px; }
+  .tag { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .voice { font-family: var(--font-voice); font-size: 15.5px; line-height: 1.6; color: var(--text); }
+  .line { display: inline-flex; max-width: 100%; align-items: center; gap: 4px; color: var(--text-muted); font-size: 14px; line-height: 24px; }
+  .shimmer { background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 40%, var(--text-faint) 50%, var(--text-muted) 60%, var(--text-muted) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: sh 2.2s linear infinite; }
+  @keyframes sh { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+  .line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .line > svg { flex: none; }
+  ol { list-style: none; margin: 6px 0 4px 3px; padding: 4px 0 4px 16px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; }
+  li { display: flex; gap: 10px; min-width: 0; }
+  li svg.ic { flex: none; margin-top: 3px; color: var(--text-faint); }
+  .row { min-width: 0; flex: 1; font-size: 13.5px; line-height: 1.5; color: var(--text-muted); }
+  .head { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+  .label { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .outcome { margin-left: auto; white-space: nowrap; color: var(--text-muted); font-size: 12.5px; }
+  .need { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 12.5px; }
+  .spin { animation: rot 1s linear infinite; display: inline-block; vertical-align: -1px; margin-left: 6px; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .note { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin-top: 10px; }
+  .strike { text-decoration: line-through; text-decoration-color: #c9a; }
+  .pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11.5px; font-weight: 500; }
+  h1 { font-family: var(--font-voice); font-weight: 400; font-size: 22px; margin: 0; }
+  .sub { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="radar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="loader" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+</svg>
+<div class="page">
+  <div>
+    <h1>Chat tool rows and the post-send message</h1>
+    <div class="sub">Henderson Lab chat 46131bed…, turn 68e1a810…: two search_network calls (one per need) and one search_org_knowledge, all in seq 3. Numbers are from the stored results (seq 4).</div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="tag">Today (images/9.png)</div>
+      <div class="line"><span class="shimmer">Searched the Harmony network</span><svg width="14" height="14"><use href="#chevd"/></svg></div>
+      <ol>
+        <li><svg class="ic" width="14" height="14"><use href="#radar"/></svg><div class="row"><span class="label">Searched the Harmony network</span><svg class="spin" width="12" height="12"><use href="#loader"/></svg></div></li>
+        <li><svg class="ic" width="14" height="14"><use href="#radar"/></svg><div class="row"><span class="label">Searched the Harmony network</span><svg class="spin" width="12" height="12"><use href="#loader"/></svg></div></li>
+        <li><svg class="ic" width="14" height="14"><use href="#search"/></svg><div class="row"><span class="label">Searched your organization's knowledge</span> · air-sensitive sample holder airtight transfer XRD<svg class="spin" width="12" height="12"><use href="#loader"/></svg></div></li>
+      </ol>
+      <div class="note">Past-tense labels while running; no row says what it searched; the spinners last until the next model response is stored (about 10 s after the tools finished in this run).</div>
+    </div>
+
+    <div class="panel">
+      <div class="tag">Proposed, while the tools run</div>
+      <div class="line"><span class="shimmer">Searching the Harmony network for 2 needs</span><svg width="14" height="14"><use href="#chevd"/></svg></div>
+      <ol>
+        <li><svg class="ic" width="14" height="14"><use href="#radar"/></svg><div class="row"><div class="head"><span class="label">Searching the Harmony network</span><span class="outcome"><svg class="spin" width="12" height="12"><use href="#loader"/></svg></span></div><span class="need">X-ray diffraction (XRD) and SEM/EDS characterization of 14 air-sensitive sodium-ion cathode powders</span></div></li>
+        <li><svg class="ic" width="14" height="14"><use href="#radar"/></svg><div class="row"><div class="head"><span class="label">Searching the Harmony network</span><span class="outcome"><svg class="spin" width="12" height="12"><use href="#loader"/></svg></span></div><span class="need">Fabrication of an airtight sample holder for transferring air-sensitive battery cathode powders to an XRD and SEM instrument</span></div></li>
+        <li><svg class="ic" width="14" height="14"><use href="#search"/></svg><div class="row"><div class="head"><span class="label">Searching your organization's knowledge</span><span class="outcome"><svg class="spin" width="12" height="12"><use href="#loader"/></svg></span></div><span class="need">air-sensitive sample holder airtight transfer XRD</span></div></li>
+      </ol>
+      <div class="note">Present tense while running. The rows flip to done together, as soon as the step's results are stored (runtime change), not when the next response ends.</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="tag">Proposed, done (collapsed)</div>
+      <p class="voice" style="margin:0 0 8px">I'll screen the network for both parts separately, and check our own records for existing holders or prior work with air-sensitive samples.</p>
+      <div class="line"><span>Searched the Harmony network for 2 needs, searched your organization's knowledge</span><svg width="14" height="14"><use href="#chev"/></svg></div>
+      <div class="note">A repeated search_network reads "for 2 needs" (the tool says to run one search per part). If that reads as too strong a claim, "twice" stays.</div>
+    </div>
+
+    <div class="panel">
+      <div class="tag">Proposed, done (expanded)</div>
+      <div class="line"><span>Searched the Harmony network for 2 needs, searched your organization's knowledge</span><svg width="14" height="14"><use href="#chevd"/></svg></div>
+      <ol>
+        <li><svg class="ic" width="14" height="14"><use href="#radar"/></svg><div class="row"><div class="head"><span class="label">Searched the Harmony network</span><span class="outcome">2 possible fits of 14</span></div><span class="need" title="X-ray diffraction (XRD) and SEM/EDS characterization of 14 air-sensitive sodium-ion cathode powders. Samples must be handled under inert atmosphere…">X-ray diffraction (XRD) and SEM/EDS characterization of 14 air-sensitive sodium-ion cathode powders</span></div></li>
+        <li><svg class="ic" width="14" height="14"><use href="#radar"/></svg><div class="row"><div class="head"><span class="label">Searched the Harmony network</span><span class="outcome">1 strong, 2 possible of 14</span></div><span class="need">Fabrication of an airtight sample holder for transferring air-sensitive battery cathode powders to an XRD and SEM instrument</span></div></li>
+        <li><svg class="ic" width="14" height="14"><use href="#search"/></svg><div class="row"><div class="head"><span class="label">Searched your organization's knowledge</span><span class="outcome">2 matches</span></div><span class="need">air-sensitive sample holder airtight transfer XRD</span></div></li>
+      </ol>
+      <div class="note">Line 1: what ran and what it found. Line 2: what it searched for (the need's first sentence, one line, full text on hover). The outcome replaces the spinner, so a finished row needs no extra mark.</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="tag">Today: after Alex approved (seq 7 to 9)</div>
+      <div class="line"><span>Checked on the request</span><svg width="14" height="14"><use href="#chev"/></svg></div>
+      <p class="voice" style="margin:8px 0 0">I sent one request to two providers, and both conversations are open. <span class="strike">Neither has replied yet.</span></p>
+      <p class="voice" style="margin:8px 0 0; color: var(--text-muted)">[two bullets, a privacy note, the near miss] … I'll check back on replies, and I'll bring you any quote or terms that need your sign-off.</p>
+      <div class="note">Claude called get_request_status about 2 s after the request was created and reported that nobody had replied. "I'll check back on replies" is also not what happens: internal Claude is woken only when every conversation has ended (NetworkUpdate kind "closed").</div>
+    </div>
+    <div class="panel">
+      <div class="tag">Proposed (sample text, not model output)</div>
+      <p class="voice" style="margin:0">It's out to Northlake Characterization Core and Ridgeline Fabrication; their progress shows on the request's card.</p>
+      <div class="note">No status check, no "nobody has replied", and no restated asks: one sentence that says it's out. The card above already shows what was sent to whom, and the request card shows each conversation's progress. Claude speaks again when something needs Alex or every conversation has ended.</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

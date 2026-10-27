@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import JsonValue
 
+from harmony.agents import steer
 from harmony.llm import CallKey, ModelRequest, ModelRole
 from harmony.llm.contract import (
     BETA_FALLBACK_LIST,
@@ -115,6 +116,17 @@ def test_every_built_request_satisfies_the_contract(
         assert effort == ROLE_PROFILES[(role, tier)].effort
         assert list(body)[:4] == ["model", "max_tokens", "system", "messages"]
         assert body["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_an_edits_calls_cost_what_the_answerers_do_and_carry_no_tools(tier: Tier) -> None:
+    """EDIT.md §7: the guidance writer and the rewrite are single calls the size of the
+    answerer's, on every org's Edit."""
+    assert ROLE_PROFILES[("steer", tier)] == ROLE_PROFILES[("answerer", tier)]
+    for builder in (steer.guidance_request, steer.rewrite_request):
+        request = builder(key("steer"), tier=tier, prompt="Don't quote Kalrez.")
+        assert request.body["model"] == ROLE_PROFILES[("answerer", tier)].model
+        assert "tools" not in request.body
 
 
 def test_representatives_disable_parallel_tool_use() -> None:

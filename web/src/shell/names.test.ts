@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { members } from "../fixtures/shell";
+import { members, nonAdmin } from "../fixtures/shell";
 import { firstName, initials, memberSubtitle } from "./names";
 import { timeAgo } from "./time";
 
@@ -20,7 +20,8 @@ describe("names", () => {
 
   it("shows the title, or the role when there's none, then the org's short name", () => {
     expect(memberSubtitle(members.helen)).toBe("Core director · Northlake");
-    expect(memberSubtitle({ ...members.raj, title: null })).toBe("Member · Northlake");
+    expect(memberSubtitle({ ...members.raj, title: null })).toBe("Admin · Northlake");
+    expect(memberSubtitle({ ...nonAdmin(members.raj), title: null })).toBe("Member · Northlake");
     expect(memberSubtitle(members.alex)).toBe("PhD student · Henderson Lab");
   });
 });

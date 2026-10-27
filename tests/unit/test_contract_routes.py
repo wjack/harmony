@@ -49,9 +49,9 @@ ROUTES: list[tuple[str, str]] = [
     ("GET", "/api/inbox"),
     ("POST", "/api/escalations/{escalation_id}/resolve"),
     ("POST", "/api/escalations/{escalation_id}/reassign"),
-    ("POST", "/api/escalations/{escalation_id}/redraft"),
     ("GET", "/api/threads/{thread_id}/workspace"),
     ("POST", "/api/threads/{thread_id}/notes"),
+    ("POST", "/api/threads/{thread_id}/steers"),
     ("GET", "/api/orgs/{slug}/harmony"),
     ("PUT", "/api/orgs/{slug}/harmony"),
     ("POST", "/api/orgs/{slug}/trusted-organizations"),
@@ -59,7 +59,27 @@ ROUTES: list[tuple[str, str]] = [
     ("DELETE", "/api/orgs/{slug}/trusted-organizations/{counterparty_org_id}"),
     ("GET", "/api/network"),
     ("GET", "/api/demo/story"),
+    ("GET", "/api/demo/whose"),
 ]
+
+# Round 2's new routes (docs/FEEDBACK_R2_PLAN.md §1.3), with the JSON body each takes,
+# its success status, the body it answers and the problems it documents. Reopen is on
+# P0's threads router, so `ROUTES` doesn't list it.
+R2_ROUTES: dict[tuple[str, str], tuple[str | None, str, str, set[str]]] = {
+    ("POST", "/api/threads/{thread_id}/steers"): (
+        "AddSteer",
+        "202",
+        "SteerStarted",
+        {"403", "404", "409"},
+    ),
+    ("POST", "/api/threads/{thread_id}/reopen"): (
+        "ReopenRequest",
+        "202",
+        "ReopenStarted",
+        {"403", "404", "409"},
+    ),
+    ("GET", "/api/demo/whose"): (None, "200", "DemoWhose", {"404"}),
+}
 
 # Every live-phase route (the "Live phase" section), with the JSON body it takes, its
 # success status and the JSON body it answers: the models L0 fixed while these routes
@@ -147,6 +167,21 @@ def test_live_routes_answer_with_the_typed_bodies_the_contract_fixed() -> None:
         assert [code for code in responses if code.startswith("2")] == [success], where
         assert _json_schema(responses[success].get("content")) == answers, where
         assert "501" not in responses, where
+
+
+def test_round_2_routes_answer_with_the_typed_bodies_the_contract_fixed() -> None:
+    schema = _app().openapi()
+    for (method, template), (takes, success, answers, errors) in R2_ROUTES.items():
+        operation = schema["paths"][template][method.lower()]
+        where = (method, template)
+        assert _json_schema(operation.get("requestBody", {}).get("content")) == takes, where
+        responses: dict[str, Any] = operation["responses"]
+        assert [code for code in responses if code.startswith("2")] == [success], where
+        assert _json_schema(responses[success].get("content")) == answers, where
+        problems = {code for code in responses if code.startswith(("4", "5"))}
+        assert problems - {"401", "422"} == errors, where
+        for code in errors:
+            assert _json_schema(responses[code]["content"]) == "ApiProblem", (where, code)
 
 
 @pytest.mark.parametrize("method", ["GET", "HEAD"])

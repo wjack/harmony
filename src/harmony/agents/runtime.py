@@ -21,25 +21,25 @@ activities). One activity runs one turn's whole loop.
    The exceptions are an `end_turn` answering this turn's own tool results, and a first
    call whose opening asks for no answer (`TurnContext.quiet_opening`): that ends the
    turn (the model had nothing to add after "Sent.").
-3. Nothing is written ahead of a call (§2.2). Once a call is stored, its new input
-   messages and the response are appended to the transcript together, in one
-   transaction, taken from the checkpointed request's own bytes: a retried attempt
-   that reuses a stored call stores exactly what that call sent. A refused call, an
-   incomplete response and a call that raised all consume their input: its user
-   messages are stored without the notices (a stored system message must be followed
-   by a response) and without a response, so the transcript ends on a user message
-   and the next request stays legal.
+3. The opening and the notices are never written ahead of a call (§2.2). Once the
+   run's first call is stored, its new input messages and the response are appended
+   to the transcript together, in one transaction, taken from the checkpointed
+   request's own bytes: a retried attempt that reuses a stored call stores exactly
+   what that call sent. A refused call, an incomplete response and a call that raised
+   all consume their input: its user messages are stored without the notices (a
+   stored system message must be followed by a response) and without a response, so
+   the transcript ends on a user message and the next request stays legal.
 4. Tool calls run in order through `executor`. Non-performative results go back as one
-   `user` message of `tool_result` blocks and the loop continues. A performative
+   `user` message of `tool_result` blocks, stored as soon as the step's calls have run
+   (a chat shows its tools done while Claude reads their results), and the loop
+   continues; the next call sends them from the transcript. A performative
    (`ToolExecution.ends_turn`) stops the turn: its `tool_result` is owed to the side's
    next turn (`TurnOutcome.owed`), and calls after it in the same response are not
    run (they get an error result; after a request sent without review, a further
    `send_network_request` is told to call again now, `NOT_RUN_YET`). A card
    (`CardRaised`) stops the turn as `awaiting_card`; the workflow resumes it with the
-   same turn_id at `next_step`.
-   Results already known when a turn stops (other calls of the stopping step, or the
-   last step's results at `max_steps`) are stored right away, so the next opening
-   only has to carry the owed one.
+   same turn_id at `next_step`. The other results of the stopping step are stored
+   too, so the next opening only has to carry the owed one.
 5. Representatives: `disable_parallel_tool_use` is set by the request builder. A turn
    may send several messages (`send_message` doesn't stop it) and ends when the model
    stops calling tools (R§5). A bare text reply to the turn's opening (its first call)
@@ -54,8 +54,9 @@ activities). One activity runs one turn's whole loop.
 
 Retries. A turn's stored messages are the transcript's tail, tagged with its turn_id
 (`agents.transcript`). A rerun of the same turn picks up where the stored messages
-end: the last stored response is processed again (executors are idempotent), and the
-next call reuses its checkpoint. A call whose error result is already stored keeps it
+end: the last stored response is processed again (executors are idempotent), results
+already stored for it are what the next call sends, and that call reuses its
+checkpoint. A call whose error result is already stored keeps it
 and isn't run again: an error stores no decision to find again, and a guard that reads
 live state (the chat's send mode, its open conversations) could now decide otherwise,
 acting on a call the model was already told failed. Only the run's first call carries
@@ -106,8 +107,8 @@ from harmony.llm.wire import JsonObject, as_object, as_str, canonical_json, obje
 MAX_STEPS: Final = 8
 
 # The representative tools that can stop a turn before the model does (REVISION §5):
-# `consult` until its answer is released, `close` for good, and `send_message` when *Ask*
-# holds the message for a teammate. Otherwise a turn ends when the model stops calling
+# `consult` until its answer is released, `close`, and `send_message` when *Ask* holds
+# the message for a teammate. Otherwise a turn ends when the model stops calling
 # tools.
 PerformativeName = Literal["send_message", "consult", "close"]
 _SEND_NETWORK_REQUEST: Final = "send_network_request"
@@ -552,7 +553,6 @@ class _TurnRun:
 
         step = done
         content: list[JsonObject] | None = None
-        results: list[JsonValue] = []
         refused: dict[str, JsonObject] = {}
         if done > ctx.first_step:
             # An earlier attempt of this run stored step `done - 1`; process it again.
@@ -563,24 +563,25 @@ class _TurnRun:
             if content is None:
                 # Only the turn's first call can come at `max_steps` or later: a resumed
                 # turn must still store and answer the card's result.
-                answer = await self._call(step, results)
+                answer = await self._call(step)
                 if isinstance(answer, TurnOutcome):
                     return answer
                 content = answer
             stopped = await self._process(step, content, refused)
             if isinstance(stopped, TurnOutcome):
                 return stopped
-            results = stopped
             step += 1
+            await self._store_known(step, stopped)
             content = None
             refused = {}
             if step >= ctx.max_steps:
-                await self._store_known(step, results)
                 return self._outcome("max_steps", next_step=step)
 
     # --- One call ---------------------------------------------------------------------
 
-    async def _call(self, step: int, results: list[JsonValue]) -> list[JsonObject] | TurnOutcome:
+    async def _call(self, step: int) -> list[JsonObject] | TurnOutcome:
+        """Make step `step`'s call. Only the run's first call has input to send: a later
+        step's tool results are already stored (`_store_known`)."""
         ctx = self.ctx
         first = step == ctx.first_step
         author = ctx.opening_author_member_id if first else None
@@ -589,8 +590,6 @@ class _TurnRun:
             opening = _user(self.opening)
             if not self._stored_since_last_response(opening):
                 fresh.append(opening)
-        elif self.stored_input_step != step:
-            fresh.append(_user(results))
         if first and ctx.notices:
             fresh.append(WireMessage.of("system", [text_block(ctx.notices)]))
 
@@ -769,7 +768,8 @@ class _TurnRun:
     # --- Storing ----------------------------------------------------------------------
 
     async def _store_known(self, next_step: int, results: list[JsonValue]) -> None:
-        """Store results the turn stops with, unless an earlier attempt stored them."""
+        """Store a step's tool results once its calls have run, unless an earlier attempt
+        stored them."""
         if self.stored_input_step == next_step:
             return
         await self._append([_user(results)], author=None)

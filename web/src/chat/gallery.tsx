@@ -1,8 +1,8 @@
 /**
  * The chat's /__gallery sections: the new-chat screen, Alex's conversation at each stage
  * of the story (over stateful fixtures, so its cards really work), the live demo's
- * variants (sending without review, a spent budget, long text), and each card on its
- * own in every state.
+ * variants (sending without review, a spent budget, a card declined or redrafted), and
+ * each card on its own in every state.
  */
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -14,26 +14,28 @@ import {
   FIRST_REPLY,
   initialState,
   OPENING_MESSAGE,
+  REDRAFT_MESSAGE,
   requestAt,
   TURN,
   type ChatOptions,
   type ChatStage,
+  type Rejection,
 } from "../fixtures/chat";
 import { budgets, members } from "../fixtures/shell";
 import { useFixtureEmit } from "../gallery/fixtureContext";
 import type { GallerySection } from "../gallery/types";
 import { useUnavailable } from "../shell/unavailable";
 import { InlineQuestionCard } from "./cards/InlineQuestionCard";
-import { OutreachApproval } from "./cards/OutreachApproval";
-import { OutreachCard } from "./cards/OutreachCard";
+import { EarlierVersion, OutreachCard, OutreachRecord } from "./cards/OutreachCard";
 import { RequestStatusPanel } from "./cards/RequestStatusCard";
 import { ChatScreen } from "./ChatScreen";
 import { Composer } from "./Composer";
 import { toBlocks, type ActivityItem } from "./items";
 import { ActivityLine, AssistantMessage, StreamingSpark, UserMessage } from "./Messages";
 import { NewChat } from "./NewChat";
-import { initialDraft, type OutreachDraft } from "./outreachDraft";
-import type { ChatItem, ChatItemOf, ChatItemType, SendMode } from "./types";
+import { budgetLine } from "./failureCopy";
+import { initialDraft, partVersions, type OutreachDraft } from "./outreachDraft";
+import type { ChatItem, ChatItemOf, ChatItemType, OutreachCardItem, SendMode } from "./types";
 
 const noop = () => undefined;
 const ALEX = members.alex.id;
@@ -193,7 +195,7 @@ function MessagesSection() {
   return (
     <Column>
       <UserMessage text={first.text} />
-      <ActivityLine items={activityOf("drafted")} />
+      <ActivityLine items={activityOf("drafted")} working={false} />
       <AssistantMessage
         markdown={answer.markdown}
         actions
@@ -206,34 +208,78 @@ function MessagesSection() {
   );
 }
 
-function OutreachApprovalSection({ options = {} }: { options?: ChatOptions }) {
-  const card = itemOf(itemsAt("drafted", {}, options), "outreach_card");
-  const [log, setLog] = useState("Choose an option: nothing is sent from here.");
-  const [feedback, setFeedback] = useState("");
-  const [draft, setDraft] = useState<OutreachDraft>(() => initialDraft(card));
+/** Alex turns the first draft down with a message, and Claude redrafts it. */
+const REDRAFTED: Rejection = { with: "message", text: REDRAFT_MESSAGE };
+/** Alex declines the first draft with a reason. */
+const DECLINED: Rejection = { with: "decline", text: "Not until the PI confirms the budget." };
+
+/** Every outreach card in a fixture conversation, oldest first. */
+function cardsAt(stage: ChatStage, options: ChatOptions = {}): OutreachCardItem[] {
+  return itemsOf(itemsAt(stage, {}, options), "outreach_card");
+}
+
+interface CardPreset {
+  /** Changes to Claude's draft, as if the member had made them. */
+  edit?: (draft: OutreachDraft, card: OutreachCardItem) => OutreachDraft;
+  folded?: boolean;
+  declineOpen?: boolean;
+  blocked?: boolean;
+  options?: ChatOptions;
+}
+
+/** The waiting card on its own, with its own state: what Approve or Decline would send shows under it. */
+function OutreachCardSection({ edit, folded: initiallyFolded = false, declineOpen: open = false, blocked = false, options = {} }: CardPreset) {
+  const items = itemsAt("drafted", {}, options);
+  const card = itemsOf(items, "outreach_card").at(-1);
+  if (card === undefined) throw new Error("no outreach card in the fixture");
+  const sendMode = useLocalSendMode(false);
+  const [draft, setDraft] = useState<OutreachDraft>(() => (edit ?? ((d) => d))(initialDraft(card), card));
+  const [folded, setFolded] = useState(initiallyFolded);
+  const [declineOpen, setDeclineOpen] = useState(open);
+  const [log, setLog] = useState("Nothing is sent from here.");
   return (
-    <div className="mx-auto w-full max-w-[768px]">
-      <OutreachApproval
+    <div>
+      <OutreachCard
         item={card}
-        busy={false}
-        error={null}
+        versions={partVersions(items, card)}
         draft={draft}
         onDraftChange={setDraft}
+        {...sendMode}
+        folded={folded}
+        onFoldChange={setFolded}
+        busy={false}
+        declineOpen={declineOpen}
+        onDeclineOpenChange={setDeclineOpen}
+        declinePending={false}
+        error={null}
+        blocked={blocked ? budgetLine("daily_exhausted") : null}
+        arriving={false}
         onApprove={(body) => {
           setLog(`approve ${JSON.stringify(body)}`);
         }}
-        feedback={feedback}
-        onFeedbackChange={setFeedback}
-        onReject={(feedback) => {
-          setLog(`reject: ${feedback}`);
-        }}
-        onDismiss={() => {
-          setLog("skipped");
+        onDecline={(reason) => {
+          setLog(`decline ${JSON.stringify({ feedback: reason })}`);
         }}
       />
-      <p className="mt-3 font-mono text-[12px] text-muted">{log}</p>
+      <p className="mt-2 font-mono text-[12px] break-all text-muted">{log}</p>
     </div>
   );
+}
+
+/** Alex's edits for the "edited" state: Ridgeline left out, the brief and Northlake's ask reworded. */
+function editedDraft(draft: OutreachDraft, card: OutreachCardItem): OutreachDraft {
+  const [northlake, ridgeline] = card.recipients;
+  const chosen = new Set(draft.chosen);
+  if (ridgeline !== undefined) chosen.delete(ridgeline.org.id);
+  return {
+    ...draft,
+    chosen,
+    brief: draft.brief.replace("with results by Nov 6", "with results by Nov 5"),
+    asks:
+      northlake === undefined
+        ? draft.asks
+        : { ...draft.asks, [northlake.org.id]: (northlake.ask ?? "").replace("by Nov 6", "by Nov 5") },
+  };
 }
 
 function InlineQuestionSection() {
@@ -291,17 +337,33 @@ export default [
     render: () => <StreamingChat />,
   },
   {
-    title: "Chat: outreach approval",
-    description: "The request waits for Alex's OK as the ask-user card. Approving advances the fixture.",
+    title: "Chat: request waiting for you",
+    description:
+      "Claude's request is a card at the end of the chat; the box at the bottom asks what to do differently. Approving advances the fixture.",
     fixtures: chatRoutes("drafted"),
     ...PAGE,
-    height: 860,
+    height: 900,
     render: () => <Chat />,
   },
   {
-    title: "Chat: long brief and asks",
-    description: "The brief and each ask clamp behind View more in the choose and subset views; the edit view's boxes grow.",
-    fixtures: chatRoutes("drafted", { long: true }),
+    title: "Chat: request redrafted",
+    description: "Alex's message turned the first draft down: it folds to an Earlier version row, and Claude's redraft marks what it rewrote.",
+    fixtures: chatRoutes("drafted", { rejected: REDRAFTED }),
+    ...PAGE,
+    height: 900,
+    render: () => <Chat />,
+  },
+  {
+    title: "Chat: request declined",
+    description: "Declined with a reason only Claude in this chat sees: the card folds to a Declined record and Claude says one line.",
+    fixtures: chatRoutes("drafted", { rejected: DECLINED }),
+    ...PAGE,
+    render: () => <Chat />,
+  },
+  {
+    title: "Chat: request waiting, budget used up",
+    description: "The strip sits on the card, not the box: Approve, Decline and the box hold; ticks and wording still work.",
+    fixtures: { ...chatRoutes("drafted"), "GET /api/budget": budgets.dailyExhausted },
     ...PAGE,
     height: 900,
     render: () => <Chat />,
@@ -385,47 +447,83 @@ export default [
   { title: "Messages and activity", render: () => <MessagesSection /> },
   {
     title: "Activity line",
-    description: "Running (shimmer) and finished; click to expand the steps.",
+    description: "A search still running (shimmer), then the finished turn; click either to see each step's outcome and what it searched for.",
     render: () => (
       <Column>
-        <ActivityLine items={activityOf("working")} />
-        <ActivityLine items={activityOf("drafted")} />
+        <ActivityLine items={activityOf("working")} working />
+        <ActivityLine items={activityOf("drafted")} working={false} />
       </Column>
     ),
   },
   {
-    title: "Outreach card",
-    description: "Waiting, sent, and not sent with feedback.",
+    title: "Outreach card: waiting",
     render: () => (
       <Column>
-        <OutreachCard item={itemOf(itemsAt("drafted"), "outreach_card")} />
-        <OutreachCard item={itemOf(itemsAt("sent"), "outreach_card")} />
-        <OutreachCard
-          item={itemOf(itemsAt("drafted", { feedback: "Leave Ridgeline out; we'll make the holder in-house." }), "outreach_card")}
-        />
+        <OutreachCardSection />
       </Column>
     ),
+  },
+  {
+    title: "Outreach card: edited",
+    description: "Ridgeline left out, the brief and Northlake's ask reworded: each changed part says so, with Undo my edits.",
+    render: () => (
+      <Column>
+        <OutreachCardSection edit={editedDraft} />
+      </Column>
+    ),
+  },
+  {
+    title: "Outreach card: rewritten by Claude",
+    description: "Claude's redraft after a message: the parts it changed page back to its earlier wording.",
+    render: () => (
+      <Column>
+        <OutreachCardSection options={{ rejected: REDRAFTED }} />
+      </Column>
+    ),
+  },
+  {
+    title: "Outreach card: folded, declining, budget used up",
+    render: () => (
+      <Column>
+        <OutreachCardSection folded />
+        <OutreachCardSection declineOpen />
+        <OutreachCardSection blocked />
+      </Column>
+    ),
+  },
+  {
+    title: "Outreach card: after the decision",
+    description: "Sent with the member's edits, declined with a reason, and a draft Claude replaced; Show reads each in full.",
+    render: () => {
+      const [replaced] = cardsAt("drafted", { rejected: REDRAFTED });
+      const [sent] = cardsAt("sent");
+      const [declined] = cardsAt("drafted", { rejected: DECLINED });
+      if (replaced === undefined || sent === undefined || declined === undefined) throw new Error("missing card");
+      return (
+        <Column>
+          <OutreachRecord item={sent} sentAt={sent.at} edited />
+          <OutreachRecord item={declined} sentAt={null} />
+          <EarlierVersion item={replaced} />
+        </Column>
+      );
+    },
   },
   {
     title: "Outreach card: sent without review",
     description: "Sending, sent, and not sent with the reason; none waits on the member.",
-    render: () => (
-      <Column>
-        <OutreachCard item={itemOf(itemsAt("drafted", {}, { auto: true }), "outreach_card")} />
-        <OutreachCard item={itemOf(itemsAt("sent", {}, { auto: true }), "outreach_card")} />
-        <OutreachCard
-          item={itemOf(
-            itemsAt("drafted", {}, { auto: true, autoFailure: "Calder Computational wasn't screened as a fit." }),
-            "outreach_card",
-          )}
-        />
-      </Column>
-    ),
-  },
-  { title: "Outreach approval (ask-user card)", render: () => <OutreachApprovalSection /> },
-  {
-    title: "Outreach approval: long brief and asks",
-    render: () => <OutreachApprovalSection options={{ long: true }} />,
+    render: () => {
+      const [sending] = cardsAt("drafted", { auto: true });
+      const [sent] = cardsAt("sent", { auto: true });
+      const [failed] = cardsAt("drafted", { auto: true, autoFailure: "Calder Computational wasn't screened as a fit." });
+      if (sending === undefined || sent === undefined || failed === undefined) throw new Error("missing card");
+      return (
+        <Column>
+          <OutreachRecord item={sending} sentAt={null} />
+          <OutreachRecord item={sent} sentAt={sent.at} />
+          <OutreachRecord item={failed} sentAt={null} />
+        </Column>
+      );
+    },
   },
   {
     title: "Request status",

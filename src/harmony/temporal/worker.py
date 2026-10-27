@@ -188,10 +188,14 @@ def main_activities(deps: WorkerDeps) -> list[Callable[..., Any]]:
         network.apply_resolution,
         network.stored_resolution,
         network.reassign_escalation,
-        network.report_redraft_failed,
+        network.record_steer,
+        network.settle_steer,
         network.set_thread_state,
         network.note_unsummarized,
-        network.set_request_status,
+        network.record_reopen,
+        network.begin_reopen,
+        network.finish_run,
+        network.end_round,
         network.notify_conversation,
     ]
 
@@ -213,7 +217,7 @@ def agent_activities(deps: WorkerDeps) -> AgentActivities | None:
 def model_activities(agents: AgentActivities | None) -> list[Callable[..., Any]]:
     if agents is None:
         return []
-    return [agents.rep_turn, agents.answer_consult]
+    return [agents.rep_turn, agents.answer_consult, agents.write_guidance, agents.rewrite_held]
 
 
 def chat_activities(agents: AgentActivities | None) -> list[Callable[..., Any]]:

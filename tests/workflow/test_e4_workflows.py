@@ -1,8 +1,8 @@
 """The network workflows on the time-skipping test server, with scripted stand-ins for
 their activities (§15): the thread's turn loop, close and the other side's last turn,
 consult escalations and their Updates, messages held for a teammate, the turn cap and
-the deadline, the conversation's card pause, wake-ups and continue-as-new, and the
-request's sliding window.
+the deadline, members' Edits (`steer`), the conversation's card pause, wake-ups and
+continue-as-new, and the request's sliding window.
 
 The stand-ins record every call and answer from a script, so each test reads as the
 sequence of activity calls a workflow makes. Every finished run's history is replayed
@@ -43,7 +43,8 @@ from harmony.agents.runtime import (
     TurnEffect,
     TurnStop,
 )
-from harmony.db.models.choices import BudgetKind, FailureReason, ThreadMessageKind
+from harmony.agents.tools.rep import CUT_OFF_CONSULT, CUT_OFF_HELD
+from harmony.db.models.choices import BudgetKind, FailureReason, Side, ThreadMessageKind
 from harmony.ids import turn_id_for
 from harmony.temporal.activities.agents import (
     AnswerConsultInput,
@@ -51,23 +52,31 @@ from harmony.temporal.activities.agents import (
     ConsultDecision,
     ConsultEscalated,
     ConsultReleased,
+    GuidanceWritten,
     InternalTurnInput,
     InternalTurnResult,
     RepTurnInput,
     RepTurnResult,
+    SteerPartInput,
 )
 from harmony.temporal.activities.network import (
     ApplyResolutionInput,
+    BeginReopenInput,
     CardResolutionApplied,
     CardResolutionInput,
+    EndRoundInput,
+    FinishRunInput,
     NotifyConversationInput,
     OpenThreadInput,
     ReassignInput,
-    RedraftFailedInput,
-    RequestStatusInput,
+    RecordReopenInput,
+    RecordSteerInput,
     ResolutionApplied,
+    RoundEnded,
     SettledCardInput,
+    SettleSteerInput,
     StartRequestInput,
+    SteerRecorded,
     ThreadStateInput,
     UnsummarizedInput,
 )
@@ -87,8 +96,12 @@ from harmony.temporal.workflows.payloads import (
     ESCALATION_NOT_OPEN_ERROR,
     INVALID_RESOLUTION_ERROR,
     NOT_IN_ORG_ERROR,
+    STEER_CONFLICT_ERROR,
+    STEER_RUNNING_ERROR,
+    THREAD_CLOSED_ERROR,
     BudgetExhaustedDetails,
     CardResolved,
+    ConversationCarry,
     ConversationInput,
     ConversationPending,
     EscalationResolved,
@@ -97,9 +110,11 @@ from harmony.temporal.workflows.payloads import (
     NetworkUpdate,
     Reassigned,
     Reassignment,
-    Redraft,
-    RedraftStarted,
+    ReopenInput,
     RequestProgress,
+    SteerRequest,
+    SteerStarted,
+    ThreadCarry,
     ThreadChanged,
     ThreadInput,
     ThreadProgress,
@@ -159,6 +174,15 @@ class Script:
         self.rep_failure: ApplicationError | None = None
         # A failure in place of a decision fails that call.
         self.consults: list[ConsultDecision | ApplicationError] = []
+        # What `write_guidance` returns, one per call: `updated` with the next version
+        # once these run out.
+        self.guidance: list[GuidanceWritten | ApplicationError] = []
+        # The rev each `rewrite_held` call writes.
+        self.rewrites: list[int | ApplicationError | None] = []
+        # Raised by `record_steer` in place of a record, one per call.
+        self.record_errors: list[ApplicationError] = []
+        # The `seq` `settle_steer` reads back for a steer, if it was stored.
+        self.stored_steers: dict[UUID, int] = {}
         # A failure in place of a result fails that turn.
         self.internal: list[InternalTurnResult | ApplicationError] = []
         self.applied: ResolutionApplied | None = None
@@ -174,6 +198,13 @@ class Script:
         self.settled: CardResolutionApplied | None = None
         # Transient failures `set_thread_state` raises before it succeeds.
         self.state_failures = 0
+        # Raised by `record_reopen` / `begin_reopen` in place of a result, one per call.
+        self.record_reopen_errors: list[ApplicationError] = []
+        self.begin_errors: list[ApplicationError] = []
+        # The `start_seq` `begin_reopen` returns.
+        self.start_seq = 7
+        # What `end_round` answers, one per call: closed in round 1 once these run out.
+        self.round_ends: list[RoundEnded] = []
         # Transient failures `start_network_request` raises before it succeeds.
         self.start_failures = 0
         # An activity named here waits for its event before it answers.
@@ -209,6 +240,7 @@ class Script:
     async def rep_turn(self, turn: RepTurnInput) -> RepTurnResult:
         self.calls.append(("rep_turn", turn))
         await self._gate("rep_turn")
+        await self._gate(f"rep_turn {turn.side} {turn.turn}")
         failure = self.rep_errors.get((turn.side, turn.turn), self.rep_failure)
         if failure is not None:
             raise failure
@@ -232,6 +264,26 @@ class Script:
         if isinstance(decision, ApplicationError):
             raise decision
         return decision
+
+    @activity.defn(name="write_guidance")
+    async def write_guidance(self, part: SteerPartInput) -> GuidanceWritten:
+        self.calls.append(("write_guidance", part))
+        await self._gate("write_guidance")
+        if not self.guidance:
+            return GuidanceWritten(outcome="updated", version=len(self.named("write_guidance")))
+        written = self.guidance.pop(0)
+        if isinstance(written, ApplicationError):
+            raise written
+        return written
+
+    @activity.defn(name="rewrite_held")
+    async def rewrite_held(self, part: SteerPartInput) -> int | None:
+        self.calls.append(("rewrite_held", part))
+        await self._gate("rewrite_held")
+        rev = self.rewrites.pop(0)
+        if isinstance(rev, ApplicationError):
+            raise rev
+        return rev
 
     @activity.defn(name="internal_turn")
     async def internal_turn(self, turn: InternalTurnInput) -> InternalTurnResult:
@@ -293,10 +345,20 @@ class Script:
         await self._gate("stored_resolution")
         return self.stored
 
-    @activity.defn(name="report_redraft_failed")
-    async def report_redraft_failed(self, failed: RedraftFailedInput) -> None:
-        self.calls.append(("report_redraft_failed", failed))
-        await self._gate("report_redraft_failed")
+    @activity.defn(name="record_steer")
+    async def record_steer(self, record: RecordSteerInput) -> SteerRecorded:
+        self.calls.append(("record_steer", record))
+        await self._gate("record_steer")
+        if self.record_errors:
+            raise self.record_errors.pop(0)
+        recorded: list[RecordSteerInput] = self.named("record_steer")
+        seq = sum(1 for r in recorded if r.steer.side == record.steer.side)
+        return SteerRecorded(seq=seq, author_name="Helen Park")
+
+    @activity.defn(name="settle_steer")
+    async def settle_steer(self, settle: SettleSteerInput) -> int | None:
+        self.calls.append(("settle_steer", settle))
+        return self.stored_steers.get(settle.steer_id)
 
     @activity.defn(name="reassign_escalation")
     async def reassign_escalation(self, reassign: ReassignInput) -> Reassigned:
@@ -364,9 +426,30 @@ class Script:
             task_queue=MAIN_TASK_QUEUE,
         )
 
-    @activity.defn(name="set_request_status")
-    async def set_request_status(self, status: RequestStatusInput) -> None:
-        self.calls.append(("set_request_status", status))
+    @activity.defn(name="record_reopen")
+    async def record_reopen(self, record: RecordReopenInput) -> int:
+        self.calls.append(("record_reopen", record))
+        if self.record_reopen_errors:
+            raise self.record_reopen_errors.pop(0)
+        return record.reopen.seq
+
+    @activity.defn(name="begin_reopen")
+    async def begin_reopen(self, begin: BeginReopenInput) -> int:
+        self.calls.append(("begin_reopen", begin))
+        if self.begin_errors:
+            raise self.begin_errors.pop(0)
+        return self.start_seq
+
+    @activity.defn(name="finish_run")
+    async def finish_run(self, finish: FinishRunInput) -> None:
+        self.calls.append(("finish_run", finish))
+
+    @activity.defn(name="end_round")
+    async def end_round(self, end: EndRoundInput) -> RoundEnded:
+        self.calls.append(("end_round", end))
+        if self.round_ends:
+            return self.round_ends.pop(0)
+        return RoundEnded(closed=True, round=1, conversation_id=None)
 
 
 @workflow.defn(sandboxed=False)
@@ -418,18 +501,27 @@ async def workers(env: WorkflowEnvironment) -> AsyncIterator[Script]:
             script.apply_resolution,
             script.stored_resolution,
             script.reassign_escalation,
-            script.report_redraft_failed,
+            script.record_steer,
+            script.settle_steer,
             script.apply_card_resolution,
             script.settled_card,
             script.start_network_request,
             script.open_thread,
-            script.set_request_status,
+            script.record_reopen,
+            script.begin_reopen,
+            script.finish_run,
+            script.end_round,
         ],
     )
     model = Worker(
         env.client,
         task_queue=MODEL_TASK_QUEUE,
-        activities=[script.rep_turn, script.answer_consult],
+        activities=[
+            script.rep_turn,
+            script.answer_consult,
+            script.write_guidance,
+            script.rewrite_held,
+        ],
     )
     # Only here: a conversation that scheduled its turn anywhere else would never run it.
     chat = Worker(env.client, task_queue=CHAT_TASK_QUEUE, activities=[script.internal_turn])
@@ -535,6 +627,12 @@ def states(script: Script) -> list[tuple[str, str | None, str | None]]:
     return [(s.state, s.side_to_move, s.closed_by) for s in calls]
 
 
+def endings(script: Script) -> list[tuple[str, str | None, str | None]]:
+    """The terminal `set_thread_state` calls as (state, end_reason, closed_by)."""
+    calls: list[ThreadStateInput] = script.named("set_thread_state")
+    return [(s.state, s.end_reason, s.closed_by) for s in calls if s.state in ("closed", "expired")]
+
+
 def stop_reasons(script: Script) -> list[tuple[str, str | None]]:
     """The terminal `set_thread_state` calls as (state, stop_reason)."""
     calls: list[ThreadStateInput] = script.named("set_thread_state")
@@ -570,6 +668,34 @@ def resolution(
     )
 
 
+def steer_request(
+    side: Side,
+    org_id: UUID,
+    member_id: UUID,
+    *,
+    body: str = "Shorter.",
+    escalation_id: UUID | None = None,
+    draft_text: str | None = None,
+) -> SteerRequest:
+    return SteerRequest(
+        steer_id=uuid4(),
+        side=side,
+        org_id=org_id,
+        member_id=member_id,
+        client_key=uuid4(),
+        body=body,
+        escalation_id=escalation_id,
+        draft_text=draft_text,
+    )
+
+
+async def steer(handle: WorkflowHandle[Any, Any], request: SteerRequest) -> SteerStarted:
+    """The Update as the API sends it, deduplicated by its `update_id`."""
+    return await handle.execute_update(
+        "steer", request, id=request.update_id, result_type=SteerStarted
+    )
+
+
 async def test_turns_alternate_until_a_side_closes_and_the_other_writes_its_summary(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
@@ -602,8 +728,44 @@ async def test_turns_alternate_until_a_side_closes_and_the_other_writes_its_summ
         # Sending handed the move over on the row; only the close is written here, and
         # it names the closer so the other side is told.
         assert states(script) == [("closed", None, "requester")]
+        assert endings(script) == [("closed", "closed", "requester")]
         assert script.named("note_unsummarized") == []
         # The request hears the end once, after the last turn.
+        assert await request_saw(request) == ["closed"]
+        assert script.named("end_round") == []
+        # Last, the run stores what a reopen carries: both `close` calls are owed theirs.
+        assert script.calls[-1][0] == "finish_run"
+        (finished,) = script.named("finish_run")
+        closed = OwedResult(tool_use_id="toolu_close", content="Closed.")
+        assert finished.run == 1
+        assert finished.carry.turns == {"requester": 2, "responder": 2}
+        assert finished.carry.owed == {"requester": [closed], "responder": [closed]}
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_consult_after_a_send_never_holds_the_move(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """Decision 1: Henderson's first turn sends and then consults ("report to Alex").
+    `rep_turn` refuses the consult, so the turn's one effect is the send: nothing waits
+    on Henderson's side and Northlake moves next, where the consult used to hold the
+    thread for Henderson and end in a close before Northlake ever replied."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = Plan(
+            effects=[MessageSent(message_id=uuid4(), message_kind="message")]
+        )
+        script.rep[("responder", 1)] = said()
+        script.rep[("requester", 2)] = said("close")
+        script.rep[("responder", 2)] = said("close")
+        _, handle, request = await start_thread(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 4)
+        assert sides(script)[:2] == [("requester", 1), ("responder", 1)]
+        assert script.named("answer_consult") == []
+        assert states(script) == [("closed", None, "requester")]
         assert await request_saw(request) == ["closed"]
         await stop(request)
         await replays(env, handle)
@@ -667,6 +829,7 @@ async def test_a_requester_turn_that_leaves_nothing_sent_expires_the_thread(
         assert (result.state, result.turns) == ("expired", 2)
         assert sides(script) == [("requester", 1), ("requester", 2)]
         assert states(script) == [("active", "requester", None), ("expired", None, None)]
+        assert endings(script) == [("expired", "unsent", None)]
         assert await request_saw(request) == ["awaiting_principal", "active", "expired"]
         await stop(request)
         await replays(env, handle)
@@ -688,7 +851,7 @@ async def test_two_silent_turns_in_a_row_expire_the_thread(
 
         assert (result.state, result.turns) == ("expired", 3)
         assert sides(script) == [("requester", 1), ("responder", 1), ("requester", 2)]
-        assert states(script)[-1] == ("expired", None, None)
+        assert endings(script) == [("expired", "quiet", None)]
         assert await request_saw(request) == ["expired"]
         await stop(request)
         await replays(env, handle)
@@ -740,6 +903,7 @@ async def test_a_failed_turn_stops_the_thread_with_its_reason(
 
         assert (result.state, result.turns) == ("closed", 2)
         assert stop_reasons(script) == [("closed", reason)]
+        assert endings(script) == [("closed", "stopped", None)]
         assert len(script.named("rep_turn")) == 1 + attempts(failure)
         assert await request_saw(request) == ["closed"]
         await stop(request)
@@ -808,6 +972,7 @@ async def test_a_refused_answer_stops_the_thread_rather_than_asking_a_person(
 
         assert result.state == "closed"
         assert stop_reasons(script) == [("closed", "daily_budget")]
+        assert endings(script) == [("closed", "stopped", None)]
         assert script.named("notify_conversation") == []
         # Waiting on the answer, then ended: nobody was asked.
         assert await request_saw(request) == ["awaiting_principal", "closed"]
@@ -815,65 +980,67 @@ async def test_a_refused_answer_stops_the_thread_rather_than_asking_a_person(
         await replays(env, handle)
 
 
-async def test_a_held_message_sent_back_to_be_rewritten_sends_nothing(
+async def test_an_edit_rewrites_a_held_message_in_place(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
+    """EDIT.md §3.5: the rewrite is rev 2 of the same item, the thread keeps waiting on
+    it, and approving rev 2 sends it. The next turn opens with the new guidance."""
     env = temporal_env_time_skipping
     async with workers(env) as script:
         escalation_id = uuid4()
         script.rep[("requester", 1)] = said()
         script.rep[("responder", 1)] = held(escalation_id)
-        script.rep[("responder", 2)] = said("close")
         script.rep[("requester", 2)] = said("close")
+        script.rep[("responder", 2)] = said("close")
+        script.rewrites = [2]
         _, handle, request = await start_thread(env)
         await eventually(
             lambda: progress(handle),
             lambda p: p.open_escalation_ids == [escalation_id],
             "the held message",
         )
-        # A revise says what to change.
-        cause = await update_error(
-            handle.execute_update(
-                "resolve_escalation", resolution(escalation_id, "revise", HELEN, NORTHLAKE)
-            )
+        edit = steer_request(
+            "responder", NORTHLAKE, HELEN, escalation_id=escalation_id, draft_text="Nov 4?"
         )
-        assert cause.type == INVALID_RESOLUTION_ERROR
-        assert script.named("apply_resolution") == []
+        started = await steer(handle, edit)
+        assert (started.escalation_id, started.draft_rev) == (escalation_id, 2)
+        await eventually(lambda: script.recorded("settle_steer"), bool, "the steer's outcome")
+        (settled,) = script.named("settle_steer")
+        assert (settled.steer_id, settled.failure) == (edit.steer_id, None)
+        (recorded,) = script.named("record_steer")
+        assert (recorded.steer, recorded.draft_rev) == (edit, 2)
+        assert [part.steer_id for part in script.named("rewrite_held")] == [edit.steer_id]
+        assert script.named("answer_consult") == []
+        # Nothing moved while the item waited.
+        assert sides(script) == [("requester", 1), ("responder", 1)]
+        assert (await progress(handle)).open_escalation_ids == [escalation_id]
 
-        note = OwedResult(
-            tool_use_id="",
-            content="Not sent: Helen asked you to change it. Their note is for you only.",
-            is_error=True,
-        )
+        approved = OwedResult(tool_use_id="", content="Sent as your side edited it: ...")
         script.applied = ResolutionApplied(
-            resolved=EscalationResolved(escalation_id=escalation_id, action="revise"),
-            owed=note,
+            resolved=EscalationResolved(
+                escalation_id=escalation_id, action="approve", message_id=uuid4()
+            ),
+            owed=approved,
             side="responder",
+            sent=True,
         )
-        resolved = await handle.execute_update(
+        await handle.execute_update(
             "resolve_escalation",
-            resolution(escalation_id, "revise", HELEN, NORTHLAKE, text="Don't quote a date."),
+            resolution(escalation_id, "approve", HELEN, NORTHLAKE, draft_rev=2),
             result_type=EscalationResolved,
         )
-        assert (resolved.action, resolved.message_id) == ("revise", None)
         result = await handle.result()
 
         assert (result.state, result.turns) == ("closed", 4)
         (applied,) = script.named("apply_resolution")
-        assert (applied.resolution.action, applied.resolution.text) == (
-            "revise",
-            "Don't quote a date.",
-        )
-        # Nothing crossed: the responder rewrites, opening with the note.
-        assert sides(script) == [
-            ("requester", 1),
-            ("responder", 1),
-            ("responder", 2),
-            ("requester", 2),
-        ]
+        assert applied.resolution.draft_rev == 2
         turns: list[RepTurnInput] = script.named("rep_turn")
-        call = f"toolu_{escalation_id.hex[:6]}"
-        assert turns[2].owed == [note.model_copy(update={"tool_use_id": call})]
+        assert [(t.side, t.guidance_version, t.steer_seq) for t in turns] == [
+            ("requester", None, 0),
+            ("responder", None, 0),
+            ("requester", None, 0),
+            ("responder", 1, 1),
+        ]
         await stop(request)
         await replays(env, handle)
 
@@ -892,6 +1059,7 @@ async def test_a_refusal_closes_the_thread_and_the_last_turn_can_only_summarize(
 
         assert (result.state, result.turns) == ("closed", 3)
         assert states(script) == [("closed", None, "responder")]
+        assert endings(script) == [("closed", "stopped", "responder")]
         assert stop_reasons(script) == [("closed", "refused")]
         assert script.named("answer_consult") == []
         assert await request_saw(request) == ["closed"]
@@ -913,7 +1081,11 @@ async def test_a_refusal_before_anything_crossed_never_wakes_the_responder(
 
         assert (result.state, result.turns) == ("closed", 1)
         assert sides(script) == [("requester", 1)]
-        assert states(script) == [("closed", None, None)]
+        # Who refused is stored (only they may reopen it), with no last turn for the
+        # other side.
+        assert endings(script) == [("closed", "stopped", "requester")]
+        calls: list[ThreadStateInput] = script.named("set_thread_state")
+        assert not calls[-1].last_turn
         assert stop_reasons(script) == [("closed", "refused")]
         assert script.named("note_unsummarized") == []
         assert await request_saw(request) == ["closed"]
@@ -963,6 +1135,7 @@ async def test_the_turn_cap_expires_a_thread_and_a_failed_turn_closes_one(
         _, capped, capped_request = await start_thread(env, max_turns=3)
         result = await capped.result()
         assert (result.state, result.turns) == ("expired", 3)
+        assert endings(script)[-1] == ("expired", "turn_limit", None)
         assert await request_saw(capped_request) == ["expired"]
 
         script.rep.clear()
@@ -974,6 +1147,7 @@ async def test_the_turn_cap_expires_a_thread_and_a_failed_turn_closes_one(
         result = await failed.result()
         assert (result.state, result.turns) == ("closed", 2)
         assert states(script) == [("closed", None, None)]
+        assert endings(script) == [("closed", "stopped", None)]
         assert stop_reasons(script) == [("closed", "model_error")]
         for request in (capped_request, failed_request):
             await stop(request)
@@ -1014,20 +1188,11 @@ async def test_an_escalated_consult_waits_for_a_member(
             )
         )
         assert cause.type == INVALID_RESOLUTION_ERROR
-        # Sending back to be rewritten is for a held message, not a consult (3.13 E3b).
-        cause = await update_error(
-            handle.execute_update(
-                "resolve_escalation",
-                resolution(escalation_id, "revise", HELEN, NORTHLAKE, text="Shorter."),
-            )
-        )
-        assert cause.type == INVALID_RESOLUTION_ERROR
 
         script.gates["answer_consult"] = asyncio.Event()
-        started = await handle.execute_update(
-            "redraft",
-            Redraft(escalation_id=escalation_id, instruction="Shorter.", by_member_id=HELEN),
-            result_type=RedraftStarted,
+        started = await steer(
+            handle,
+            steer_request("responder", NORTHLAKE, HELEN, escalation_id=escalation_id),
         )
         assert started.draft_rev == 2
 
@@ -1142,7 +1307,7 @@ def escalated(
     )
 
 
-async def test_an_approval_applies_the_rev_it_names_whatever_was_redrafted(
+async def test_an_approval_applies_the_rev_it_names_whatever_was_rewritten(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
     env = temporal_env_time_skipping
@@ -1162,10 +1327,11 @@ async def test_an_approval_applies_the_rev_it_names_whatever_was_redrafted(
             lambda p: p.open_escalation_ids == [escalation_id],
             "the escalation",
         )
-        await handle.execute_update(
-            "redraft",
-            Redraft(escalation_id=escalation_id, instruction="Use the block.", by_member_id=RAJ),
-            result_type=RedraftStarted,
+        await steer(
+            handle,
+            steer_request(
+                "responder", NORTHLAKE, RAJ, body="Use the block.", escalation_id=escalation_id
+            ),
         )
 
         def approve(**values: Any) -> Awaitable[EscalationResolved]:
@@ -1191,7 +1357,7 @@ async def test_an_approval_applies_the_rev_it_names_whatever_was_redrafted(
         await replays(env, handle)
 
 
-async def test_a_redraft_that_writes_no_draft_is_reported_so_nobody_waits_on_it(
+async def test_a_steer_whose_parts_fail_settles_failed_and_the_item_stays_open(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
     env = temporal_env_time_skipping
@@ -1203,39 +1369,38 @@ async def test_a_redraft_that_writes_no_draft_is_reported_so_nobody_waits_on_it(
         script.rep[("requester", 2)] = said("close")
         script.consults = [
             escalated(consult_id, escalation_id, 1),
-            # The model call fails (a scripted run has no cassette for a redraft).
-            ApplicationError("no cassette entry", non_retryable=True),
-            # The answerer returned no draft.
+            # The answerer returned no draft for rev 2.
             escalated(consult_id, escalation_id, None),
-            escalated(consult_id, escalation_id, 4),
         ]
+        script.guidance = [ApplicationError("overloaded", non_retryable=True)]
         _, handle, request = await start_thread(env)
         await eventually(
             lambda: progress(handle),
             lambda p: p.open_escalation_ids == [escalation_id],
             "the escalation",
         )
+        first = steer_request("responder", NORTHLAKE, RAJ, escalation_id=escalation_id)
+        assert (await steer(handle, first)).draft_rev == 2
+        await eventually(lambda: script.recorded("settle_steer"), bool, "the failed steer")
+        (settled,) = script.named("settle_steer")
+        assert (settled.steer_id, settled.failure) == (first.steer_id, "model_error")
 
-        async def redraft(instruction: str, calls: int) -> int:
-            started = await handle.execute_update(
-                "redraft",
-                Redraft(escalation_id=escalation_id, instruction=instruction, by_member_id=RAJ),
-                result_type=RedraftStarted,
+        # Rev 2 was never written; the item still holds rev 1, and Try again is a new
+        # steer that reserves the next rev.
+        cause = await update_error(
+            handle.execute_update(
+                "resolve_escalation",
+                resolution(escalation_id, "approve", RAJ, NORTHLAKE, draft_rev=2),
             )
-            await eventually(
-                lambda: script.recorded("answer_consult"), lambda c: len(c) == calls, instruction
-            )
-            return started.draft_rev
-
-        def reported() -> list[tuple[UUID, int]]:
-            failed: list[RedraftFailedInput] = script.named("report_redraft_failed")
-            return [(f.escalation_id, f.draft_rev) for f in failed]
-
-        assert await redraft("Shorter.", 2) == 2
-        await eventually(lambda: asyncio.sleep(0, reported()), lambda r: len(r) == 1, "rev 2")
-        assert await redraft("Friendlier.", 3) == 3
-        await eventually(lambda: asyncio.sleep(0, reported()), lambda r: len(r) == 2, "rev 3")
-        assert await redraft("Mention Nov 4.", 4) == 4
+        )
+        assert cause.type == INVALID_RESOLUTION_ERROR
+        script.consults = [escalated(consult_id, escalation_id, 3)]
+        again = steer_request("responder", NORTHLAKE, RAJ, escalation_id=escalation_id)
+        # The first steer's slot frees once its settle returns.
+        assert (await retried_update(lambda: steer(handle, again))).draft_rev == 3
+        await eventually(
+            lambda: script.recorded("settle_steer"), lambda s: len(s) == 2, "the second steer"
+        )
         script.applied = ResolutionApplied(
             resolved=EscalationResolved(escalation_id=escalation_id, action="approve"),
             owed=OwedResult(tool_use_id="", content="We can do Nov 4."),
@@ -1243,13 +1408,190 @@ async def test_a_redraft_that_writes_no_draft_is_reported_so_nobody_waits_on_it(
         )
         await handle.execute_update(
             "resolve_escalation",
-            resolution(escalation_id, "approve", RAJ, NORTHLAKE, draft_rev=4),
+            resolution(escalation_id, "approve", RAJ, NORTHLAKE, draft_rev=3),
             result_type=EscalationResolved,
         )
+        assert (await handle.result()).state == "closed"
+        assert script.named("settle_steer")[1].failure is None
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_an_edit_with_nothing_waiting_guides_the_sides_next_turn(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """EDIT.md §3.6: an Edit never starts a turn, and the side's next turn waits for it
+    and opens with the new guidance. One steer runs per side at a time, and a retried
+    POST (the same Update id) is the same steer."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = said()
+        script.rep[("requester", 2)] = said("close")
+        script.rep[("responder", 2)] = said("close")
+        script.gates["rep_turn"] = asyncio.Event()
+        script.gates["write_guidance"] = asyncio.Event()
+        _, handle, request = await start_thread(env)
+        await eventually(lambda: script.recorded("rep_turn"), bool, "the first turn")
+
+        edit = steer_request("requester", HENDERSON, ALEX, body="Don't name the client.")
+        started = await steer(handle, edit)
+        assert started == SteerStarted(steer_id=edit.steer_id, escalation_id=None, draft_rev=None)
+        assert await steer(handle, edit) == started
+        assert len(script.named("record_steer")) == 1
+        busy = await update_error(
+            steer(handle, steer_request("requester", HENDERSON, uuid4(), body="Be brief."))
+        )
+        assert busy.type == STEER_RUNNING_ERROR
+        assert busy.details == ({"by_member_id": str(ALEX)},)
+        outsider = await update_error(
+            steer(handle, steer_request("requester", NORTHLAKE, HELEN, body="Be brief."))
+        )
+        assert outsider.type == NOT_IN_ORG_ERROR
+
+        # The responder isn't held up; the requester's next turn waits for the steer.
+        script.gates["rep_turn"].set()
+        await eventually(
+            lambda: script.recorded("rep_turn"), lambda turns: len(turns) == 2, "the responder"
+        )
+        assert sides(script) == [("requester", 1), ("responder", 1)]
+        script.gates["write_guidance"].set()
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 4)
+        order = [name for name, _ in script.calls if name in ("settle_steer", "rep_turn")]
+        assert order == ["rep_turn", "rep_turn", "settle_steer", "rep_turn", "rep_turn"]
+        turns: list[RepTurnInput] = script.named("rep_turn")
+        assert [(t.side, t.guidance_version, t.steer_seq) for t in turns[2:]] == [
+            ("requester", 1, 1),
+            ("responder", None, 0),
+        ]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_steer_on_an_item_resolved_meanwhile_is_guidance_only(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """EDIT.md §3.1's re-check: the item is approved while `record_steer` runs."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        consult_id, escalation_id = uuid4(), uuid4()
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = consulting(consult_id)
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 2)] = said("close")
+        script.consults = [escalated(consult_id, escalation_id, 1)]
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: progress(handle),
+            lambda p: p.open_escalation_ids == [escalation_id],
+            "the escalation",
+        )
+        script.gates["record_steer"] = asyncio.Event()
+        edit = steer_request("responder", NORTHLAKE, RAJ, escalation_id=escalation_id)
+        steering = await handle.start_update(
+            "steer",
+            edit,
+            id=edit.update_id,
+            wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+            result_type=SteerStarted,
+        )
+        await eventually(lambda: script.recorded("record_steer"), bool, "the steer's record")
+        script.applied = ResolutionApplied(
+            resolved=EscalationResolved(escalation_id=escalation_id, action="approve"),
+            owed=OwedResult(tool_use_id="", content="We can do Nov 12."),
+            side="responder",
+        )
+        await handle.execute_update(
+            "resolve_escalation",
+            resolution(escalation_id, "approve", RAJ, NORTHLAKE),
+            result_type=EscalationResolved,
+        )
+        script.gates["record_steer"].set()
+        started = await steering.result()
+
+        assert (started.escalation_id, started.draft_rev) == (None, None)
+        assert (await handle.result()).state == "closed"
+        assert len(script.named("answer_consult")) == 1
+        assert [s.steer_id for s in script.named("write_guidance")] == [edit.steer_id]
+        assert [s.steer_id for s in script.named("settle_steer")] == [edit.steer_id]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_steer_that_fails_to_record_is_settled_unless_its_id_was_taken(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = said("close")
+        script.rep[("requester", 2)] = said("close")
+        script.gates["rep_turn"] = asyncio.Event()
+        _, handle, request = await start_thread(env)
+        await eventually(lambda: script.recorded("rep_turn"), bool, "the first turn")
+        script.record_errors = [
+            ApplicationError("the database is down", non_retryable=True),
+            ApplicationError("another body", type=STEER_CONFLICT_ERROR, non_retryable=True),
+        ]
+        # It may have failed after its commit: a row left `working` would never settle.
+        lost = steer_request("requester", HENDERSON, ALEX)
+        script.stored_steers[lost.steer_id] = 1
+        await update_error(steer(handle, lost))
+        await eventually(lambda: script.recorded("settle_steer"), bool, "the settle")
+        # The id is another submission's, which settles itself.
+        taken = steer_request("requester", HENDERSON, ALEX)
+        assert (await update_error(steer(handle, taken))).type == STEER_CONFLICT_ERROR
+        script.gates["rep_turn"].set()
 
         assert (await handle.result()).state == "closed"
-        # Rev 4 was written, so only the two that weren't are reported.
-        assert reported() == [(escalation_id, 2), (escalation_id, 3)]
+        settled: list[SettleSteerInput] = script.named("settle_steer")
+        assert [(s.steer_id, s.failure) for s in settled] == [(lost.steer_id, "model_error")]
+        # Neither ran: no part was written, and no turn waited.
+        assert script.named("write_guidance") == []
+        assert sides(script) == [("requester", 1), ("responder", 1), ("requester", 2)]
+        # It was stored all the same: the side's later turns count it as seen, so their
+        # guard doesn't hold every send for an Edit that failed.
+        turns: list[RepTurnInput] = script.named("rep_turn")
+        assert [t.steer_seq for t in turns] == [0, 0, 1]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_an_edit_that_refuses_a_close_leaves_the_move_with_its_side(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """EDIT.md §3.7: the responder's turn chose to close, but its member's Edit arrived
+    first, so the close was refused and nothing went out. That turn isn't silent: the
+    responder moves again, with the guidance, instead of the requester's turn having
+    nothing new and the thread expiring quiet."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = Plan()
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 2)] = Plan()
+        script.gates["rep_turn responder 1"] = asyncio.Event()
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: script.recorded("rep_turn"), lambda turns: len(turns) == 2, "the responder"
+        )
+        edit = steer_request("responder", NORTHLAKE, HELEN, body="Don't close yet.")
+        await steer(handle, edit)
+        script.gates["rep_turn responder 1"].set()
+        result = await handle.result()
+
+        assert sides(script) == [
+            ("requester", 1),
+            ("responder", 1),
+            ("responder", 2),
+            ("requester", 2),
+        ]
+        assert endings(script) == [("closed", "closed", "responder")]
+        guided: RepTurnInput = script.named("rep_turn")[2]
+        assert (guided.guidance_version, guided.steer_seq) == (1, 1)
+        assert result.state == "closed"
         await stop(request)
         await replays(env, handle)
 
@@ -1404,9 +1746,41 @@ async def test_the_deadline_ends_a_thread_waiting_on_its_principal(
         result = await handle.result()
         assert (result.state, result.turns) == ("expired", 2)
         assert [state for state, _, _ in states(script)] == ["awaiting_principal", "expired"]
+        assert endings(script) == [("expired", "deadline", None)]
         assert (await progress(handle)).open_escalation_ids == []
+        # The consult is owed an answer should the thread be reopened.
+        (finished,) = script.named("finish_run")
+        assert finished.carry.owed["responder"] == [
+            OwedResult(tool_use_id="toolu_consult", content=CUT_OFF_CONSULT)
+        ]
         await stop(request)
         await replays(env, handle)
+
+        script.calls.clear()
+        escalation_id = uuid4()
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = held(escalation_id)
+        _, handle, request = await start_thread(
+            env, deadline_at=(await env.get_current_time()) + timedelta(hours=2)
+        )
+        assert (await handle.result()).state == "expired"
+        (finished,) = script.named("finish_run")
+        assert finished.carry.owed["responder"] == [
+            OwedResult(
+                tool_use_id=f"toolu_{escalation_id.hex[:6]}", content=CUT_OFF_HELD, is_error=True
+            )
+        ]
+        await stop(request)
+        await replays(env, handle)
+
+        # A deadline already past ends the thread before any turn.
+        script.calls.clear()
+        _, handle, request = await start_thread(
+            env, deadline_at=(await env.get_current_time()) - timedelta(minutes=1)
+        )
+        assert (await handle.result()).turns == 0
+        assert endings(script) == [("expired", "deadline", None)]
+        await stop(request)
 
 
 async def test_a_requester_question_shows_inline_and_reassigning_needs_it_open(
@@ -1648,7 +2022,7 @@ async def test_a_state_write_that_keeps_failing_delays_the_thread_without_strand
         await replays(env, handle)
 
 
-async def test_a_redraft_stops_when_its_item_is_resolved(
+async def test_a_rewrite_stops_when_its_item_is_resolved(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
     env = temporal_env_time_skipping
@@ -1665,15 +2039,12 @@ async def test_a_redraft_stops_when_its_item_is_resolved(
             lambda p: p.open_escalation_ids == [escalation_id],
             "the escalation",
         )
-        # The redraft's model call doesn't answer.
+        # The rewrite's model call doesn't answer.
         script.gates["answer_consult"] = asyncio.Event()
-        await handle.execute_update(
-            "redraft",
-            Redraft(escalation_id=escalation_id, instruction="Shorter.", by_member_id=RAJ),
-            result_type=RedraftStarted,
-        )
+        edit = steer_request("responder", NORTHLAKE, RAJ, escalation_id=escalation_id)
+        await steer(handle, edit)
         await eventually(
-            lambda: script.recorded("answer_consult"), lambda calls: len(calls) == 2, "the redraft"
+            lambda: script.recorded("answer_consult"), lambda calls: len(calls) == 2, "the rewrite"
         )
         script.applied = ResolutionApplied(
             resolved=EscalationResolved(escalation_id=escalation_id, action="approve"),
@@ -1688,13 +2059,14 @@ async def test_a_redraft_stops_when_its_item_is_resolved(
 
         assert (await handle.result()).state == "closed"
         assert await cancelled_activities(handle) == ["answer_consult"]
-        # Stopped, not failed: nobody waits on the rev of a resolved item.
-        assert script.named("report_redraft_failed") == []
+        # Stopped, not failed: `settle_steer` finds the item resolved (`settled`).
+        settled: list[SettleSteerInput] = script.named("settle_steer")
+        assert [(s.steer_id, s.failure) for s in settled] == [(edit.steer_id, None)]
         await stop(request)
         await replays(env, handle)
 
 
-async def test_a_redraft_stops_when_the_thread_ends(
+async def test_a_steer_cut_short_by_the_end_of_its_thread_settles_as_closed(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
     env = temporal_env_time_skipping
@@ -1712,19 +2084,17 @@ async def test_a_redraft_stops_when_the_thread_ends(
             "the escalation",
         )
         script.gates["answer_consult"] = asyncio.Event()
-        await handle.execute_update(
-            "redraft",
-            Redraft(escalation_id=escalation_id, instruction="Shorter.", by_member_id=RAJ),
-            result_type=RedraftStarted,
-        )
+        edit = steer_request("responder", NORTHLAKE, RAJ, escalation_id=escalation_id)
+        await steer(handle, edit)
         await eventually(
-            lambda: script.recorded("answer_consult"), lambda calls: len(calls) == 2, "the redraft"
+            lambda: script.recorded("answer_consult"), lambda calls: len(calls) == 2, "the rewrite"
         )
 
-        # Nobody decides and the deadline passes with the redraft still drafting.
+        # Nobody decides and the deadline passes with the rewrite still drafting.
         assert (await handle.result()).state == "expired"
         assert await cancelled_activities(handle) == ["answer_consult"]
-        assert script.named("report_redraft_failed") == []
+        settled: list[SettleSteerInput] = script.named("settle_steer")
+        assert [(s.steer_id, s.failure) for s in settled] == [(edit.steer_id, "thread_closed")]
         await stop(request)
         await replays(env, handle)
 
@@ -1737,10 +2107,7 @@ async def test_the_end_of_a_thread_cancels_what_is_left_in_the_order_it_started(
         consult_id, escalation_id = uuid4(), uuid4()
         script.rep[("requester", 1)] = said()
         script.rep[("responder", 1)] = consulting(consult_id)
-        script.consults = [
-            escalated(consult_id, escalation_id, 1),
-            ApplicationError("overloaded", non_retryable=True),
-        ]
+        script.consults = [escalated(consult_id, escalation_id, 1)]
         deadline = (await env.get_current_time()) + timedelta(seconds=15)
         _, handle, request = await start_thread(env, deadline_at=deadline)
         await eventually(
@@ -1748,16 +2115,11 @@ async def test_the_end_of_a_thread_cancels_what_is_left_in_the_order_it_started(
             lambda p: p.open_escalation_ids == [escalation_id],
             "the escalation",
         )
-        # A redraft fails for real, and its report hangs on the database.
-        script.gates["report_redraft_failed"] = asyncio.Event()
-        await handle.execute_update(
-            "redraft",
-            Redraft(escalation_id=escalation_id, instruction="Shorter.", by_member_id=RAJ),
-            result_type=RedraftStarted,
-        )
-        await eventually(
-            lambda: script.recorded("report_redraft_failed"), bool, "the redraft's report"
-        )
+        # A steer's guidance call hangs.
+        script.gates["write_guidance"] = asyncio.Event()
+        edit = steer_request("responder", NORTHLAKE, RAJ)
+        await steer(handle, edit)
+        await eventually(lambda: script.recorded("write_guidance"), bool, "the guidance call")
         # Then an approval fails, and reading it back hangs too.
         script.gates["stored_resolution"] = asyncio.Event()
         script.apply_errors = [ApplicationError("the database is down", non_retryable=True)]
@@ -1770,7 +2132,211 @@ async def test_the_end_of_a_thread_cancels_what_is_left_in_the_order_it_started(
 
         assert (await handle.result()).state == "expired"
         # Cancelled in the order they started: a replay issues the same commands.
-        assert await cancelled_activities(handle) == ["report_redraft_failed", "stored_resolution"]
+        assert await cancelled_activities(handle) == ["write_guidance", "stored_resolution"]
+        settled: list[SettleSteerInput] = script.named("settle_steer")
+        assert [(s.steer_id, s.failure) for s in settled] == [(edit.steer_id, "thread_closed")]
+        await stop(request)
+        await replays(env, handle)
+
+
+# --- Reopened runs (docs/design/REOPEN.md §4) -----------------------------------------
+
+CLOSED_OWED = OwedResult(tool_use_id="toolu_close", content="Closed.")
+REOPEN_STEER = UUID(int=7)
+
+
+def carried(**overrides: Any) -> ThreadCarry:
+    """What run 1 of a thread the requester closed after two turns each carries."""
+    return ThreadCarry.model_validate(
+        {
+            "turns": {"requester": 2, "responder": 2},
+            "delivered": {"requester": 3, "responder": 2},
+            "consults": {"requester": 0, "responder": 1},
+            "owed": {"requester": [CLOSED_OWED], "responder": [CLOSED_OWED]},
+            **overrides,
+        }
+    )
+
+
+def reopening(side: Side = "requester", *, seq: int = 2) -> ReopenInput:
+    return ReopenInput(
+        steer_id=REOPEN_STEER,
+        side=side,
+        org_id=HENDERSON if side == "requester" else NORTHLAKE,
+        member_id=ALEX if side == "requester" else RAJ,
+        body="Offer them our general capabilities sheet instead.",
+        seq=seq,
+        from_state="closed",
+    )
+
+
+async def start_reopened(
+    env: WorkflowEnvironment, side: Side = "requester", **overrides: Any
+) -> tuple[Thread, WorkflowHandle[Any, Any], WorkflowHandle[Any, Any]]:
+    deadline = (await env.get_current_time()) + timedelta(hours=20)
+    values: dict[str, Any] = {
+        "run": 2,
+        "carry": carried(),
+        "reopen": reopening(side),
+        "max_turns": 4 + 16,
+        "deadline_at": deadline,
+        "guidance": {"responder": 1},
+        "steer_seq": {"requester": 1},
+        **overrides,
+    }
+    return await start_thread(env, **values)
+
+
+def attempt(script: Script) -> list[str]:
+    """The reopen's activities, in order, up to its first turn."""
+    names = [name for name, _ in script.calls]
+    first_turn = names.index("rep_turn") if "rep_turn" in names else len(names)
+    return names[:first_turn]
+
+
+async def test_a_reopen_writes_guidance_then_reopens_and_its_side_moves_first(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.guidance = [GuidanceWritten(outcome="updated", version=2)]
+        script.rep[("requester", 3)] = said()
+        script.rep[("responder", 3)] = said("close")
+        script.rep[("requester", 4)] = said("close")
+        thread, handle, request = await start_reopened(env)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 7)
+        assert attempt(script) == ["record_reopen", "write_guidance", "begin_reopen"]
+        (began,) = script.named("begin_reopen")
+        assert (began.run, began.steer_id, began.max_turns) == (2, REOPEN_STEER, 20)
+        assert sides(script) == [("requester", 3), ("responder", 3), ("requester", 4)]
+        first, answer, last = script.named("rep_turn")
+        # Turn numbers continue, so no run-1 turn id is reused.
+        assert first.turn_id == turn_id_for(thread.world_id, thread.thread_id, HENDERSON, 3)
+        assert (first.reopened, first.guidance_version, first.run_start_seq) == (True, 2, 7)
+        assert first.steer_seq >= 2
+        assert (first.owed, first.deliver_after_seq) == ([CLOSED_OWED], 3)
+        assert (answer.reopened, answer.guidance_version, answer.run_start_seq) == (False, 1, 7)
+        assert last.reopened is False
+        assert endings(script) == [("closed", "closed", "responder")]
+        # A later run never signals the request: it ends the round itself, then finishes.
+        assert await request_saw(request) == []
+        assert [r.from_workflow for r in script.named("end_round")] == [False]
+        assert script.named("notify_conversation") == []
+        assert script.calls[-1][0] == "finish_run"
+        (finished,) = script.named("finish_run")
+        assert finished.run == 2
+        assert finished.carry.turns == {"requester": 4, "responder": 3}
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_reopened_run_gets_its_own_turns_and_closes_the_request_in_its_round(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        conversation_id = uuid4()
+        script.round_ends = [RoundEnded(closed=True, round=2, conversation_id=conversation_id)]
+        script.rep[("requester", 3)] = said()
+        script.rep[("responder", 3)] = said()
+        # Two new turns allowed after the four carried.
+        _, handle, request = await start_reopened(env, max_turns=6)
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("expired", 6)
+        assert endings(script) == [("expired", "turn_limit", None)]
+        notes: list[NotifyConversationInput] = script.named("notify_conversation")
+        assert [(n.conversation_id, n.update.round) for n in notes] == [(conversation_id, 2)]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_responder_reopens_moves_first_and_sending_nothing_ends_it_unsent(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("responder", 3)] = Plan()
+        _, handle, request = await start_reopened(env, "responder")
+        result = await handle.result()
+
+        assert result.state == "expired"
+        assert sides(script) == [("responder", 3)]
+        (turn,) = script.named("rep_turn")
+        assert turn.reopened
+        assert endings(script) == [("expired", "unsent", None)]
+        await stop(request)
+        await replays(env, handle)
+
+
+@pytest.mark.parametrize(
+    ("written", "failure"),
+    [
+        (refused("daily"), "daily_budget"),
+        (GuidanceWritten(outcome="unchanged"), None),
+        (GuidanceWritten(outcome="rejected"), None),
+    ],
+    ids=["budget", "unchanged", "rejected"],
+)
+async def test_a_reopen_whose_guidance_didnt_change_fails_privately(
+    temporal_env_time_skipping: WorkflowEnvironment,
+    written: GuidanceWritten | ApplicationError,
+    failure: str | None,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.guidance = [written]
+        _, handle, request = await start_reopened(env)
+        result = await handle.result()
+
+        # The thread is still closed as it was, and nothing shared was written.
+        assert result.state == "closed"
+        assert attempt(script) == ["record_reopen", "write_guidance", "settle_steer"]
+        settled: list[SettleSteerInput] = script.named("settle_steer")
+        assert [(s.steer_id, s.failure) for s in settled] == [(REOPEN_STEER, failure)]
+        for name in ("begin_reopen", "rep_turn", "set_thread_state", "end_round", "finish_run"):
+            assert script.named(name) == [], name
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_reopen_that_cant_begin_settles_its_steer_failed(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.begin_errors = [
+            ApplicationError("not ready", type="ReopenConflict", non_retryable=True)
+        ]
+        _, handle, request = await start_reopened(env)
+
+        assert (await handle.result()).state == "closed"
+        settled: list[SettleSteerInput] = script.named("settle_steer")
+        assert [(s.steer_id, s.failure) for s in settled] == [(REOPEN_STEER, "reopen_failed")]
+        assert script.named("rep_turn") == script.named("finish_run") == []
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_an_edit_is_refused_until_the_reopen_begins(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.gates["write_guidance"] = asyncio.Event()
+        script.rep[("requester", 3)] = said("close")
+        script.rep[("responder", 3)] = said("close")
+        _, handle, request = await start_reopened(env)
+        await eventually(
+            lambda: script.recorded("write_guidance"), bool, "the reopen's guidance call"
+        )
+
+        error = await update_error(steer(handle, steer_request("responder", NORTHLAKE, RAJ)))
+        assert error.type == THREAD_CLOSED_ERROR
+        script.open_gates()
+        assert (await handle.result()).state == "closed"
         await stop(request)
         await replays(env, handle)
 
@@ -1791,7 +2357,11 @@ def _message(text: str, card_id: UUID | None = None) -> MemberMessage:
 
 
 async def start_chat(
-    env: WorkflowEnvironment, text: str = "Find XRD time.", *, turns_per_run: int = 50
+    env: WorkflowEnvironment,
+    text: str = "Find XRD time.",
+    *,
+    turns_per_run: int = 50,
+    carried: ConversationCarry | None = None,
 ) -> tuple[WorkflowHandle[Any, Any], MemberMessage]:
     world_id, conversation_id = uuid4(), uuid4()
     message = _message(text)
@@ -1804,6 +2374,7 @@ async def start_chat(
             owner_member_id=ALEX,
             cassette_thread="chat:alex:1",
             turns_per_run=turns_per_run,
+            carried=carried or ConversationCarry(),
         ),
         id=conversation_workflow_id(world_id, conversation_id),
         task_queue=MAIN_TASK_QUEUE,
@@ -1913,7 +2484,7 @@ async def test_a_closed_request_wakes_internal_claude(
     env = temporal_env_time_skipping
     async with workers(env) as script:
         request_id = uuid4()
-        script.internal = [_turn("end_turn"), _turn("end_turn")]
+        script.internal = [_turn("end_turn"), _turn("end_turn"), _turn("end_turn")]
         handle, _ = await start_chat(env)
 
         async def taken() -> list[InternalTurnInput]:
@@ -1924,7 +2495,33 @@ async def test_a_closed_request_wakes_internal_claude(
         await handle.signal("network_update", closed)
         turns = await eventually(taken, lambda turns: len(turns) == 2, "the closed turn")
         assert (turns[1].messages, turns[1].network_updates) == ([], [closed])
-        assert (await handle.result()).turns == 2
+        # A repeat of round 1 is dropped; the round a reopen started wakes Claude again.
+        again = NetworkUpdate(request_id=request_id, kind="closed", round=2)
+        await handle.signal("network_update", closed)
+        await handle.signal("network_update", again)
+        turns = await eventually(taken, lambda turns: len(turns) == 3, "the round 2 turn")
+        assert turns[2].network_updates == [again]
+        assert (await handle.result()).turns == 3
+        await replays(env, handle)
+
+
+async def test_requests_closed_before_rounds_count_as_round_1(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        request_id = uuid4()
+        script.internal = [_turn("end_turn"), _turn("end_turn")]
+        handle, _ = await start_chat(
+            env, carried=ConversationCarry(turns=3, closed_request_ids=[request_id])
+        )
+        await eventually(taken(script), lambda turns: len(turns) == 1, "the first turn")
+        again = NetworkUpdate(request_id=request_id, kind="closed", round=2)
+        await handle.signal("network_update", NetworkUpdate(request_id=request_id, kind="closed"))
+        await handle.signal("network_update", again)
+        turns = await eventually(taken(script), lambda turns: len(turns) == 2, "round 2's turn")
+        assert turns[1].network_updates == [again]
+        await handle.result()
         await replays(env, handle)
 
 
@@ -2534,10 +3131,12 @@ async def test_a_request_opens_threads_in_a_window_and_closes_once_all_have_ende
         assert result.status == "closed"
         opened: list[OpenThreadInput] = script.named("open_thread")
         assert [o.responder_org_id for o in opened] == [NORTHLAKE, CALDER]
-        statuses: list[RequestStatusInput] = script.named("set_request_status")
-        assert [s.status for s in statuses] == ["closed"]
+        rounds: list[EndRoundInput] = script.named("end_round")
+        assert [r.from_workflow for r in rounds] == [True]
         notes: list[NotifyConversationInput] = script.named("notify_conversation")
-        assert [(n.conversation_id, n.update.kind) for n in notes] == [(conversation_id, "closed")]
+        assert [(n.conversation_id, n.update.kind, n.update.round) for n in notes] == [
+            (conversation_id, "closed", 1)
+        ]
         final = await request_status(handle)
         assert [(t.responder_org_id, t.state) for t in final.threads] == [
             (NORTHLAKE, "closed"),
@@ -2583,6 +3182,31 @@ async def test_an_ended_thread_stays_ended_and_a_request_without_a_chat_tells_no
         assert script.named("notify_conversation") == []
         for thread_id in (northlake, calder):
             await stop(env.client.get_workflow_handle(thread_workflow_id(world_id, thread_id)))
+
+
+async def test_a_request_with_a_reopened_thread_live_ends_without_closing(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        # A thread was reopened before the workflow's tail: its own run closes the request.
+        script.round_ends = [RoundEnded(closed=False, round=2, conversation_id=None)]
+        handle, world_id = await start_request(env, [NORTHLAKE], conversation_id=uuid4())
+        (opened,) = (
+            await eventually(
+                lambda: request_status(handle), lambda s: len(s.threads) == 1, "the thread"
+            )
+        ).threads
+        await handle.signal(
+            "thread_changed",
+            ThreadChanged(thread_id=opened.thread_id, responder_org_id=NORTHLAKE, state="closed"),
+        )
+
+        assert (await handle.result()).status == "active"
+        assert [r.from_workflow for r in script.named("end_round")] == [True]
+        assert script.named("notify_conversation") == []
+        await stop(env.client.get_workflow_handle(thread_workflow_id(world_id, opened.thread_id)))
+        await replays(env, handle)
 
 
 async def test_a_request_whose_threads_all_stop_on_the_budget_closes_and_wakes_claude_once(

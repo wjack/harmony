@@ -2,7 +2,8 @@
  * The properties rail's activity log ("Claude drafted an answer · 2m"), derived from
  * our side's workspace. Pure, so the wording and order are unit-tested.
  */
-import type { EscalationView, MemberRef, OrgRef, ThreadWorkspace } from "./types";
+import { firstName } from "../shell/names";
+import type { EscalationView, MemberRef, ThreadWorkspace } from "./types";
 
 export interface ActivityEntry {
   id: string;
@@ -20,19 +21,15 @@ function resolutionText(escalation: EscalationView): string {
       return escalation.kind === "consult" ? "declined to answer" : "declined the reply";
     case "take_over":
       return "replied directly";
-    case "revise":
-      return "sent the reply back to Claude";
-    case undefined:
+    default:
       return "resolved the item";
   }
 }
 
-export function buildActivity(workspace: ThreadWorkspace, us: OrgRef): ActivityEntry[] {
+export function buildActivity(workspace: ThreadWorkspace): ActivityEntry[] {
   const entries: ActivityEntry[] = [];
-  const rep = `Claude for ${us.name}`;
 
   for (const consult of workspace.consults) {
-    entries.push({ id: `consult:${consult.id}`, at: consult.created_at, actor: null, text: `${rep} asked the team a question` });
     if (consult.status === "released" && consult.released_at !== null && consult.released_by === "auto") {
       entries.push({ id: `auto:${consult.id}`, at: consult.released_at, actor: null, text: "Claude answered without a teammate" });
     }
@@ -48,11 +45,15 @@ export function buildActivity(workspace: ThreadWorkspace, us: OrgRef): ActivityE
     });
     for (const draft of escalation.drafts) {
       if (draft.draft_rev === 1) continue;
+      const rev = `(rev ${String(draft.draft_rev)})`;
       entries.push({
         id: `draft:${escalation.id}:${String(draft.draft_rev)}`,
         at: draft.created_at,
         actor: null,
-        text: `Claude redrafted ${what} (rev ${String(draft.draft_rev)})`,
+        text:
+          draft.rewritten_by === null
+            ? `Claude redrafted ${what} ${rev}`
+            : `Claude rewrote the draft from ${firstName(draft.rewritten_by.author.name)}'s edit ${rev}`,
       });
     }
     if (escalation.status === "resolved" && escalation.resolved_at !== null) {
@@ -73,12 +74,19 @@ export function buildActivity(workspace: ThreadWorkspace, us: OrgRef): ActivityE
     }
   }
 
+  for (const steer of workspace.steers) {
+    const text = steer.kind === "edit" ? "told Claude what to do differently" : "reopened the conversation";
+    // A reopen that didn't go through changed nothing anyone else saw.
+    if (steer.kind === "reopen" && steer.status !== "done") continue;
+    entries.push({ id: `steer:${steer.id}`, at: steer.created_at, actor: steer.author, text });
+  }
+
   for (const note of workspace.notes) {
     entries.push({
       id: `note:${note.id}`,
       at: note.created_at,
       actor: note.author_kind === "member" ? note.author : null,
-      text: note.author_kind === "member" ? "added an internal note" : "Claude added an internal note",
+      text: note.author_kind === "member" ? "added a comment" : "Claude added a note",
     });
   }
 

@@ -1,7 +1,8 @@
 """Cards routes: approve or reject a card in a chat (§5, UI_REFERENCE §4).
 
 - POST /api/cards/{card_id}/approve {recipients?, brief?, asks?}: approve, with edits
-- POST /api/cards/{card_id}/reject {feedback}: reject with feedback for Claude
+- POST /api/cards/{card_id}/reject {feedback?}: decline, with an optional reason only
+  Claude in that chat reads
 
 Both run the `ConversationWorkflow.resolve_card` Update with a `CardResolution` built
 from the body and the acting member, and return once it's stored: approving the
@@ -55,7 +56,8 @@ class ApproveCard(BaseModel):
 
 
 class RejectCard(BaseModel):
-    feedback: str = Field(min_length=1, max_length=4000)
+    # The member's reason for declining, if they gave one.
+    feedback: str | None = Field(default=None, min_length=1, max_length=4000)
 
 
 _ERRORS = (status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT)
@@ -86,7 +88,11 @@ async def reject_card(
 ) -> CardResolved:
     card, conversation = await _pending_card(services, actor, card_id)
     resolution = CardResolution(
-        card_id=card.id, decision="reject", member_id=actor.member_id, feedback=body.feedback
+        card_id=card.id,
+        decision="reject",
+        member_id=actor.member_id,
+        feedback=body.feedback,
+        rejected_with="decline",
     )
     return await _resolve(services, actor, conversation, resolution)
 

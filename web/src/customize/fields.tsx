@@ -7,8 +7,17 @@ import { useId, type ReactNode, type TextareaHTMLAttributes, type InputHTMLAttri
 
 import { cx } from "../shell/ui";
 
-export const FIELD =
-  "w-full rounded-control border border-border-strong bg-surface px-3 text-sm leading-5 text-ink transition-colors outline-none placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/15 focus-visible:outline-none disabled:bg-canvas disabled:text-secondary disabled:placeholder:text-transparent";
+/**
+ * A control a viewer can't change (a non-admin's pane): no white fill or strong border,
+ * so it reads as a value rather than an input.
+ */
+export const DISABLED_CONTROL =
+  "disabled:cursor-default disabled:border-border disabled:bg-transparent disabled:text-secondary";
+
+const FIELD = cx(
+  "w-full rounded-control border border-border-strong bg-surface px-3 text-sm leading-5 text-ink transition-colors outline-none placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/15 focus-visible:outline-none disabled:placeholder:text-transparent",
+  DISABLED_CONTROL,
+);
 
 interface SectionProps {
   title: ReactNode;

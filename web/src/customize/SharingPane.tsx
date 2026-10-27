@@ -120,7 +120,10 @@ export function SharingPane({ view, draft, edit, editable, focusOrgId }: Sharing
     .map(([orgId, row]) => ({ org: orgs.get(orgId) ?? { id: orgId, slug: orgId, name: "Another organization" }, row }))
     .sort((a, b) => byName(a.org, b.org));
   const addable = [...orgs.values()].filter((org) => !(org.id in draft.trusted)).sort(byName);
-  const focusOrg = focusOrgId === null || focusOrgId in draft.trusted ? null : (orgs.get(focusOrgId) ?? null);
+  // The org a link named, when it isn't trusted yet: an admin is invited to add it. A
+  // viewer can't, so nothing suggests it.
+  const focusOrg =
+    !editable || focusOrgId === null || focusOrgId in draft.trusted ? null : (orgs.get(focusOrgId) ?? null);
 
   const setRow = (orgId: string, row: TrustedDraft | null) => {
     const rest = Object.fromEntries(Object.entries(draft.trusted).filter(([id]) => id !== orgId));
@@ -188,16 +191,14 @@ export function SharingPane({ view, draft, edit, editable, focusOrgId }: Sharing
               <span className="min-w-0 flex-1">
                 To share more with {focusOrg.name} than with everyone, add them as a trusted organization.
               </span>
-              {editable && (
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    add(focusOrg.id);
-                  }}
-                >
-                  Add {focusOrg.name}
-                </Button>
-              )}
+              <Button
+                size="sm"
+                onClick={() => {
+                  add(focusOrg.id);
+                }}
+              >
+                Add {focusOrg.name}
+              </Button>
             </div>
           </Callout>
         )}

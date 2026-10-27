@@ -4,7 +4,7 @@ import { THREAD, inboxFor, requestsWorld } from "../fixtures/requests";
 import { members } from "../fixtures/shell";
 import type { WorldView } from "../api/types";
 import { realCalendar, worldCalendar } from "../demo/worldClock";
-import { dateTime, needsLabel, possessive, rowStatus, shortAge, stateLabel, timeLeft } from "./format";
+import { dateTime, endLine, needsLabel, possessive, reasonLine, rowStatus, shortAge, stateLabel, timeLeft } from "./format";
 
 const NOW = Date.parse("2026-10-26T10:30:00Z");
 
@@ -58,9 +58,11 @@ describe("labels", () => {
     expect(stateLabel({ state: "closed", side: "responder", side_to_move: null }, "Henderson Lab")).toBe("Closed");
   });
 
-  it("says a consult on the other side is theirs", () => {
+  it("says it's their move whether their Claude writes or waits on a person, and Closed however it ended", () => {
     const theirs = { state: "awaiting_principal", side: "responder", side_to_move: "requester" } as const;
     expect(stateLabel(theirs, "Henderson Lab")).toBe("Waiting on Henderson Lab");
+    expect(stateLabel({ ...theirs, state: "active" }, "Henderson Lab")).toBe("Waiting on Henderson Lab");
+    expect(stateLabel({ ...theirs, state: "expired", side_to_move: null }, "Henderson Lab")).toBe("Closed");
   });
 
   it("says what an open item asks of the member", () => {
@@ -85,8 +87,43 @@ describe("labels", () => {
     if (shared === undefined) throw new Error("Raj has Helen's shared thread");
     const settled = { ...shared, escalation: null };
     expect(rowStatus({ ...settled, thread_state: "closed", side_to_move: null }, false)).toBe("Closed");
-    expect(rowStatus({ ...settled, thread_state: "expired", side_to_move: null }, false)).toBe("Expired");
-    expect(rowStatus({ ...settled, stop_reason: "paused" }, false)).toBe("Stopped");
+    expect(rowStatus({ ...settled, thread_state: "expired", side_to_move: null }, false)).toBe("Closed");
+    expect(rowStatus({ ...settled, stop_reason: "paused" }, false)).toBe("Closed");
     expect(rowStatus(settled, false)).toBe("Shared by Helen");
+  });
+});
+
+describe("why a run ended", () => {
+  const ending = (endReason: Parameters<typeof reasonLine>[0]["endReason"], closedBy: "requester" | "responder" | null = null) => ({
+    endReason,
+    closedBy,
+    stopReason: null,
+  });
+
+  it("names who closed it from our side: our own Claude, or the counterparty", () => {
+    expect(endLine(ending("closed", "requester"), "responder", "Vantage Market Intelligence", "ok")).toBe(
+      "Vantage Market Intelligence closed it",
+    );
+    expect(endLine(ending("closed", "responder"), "responder", "Vantage Market Intelligence", "ok")).toBe("Claude closed it");
+    expect(endLine(ending("closed", "requester"), "requester", "Northlake", "ok")).toBe("Claude closed it");
+    // A seeded close names nobody.
+    expect(endLine(ending("closed"), "responder", "Vantage Market Intelligence", "ok")).toBeNull();
+  });
+
+  it("gives the reason for each way a run ends without a close", () => {
+    expect(endLine(ending("quiet"), "responder", "Henderson Lab", "ok")).toBe("both sides went quiet");
+    expect(endLine(ending("unsent"), "requester", "Henderson Lab", "ok")).toBe("nothing was sent");
+    expect(endLine(ending("turn_limit"), "responder", "Henderson Lab", "ok")).toBe("it reached its turn limit");
+    expect(endLine(ending("deadline"), "requester", "Henderson Lab", "ok")).toBe("it reached its deadline");
+    expect(endLine(ending(null), "responder", "Henderson Lab", "ok")).toBeNull();
+  });
+
+  it("says why the system stopped it, from what the budget says now", () => {
+    const stopped = { endReason: "stopped" as const, closedBy: null, stopReason: "demo_budget" as const };
+    expect(endLine(stopped, "responder", "Henderson Lab", "demo_exhausted")).toBe("The demo's live-model budget ran out.");
+    expect(endLine({ ...stopped, stopReason: "refused" }, "requester", "Henderson Lab", "ok")).toBe(
+      "Claude declined to continue this conversation.",
+    );
+    expect(reasonLine({ endReason: "stopped", stopReason: null }, null, "ok")).toBeNull();
   });
 });

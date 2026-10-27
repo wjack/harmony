@@ -2,11 +2,12 @@
 (REVISION_UNSTRUCTURED.md §2, §3, §6).
 
 `rep_settings` rows (public summary, instructions) are immutable versions: a change
-writes the next one, and live threads keep the version their sides froze, so each gets
-a `settings` notice. `rep_policy` and `trusted_organizations` are read live at every
-decision, so an edit applies at the next consult; a live thread whose mode or
-applicable sharing descriptions changed gets a `mode` or `sharing` notice, because the
-representative's frozen prompt states what it may pass on (§2).
+writes the next one, and threads keep the version their sides froze, so each gets a
+`settings` notice. `rep_policy` and `trusted_organizations` are read live at every
+decision, so an edit applies at the next consult; a thread whose mode or applicable
+sharing descriptions changed gets a `mode` or `sharing` notice, because the
+representative's frozen prompt states what it may pass on (§2). Ended threads get them
+too: a Reopen gives their representatives another turn, which flushes them.
 
 Members' profiles (what each person handles, in prose) are edited with the rest: the
 answerer reads them live when routing (§6), so a change needs no notice.
@@ -120,7 +121,7 @@ async def update(
     if edit.member_profiles:
         await _set_profiles(uow, org_id, edit.member_profiles)
     if prose and await _new_settings_version(uow, org_id, member_id, prose):
-        for thread in await _live_threads(session, uow.world_id, org_id):
+        for thread in await _notice_threads(session, uow.world_id, org_id):
             await context.queue_notice(
                 uow,
                 thread_id=thread.id,
@@ -341,7 +342,7 @@ async def _new_settings_version(
 
 
 class _Terms(NamedTuple):
-    """What one live thread's representative works under: its mode and the sharing
+    """What one thread's representative works under: its mode and the sharing
     descriptions that apply, as quoted parts."""
 
     mode: Autonomy
@@ -350,16 +351,16 @@ class _Terms(NamedTuple):
 
 @asynccontextmanager
 async def _term_notices(uow: UnitOfWork, org_id: UUID) -> AsyncGenerator[None]:
-    """Run a policy or trusted-organization change, then tell each live thread whose
-    terms it changed."""
+    """Run a policy or trusted-organization change, then tell each thread whose terms it
+    changed."""
     session = uow.session
-    live = await _live_threads(session, uow.world_id, org_id)
-    names = await _counterparty_names(session, uow.world_id, org_id, live)
-    before = await _terms(session, uow.world_id, org_id, live, names)
+    told = await _notice_threads(session, uow.world_id, org_id)
+    names = await _counterparty_names(session, uow.world_id, org_id, told)
+    before = await _terms(session, uow.world_id, org_id, told, names)
     yield
     await session.flush()
-    after = await _terms(session, uow.world_id, org_id, live, names)
-    for thread in live:
+    after = await _terms(session, uow.world_id, org_id, told, names)
+    for thread in told:
         side = threads.side_of(thread, org_id)
         old, new = before[thread.id], after[thread.id]
         if new.mode != old.mode:
@@ -400,14 +401,15 @@ async def _terms(
     return terms
 
 
-async def _live_threads(session: AsyncSession, world_id: UUID, org_id: UUID) -> list[Thread]:
+async def _notice_threads(session: AsyncSession, world_id: UUID, org_id: UUID) -> list[Thread]:
+    """The org's threads whose representative is told of a change: ended ones too, since
+    a Reopen gives it another turn (the notice waits for it)."""
     return list(
         await repo.list_in_world(
             session,
             Thread,
             world_id,
             (Thread.requester_org_id == org_id) | (Thread.responder_org_id == org_id),
-            Thread.state.not_in(threads.TERMINAL_STATES),
         )
     )
 

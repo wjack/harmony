@@ -31,8 +31,14 @@ from harmony.agents.runtime import (
     tool_calls,
     tool_result_block,
 )
-from harmony.agents.transcript import ConversationTranscript, TranscriptConflict, WireMessage
-from harmony.llm import ModelRequest
+from harmony.agents.transcript import (
+    ConversationTranscript,
+    TranscriptConflict,
+    TranscriptRef,
+    WireMessage,
+)
+from harmony.llm import ModelRequest, StreamEventCallback
+from harmony.llm.checkpoint import CheckpointedCall
 from harmony.llm.contract import check_requests
 from harmony.llm.scripted import ScriptedBlock, ScriptedModel, ThinkingBlock
 from harmony.llm.wire import JsonObject, canonical_json
@@ -907,6 +913,73 @@ async def test_a_retried_turn_reuses_its_calls_and_never_duplicates() -> None:
         "user",
         "assistant",
     ]
+
+
+class Watching(Checkpointed):
+    """Records the roles stored in `ref` when each model call is made."""
+
+    def __init__(
+        self,
+        model: ScriptedModel,
+        store: MemoryTranscripts,
+        ref: TranscriptRef,
+        *,
+        fail_once: Sequence[tuple[UUID, int]] = (),
+    ) -> None:
+        super().__init__(model, fail_once=fail_once)
+        self.store, self.ref = store, ref
+        self.seen: list[list[str]] = []
+
+    async def call(
+        self, request: ModelRequest, *, on_stream_event: StreamEventCallback | None = None
+    ) -> CheckpointedCall:
+        self.seen.append(roles(self.store.messages(self.ref)))
+        return await super().call(request, on_stream_event=on_stream_event)
+
+
+async def test_tool_results_are_stored_before_the_next_call_and_only_once() -> None:
+    """A chat shows its tools done as soon as they finish, not once Claude's next
+    response is stored (FEEDBACK_R2_PLAN decision 5); a retry sends the stored results."""
+    chat = conversation()
+    ctx = turn_context(
+        world_id=WORLD,
+        turn=1,
+        turn_id=turn_id(1),
+        opening=opening("Find an XRD lab and a holder."),
+        role="internal",
+        transcript=chat,
+    )
+    steps = {
+        (1, 0): [use("search_network", "toolu_s0"), use("search_network", "toolu_s1")],
+        (1, 1): [say("Two labs fit.")],
+    }
+    store, executor = MemoryTranscripts(), Executor(role="internal")
+    model = Watching(
+        ScriptedModel(cassette(steps, role="internal")),
+        store,
+        chat,
+        fail_once=[(ctx.turn_id, 1)],
+    )
+
+    with pytest.raises(RuntimeError):
+        await run_turn(ctx, executor, model, transcript=store)
+    assert model.seen == [[], ["user", "assistant", "user"]]
+    assert store.messages(chat)[-1].content() == [
+        tool_result_block("toolu_s0", "search_network ok"),
+        tool_result_block("toolu_s1", "search_network ok"),
+    ]
+    appends = store.appends
+
+    outcome = await run_turn(
+        ctx.model_copy(update={"attempt": 2}), executor, model, transcript=store
+    )
+
+    assert outcome.final_text == "Two labs fit."
+    assert roles(store.messages(chat)) == ["user", "assistant", "user", "assistant"]
+    # The retry stored only the response.
+    assert store.appends == appends + 1
+    assert check_requests(model.requests) == []
+    assert unpaired(model.requests) == []
 
 
 class GuardOpensLater(Executor):

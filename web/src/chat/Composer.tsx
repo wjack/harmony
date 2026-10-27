@@ -25,6 +25,8 @@ export interface ComposerProps extends SendModeProps {
   /** A message is on its way: the send button dims and Enter does nothing. */
   sending?: boolean;
   autoFocus?: boolean;
+  /** False while the budget strip sits on a waiting card instead: one strip shows at a time. */
+  budgetStrip?: boolean;
   onUnavailable: (feature: string) => void;
   ref?: Ref<ComposerHandle>;
   className?: string;
@@ -34,8 +36,8 @@ export interface ComposerProps extends SendModeProps {
  * Claude's composer: a white, 20px-radius card with the textarea on top and a row with
  * `+`, the model label and the send button (a voice icon while empty). Enter sends,
  * Shift+Enter starts a new line. While a spend cap stops live turns, a strip on top
- * says which, and nothing can be sent until the budget reads `ok` again (LIVE_DEMO_PLAN
- * 3.5); the draft stays.
+ * says which (unless a waiting card carries it), and nothing can be sent until the
+ * budget reads `ok` again (LIVE_DEMO_PLAN 3.5); the draft stays.
  */
 export function Composer({
   value,
@@ -45,6 +47,7 @@ export function Composer({
   variant = "reply",
   sending = false,
   autoFocus = false,
+  budgetStrip = true,
   onUnavailable,
   sendMode,
   onSendModeChange,
@@ -88,7 +91,7 @@ export function Composer({
 
   return (
     <div className={className}>
-      {blocked !== null && <BudgetStrip line={blocked} />}
+      {blocked !== null && budgetStrip && <BudgetStrip line={blocked} />}
       <form
         onSubmit={(event) => {
           event.preventDefault();

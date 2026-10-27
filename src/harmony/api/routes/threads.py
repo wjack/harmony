@@ -3,6 +3,8 @@
 - GET /api/threads: the acting member's inbox, every thread they can see
 - GET /api/threads/{thread_id}: one thread; 404, never 403, without access
 - POST /api/threads/{thread_id}/share {member_id, question?}: give one teammate access
+- POST /api/threads/{thread_id}/reopen {client_key, as_member_id, body}: start another
+  run of a finished thread (docs/design/REOPEN.md §7.2); answers `ApiProblem`s
 
 Every query goes through `auth.access`, so switching accounts changes what these
 return. List and snapshot responses carry `X-Harmony-Cursor`.
@@ -11,33 +13,54 @@ return. List and snapshot responses carry `X-Harmony-Cursor`.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from harmony.api.deps import SessionmakerDep, documented, read_cursor, set_cursor, snapshot_session
+from harmony.agents.models import MemberRef
+from harmony.api.deps import (
+    ServicesDep,
+    SessionmakerDep,
+    documented,
+    read_cursor,
+    set_cursor,
+    snapshot_session,
+)
+from harmony.api.routes.problems import member_ref, problems, temporal_of
 from harmony.auth.access import access_reasons, get_visible_thread, visible_to
 from harmony.auth.session import Actor, ActorDep
 from harmony.auth.views import OrgRef, org_ref
 from harmony.db import repo
-from harmony.db.models import Member, NetworkRequest, Org, Thread, ThreadAccess, ThreadMessage
+from harmony.db.models import (
+    Member,
+    NetworkRequest,
+    Org,
+    Thread,
+    ThreadAccess,
+    ThreadMessage,
+    ThreadRun,
+)
 from harmony.db.models.choices import (
     AccessReason,
+    EndReason,
     FailureReason,
     Provenance,
+    ReopenBlock,
     Side,
     ThreadMessageKind,
     ThreadState,
 )
 from harmony.db.uow import unit_of_work
-from harmony.domain import threads
+from harmony.domain import reopens, threads
 from harmony.errors import WorldRetired
+from harmony.temporal.reopen import start_reopen
+from harmony.temporal.workflows.payloads import STEER_BODY_MAX_CHARS
 
 router = APIRouter(tags=["threads"])
 
@@ -65,6 +88,15 @@ class ThreadSummary(_View):
     access_reason: AccessReason
     access_reasons: list[AccessReason]
     last_activity_at: datetime
+    # The current run: 1, plus one per Reopen.
+    run: int
+    # How the current run ended; None while it runs, and on rows ended before Reopen.
+    end_reason: EndReason | None
+    ended_at: datetime | None
+    # The side whose representative closed it, when `end_reason` is `closed`.
+    closed_by: Side | None
+    # When the run's workflows finished their wrap-up; Reopen waits for it.
+    run_finished_at: datetime | None
     version: int
 
 
@@ -89,6 +121,41 @@ class ThreadAccessView(_View):
     question: str | None
 
 
+class ReopenOffer(_View):
+    """Whether the acting member's side may reopen the thread now."""
+
+    state: Literal["allowed", "wrapping_up", "blocked"]
+    # Why not, when `blocked`.
+    block: ReopenBlock | None
+
+
+class RunReopened(_View):
+    """Who started a run after the first: the org, and the member and steer only for
+    the viewer's own side."""
+
+    org: OrgRef
+    side: Side
+    by: MemberRef | None
+    steer_id: UUID | None
+
+
+class RunEnded(_View):
+    state: ThreadState
+    end_reason: EndReason
+    closed_by: Side | None
+    stop_reason: FailureReason | None
+    at: datetime
+
+
+class ThreadRunView(_View):
+    run: int
+    started_at: datetime
+    # None for run 1.
+    reopened: RunReopened | None
+    # None while the run runs.
+    ended: RunEnded | None
+
+
 class ThreadDetail(ThreadSummary):
     side_to_move: Side | None
     deadline_at: datetime | None
@@ -97,6 +164,10 @@ class ThreadDetail(ThreadSummary):
     messages: list[ThreadMessageView]
     # Own org only: the other party's access list is theirs.
     access: list[ThreadAccessView]
+    # None while the thread is open.
+    reopen: ReopenOffer | None
+    # Every run that started, oldest first.
+    runs: list[ThreadRunView]
 
 
 class ShareRequest(BaseModel):
@@ -113,6 +184,25 @@ class ShareResult(_View):
     reason: Literal["shared"]
     # False when the member already had this thread shared with them.
     created: bool
+
+
+class ReopenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Makes a retry the same Reopen (the steer's id is minted from it).
+    client_key: UUID
+    # The member the tab shows; 409 `member_changed` when the session has switched.
+    as_member_id: UUID
+    # What the member tells its side's Claude to do with the reopened thread.
+    body: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=STEER_BODY_MAX_CHARS),
+    ]
+
+
+class ReopenStarted(_View):
+    steer_id: UUID
+    thread_id: UUID
 
 
 @router.get("/threads", responses=documented(401, cursor=True))
@@ -157,8 +247,23 @@ async def get_thread(
             )
             .order_by(Member.name, ThreadAccess.reason)
         )
+        side = summary.side
+        runs = await threads.runs(db, actor.world_id, thread_id)
+        reopen_offer = reopens.reopen_offer(
+            thread,
+            runs,
+            side,
+            requester_wrote=await reopens.requester_wrote(db, thread),
+            now=datetime.now(UTC),
+        )
         detail = ThreadDetail(
             **summary.model_dump(),
+            reopen=(
+                ReopenOffer(state=reopen_offer.state, block=reopen_offer.block)
+                if reopen_offer
+                else None
+            ),
+            runs=await _run_views(db, actor, thread, runs),
             side_to_move=thread.side_to_move,
             deadline_at=thread.deadline_at,
             created_at=thread.created_at,
@@ -229,6 +334,105 @@ async def share_thread(
     return ShareResult(thread_id=thread_id, member_id=member.id, reason="shared", created=created)
 
 
+@router.post(
+    "/threads/{thread_id}/reopen",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ReopenStarted,
+    responses=problems(
+        status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT
+    ),
+)
+async def reopen_thread(
+    thread_id: UUID, body: ReopenRequest, actor: ActorDep, services: ServicesDep
+) -> ReopenStarted:
+    """Start another run of a finished thread from the acting member's side.
+
+    409 `member_changed` (with `member`) first, then 404, 403 `not_in_org`, 409
+    `thread_open` (with `reopened_by`), `reopen_in_progress`, `closing_in_progress`,
+    `not_reopenable` (with `block`) and `world_retired`.
+    """
+    steer_id = await start_reopen(
+        temporal_of(services),
+        services.sessionmaker,
+        actor,
+        thread_id,
+        client_key=body.client_key,
+        as_member_id=body.as_member_id,
+        body=body.body,
+    )
+    return ReopenStarted(steer_id=steer_id, thread_id=thread_id)
+
+
+async def _run_views(
+    db: AsyncSession, actor: Actor, thread: Thread, runs: Sequence[ThreadRun]
+) -> list[ThreadRunView]:
+    """Every run that started (REOPEN.md §7.3). Who reopened a run, and with which
+    steer, only for the viewer's own org; the current run's end from the thread row,
+    which has it before `finish_run` copies it. A seeded thread has no runs: its one
+    run is the thread itself."""
+    if not runs:
+        return [
+            ThreadRunView(
+                run=thread.run, started_at=thread.created_at, reopened=None, ended=_ended(thread)
+            )
+        ]
+    org_ids = {row.reopened_by_org_id for row in runs if row.reopened_by_org_id is not None}
+    orgs = {
+        org.id: org
+        for org in await repo.list_in_world(db, Org, actor.world_id, Org.id.in_(org_ids))
+    }
+    views: list[ThreadRunView] = []
+    for row in runs:
+        reopened = None
+        if row.reopened_by_org_id is not None and row.reopened_side is not None:
+            own = row.reopened_by_org_id == actor.org_id
+            by = (
+                await member_ref(db, actor.world_id, row.reopened_by_member_id)
+                if own and row.reopened_by_member_id is not None
+                else None
+            )
+            reopened = RunReopened(
+                org=org_ref(orgs[row.reopened_by_org_id]),
+                side=row.reopened_side,
+                by=by,
+                steer_id=row.steer_id if own else None,
+            )
+        views.append(
+            ThreadRunView(
+                run=row.run,
+                started_at=row.started_at,
+                reopened=reopened,
+                ended=_ended(thread) if row.run == thread.run else _run_ended(row),
+            )
+        )
+    return views
+
+
+def _ended(thread: Thread) -> RunEnded | None:
+    if thread.state not in threads.TERMINAL_STATES or thread.ended_at is None:
+        return None
+    return RunEnded(
+        state=thread.state,
+        # A seeded thread's rows carry it; nothing else ends without one.
+        end_reason=thread.end_reason or "closed",
+        closed_by=thread.closed_by,
+        stop_reason=thread.stop_reason,
+        at=thread.ended_at,
+    )
+
+
+def _run_ended(row: ThreadRun) -> RunEnded | None:
+    if row.state is None or row.end_reason is None or row.ended_at is None:
+        return None
+    return RunEnded(
+        state=row.state,
+        end_reason=row.end_reason,
+        closed_by=row.closed_by,
+        stop_reason=row.stop_reason,
+        at=row.ended_at,
+    )
+
+
 async def _summaries(
     db: AsyncSession, actor: Actor, *where: ColumnElement[bool]
 ) -> Sequence[tuple[Thread, ThreadSummary]]:
@@ -287,6 +491,11 @@ async def _summaries(
                 access_reason=reasons[thread.id][0],
                 access_reasons=reasons[thread.id],
                 last_activity_at=thread.last_activity_at,
+                run=thread.run,
+                end_reason=thread.end_reason,
+                ended_at=thread.ended_at,
+                closed_by=thread.closed_by,
+                run_finished_at=thread.run_finished_at,
                 version=thread.version,
             ),
         )

@@ -2,9 +2,10 @@ import { CircleAlert } from "lucide-react";
 
 /**
  * Why live turns can't start (`budgetLine`), attached to the top edge of whatever acts
- * through them (the chat composer, the outreach card, the request view's composer),
- * like Claude's usage-limit strip. The element under it must be positioned so it
- * overlaps the strip's padded bottom.
+ * through them, like Claude's usage-limit strip: the card waiting on the member (the
+ * chat's outreach card, the request view's decision card), else the composer. One shows
+ * at a time. The element under it must be positioned so it overlaps the strip's padded
+ * bottom.
  */
 export function BudgetStrip({ line }: { line: string }) {
   return (

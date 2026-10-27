@@ -1,6 +1,6 @@
-import { TriangleAlert } from "lucide-react";
+import { ShieldCheck, TriangleAlert } from "lucide-react";
 
-import { Menu, MenuCheckItem, MenuContent, MenuGroup, MenuLabel, MenuTrigger } from "../shell/ui/Menu";
+import { Menu, MenuCheckItem, MenuContent, MenuGroup, MenuLabel, MenuSeparator, MenuTrigger } from "../shell/ui/Menu";
 import type { SendMode } from "./types";
 
 /** A send mode as the composer shows it: a new chat's `org_default` is null until it loads. */
@@ -50,8 +50,7 @@ export function SendModeItems({ sendMode, onSendModeChange }: SendModeProps) {
 
 /**
  * Beside the model label while this chat sends without review, so it is never on
- * unnoticed; it opens the same choices as the `+` menu. A phone gets a shorter label,
- * never the icon alone.
+ * unnoticed; it opens the same choices as the `+` menu.
  */
 export function SendModeChip({ sendMode, onSendModeChange }: SendModeProps) {
   if (!sendMode.effective) return null;
@@ -62,12 +61,42 @@ export function SendModeChip({ sendMode, onSendModeChange }: SendModeProps) {
         className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-caution-soft px-2.5 text-[13px] font-medium text-caution transition-[filter] outline-none hover:brightness-[0.97] focus-visible:ring-2 focus-visible:ring-caution/40"
       >
         <TriangleAlert size={14} strokeWidth={1.8} aria-hidden />
-        <span className="max-sm:hidden">Sends without review</span>
-        <span className="sm:hidden">No review</span>
+        Sends without review
       </MenuTrigger>
       <MenuContent align="end">
         <SendModeItems sendMode={sendMode} onSendModeChange={onSendModeChange} />
       </MenuContent>
     </Menu>
+  );
+}
+
+/**
+ * The waiting outreach card's line under its title: how this chat sends requests, with
+ * Change opening the same choices as the `+` menu, under the line and over the brief.
+ * A change applies to Claude's next request; this card still waits.
+ */
+export function SendModeLine({ sendMode, onSendModeChange }: SendModeProps) {
+  return (
+    <p className="flex items-start gap-1.5 text-ui-sm text-muted">
+      <ShieldCheck size={15} strokeWidth={1.75} aria-hidden className="mt-px shrink-0" />
+      <span className="min-w-0">
+        This chat: {sendMode.effective ? "sends without review" : "review before sending"} ·{" "}
+        <Menu modal={false}>
+          <MenuTrigger
+            aria-label="Change how this chat sends requests"
+            className="rounded-[4px] whitespace-nowrap text-link outline-none hover:underline focus-visible:underline data-[state=open]:underline"
+          >
+            Change
+          </MenuTrigger>
+          <MenuContent align="start" className="w-[340px]">
+            <SendModeItems sendMode={sendMode} onSendModeChange={onSendModeChange} />
+            <MenuSeparator />
+            <p className="px-2 pt-0.5 pb-1 text-ui-xs text-muted">
+              Applies from Claude&apos;s next request; this one still waits for you.
+            </p>
+          </MenuContent>
+        </Menu>
+      </span>
+    </p>
   );
 }

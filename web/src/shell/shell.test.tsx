@@ -346,16 +346,33 @@ it("remembers the collapsed sidebar across a reload", async () => {
   second.dispatcher.stop();
 });
 
-it("on a phone, shows the rail and opens the sidebar over the page until a link or Escape closes it", async () => {
-  vi.stubGlobal("matchMedia", (media: string) => ({
-    media,
-    matches: media === "(max-width: 767px)",
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
-  }));
+/** A window `width` px wide, as `matchMedia` answers the width queries the app asks. */
+function windowWidth(width: number): void {
+  vi.stubGlobal("matchMedia", (media: string) => {
+    const [, side, px] = /\((min|max)-width:\s*(\d+)px\)/.exec(media) ?? [];
+    const limit = Number(px);
+    return {
+      media,
+      matches: side === "min" ? width >= limit : side === "max" ? width <= limit : false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+  });
+}
+
+it("keeps the full sidebar from a 900px window", async () => {
+  windowWidth(900);
+  const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
+  expect(screen.getByRole("button", { name: "Close sidebar" })).toBeTruthy();
+  expect(await screen.findByText(RECENT)).toBeTruthy();
+  dispatcher.stop();
+});
+
+it("below 900px, shows the rail and opens the sidebar over the page until a link or Escape closes it", async () => {
+  windowWidth(899);
   const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
 
-  // The stored choice is the full sidebar; a phone has no room for it beside the page.
+  // The stored choice is the full sidebar; there's no room for it beside the page.
   expect(screen.getByRole("button", { name: "Open sidebar" })).toBeTruthy();
   expect(screen.queryByText(RECENT)).toBeNull();
 

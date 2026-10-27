@@ -43,7 +43,6 @@ export type EscalationAction = ResolveEscalation["action"];
 export type EscalationResolved = Schemas["EscalationResolved"];
 export type ReassignEscalation = Schemas["ReassignEscalation"];
 export type Reassigned = Schemas["Reassigned"];
-export type RedraftStarted = Schemas["RedraftStarted"];
 export type AddNote = Schemas["AddNote"];
 export type ShareRequest = Schemas["ShareRequest"];
 export type ShareResult = Schemas["ShareResult"];

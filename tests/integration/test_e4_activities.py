@@ -27,7 +27,6 @@ from harmony.agents.models import (
     Route,
     RouteAssignee,
 )
-from harmony.agents.runtime import OwedResult
 from harmony.db import repo
 from harmony.db.models import (
     Consult,
@@ -37,13 +36,14 @@ from harmony.db.models import (
     NetworkRequest,
     RepNotice,
     RepPolicy,
+    Steer,
     Thread,
     ThreadMessage,
     TrustedOrganization,
 )
-from harmony.db.models.choices import Autonomy
+from harmony.db.models.choices import Autonomy, EndReason
 from harmony.db.uow import unit_of_work
-from harmony.domain import consults, conversations, escalations, notes, routing, threads
+from harmony.domain import consults, conversations, escalations, notes, routing, steers, threads
 from harmony.domain.settings import mode_toward
 from harmony.temporal.activities.network import (
     REQUEST_LIFETIME,
@@ -53,7 +53,9 @@ from harmony.temporal.activities.network import (
     NotifyConversationInput,
     OpenThreadInput,
     ReassignInput,
+    RecordSteerInput,
     SettledCardInput,
+    SettleSteerInput,
     ThreadStateInput,
     UnsummarizedInput,
 )
@@ -61,8 +63,10 @@ from harmony.temporal.workflows.payloads import (
     CARD_NOT_PENDING_ERROR,
     ESCALATION_NOT_OPEN_ERROR,
     NOT_IN_ORG_ERROR,
+    STEER_CONFLICT_ERROR,
     NetworkUpdate,
     Reassignment,
+    SteerRequest,
     conversation_workflow_id,
     thread_workflow_id,
 )
@@ -184,7 +188,14 @@ async def test_approving_an_outreach_card_creates_its_request(
     assert applied.resolved.status == "approved"
     assert applied.resolved.request_id == request_id
     assert applied.tool_use_id.startswith("toolu_")
-    assert applied.content.startswith(f"approved; request {request_id} sent to ")
+    # One sentence that it's out, and nothing to check (decision 7).
+    assert applied.content == (
+        f"Approved and sent: request {request_id} to Northlake Characterization Core and "
+        "Calder Computational. Their progress shows on the request's card in this chat, and "
+        "anything that needs Alex Chen will come up here as a question; you'll be told here "
+        "when every conversation has ended. There's nothing to check now: in a sentence, "
+        "tell Alex Chen it's out and stop."
+    )
     async with db_sessionmaker() as session:
         request = await repo.get_required(session, NetworkRequest, world_id, request_id)
     assert request.card_id == card_id
@@ -202,7 +213,32 @@ async def test_approving_an_outreach_card_creates_its_request(
     assert failed.value.non_retryable
 
 
-async def test_rejecting_a_card_returns_the_feedback(db_sessionmaker: Sessionmaker) -> None:
+@pytest.mark.parametrize(
+    ("feedback", "rejected_with", "content"),
+    [
+        (
+            None,
+            "decline",
+            "Declined: Alex Chen decided not to send this request. Nothing went out. Don't "
+            "propose it again unless Alex Chen asks.",
+        ),
+        (
+            "Too early, we haven't fixed the sample count",
+            "decline",
+            "Declined: Alex Chen decided not to send this request, and said: Too early, we "
+            "haven't fixed the sample count. Nothing went out. Don't propose it again unless "
+            "Alex Chen asks.",
+        ),
+        # A message typed while the card waited replaced it.
+        ("Ask Calder too.", "message", "rejected: Ask Calder too."),
+    ],
+)
+async def test_a_rejected_card_says_how_it_was_rejected(
+    db_sessionmaker: Sessionmaker,
+    feedback: str | None,
+    rejected_with: Literal["decline", "message"],
+    content: str,
+) -> None:
     world_id = await seeded_world(db_sessionmaker)
     conversation_id = await start_chat(db_sessionmaker, world_id)
     card_id = await propose(db_sessionmaker, world_id, conversation_id, NORTHLAKE)
@@ -211,12 +247,16 @@ async def test_rejecting_a_card_returns_the_feedback(db_sessionmaker: Sessionmak
             world_id=world_id,
             conversation_id=conversation_id,
             resolution=CardResolution(
-                card_id=card_id, decision="reject", member_id=ALEX, feedback="Ask Calder too."
+                card_id=card_id,
+                decision="reject",
+                member_id=ALEX,
+                feedback=feedback,
+                rejected_with=rejected_with,
             ),
             request_id=uuid4(),
         )
     )
-    assert (applied.resolved.status, applied.content) == ("rejected", "rejected: Ask Calder too.")
+    assert (applied.resolved.status, applied.content) == ("rejected", content)
 
 
 async def test_a_card_sent_without_review_says_so_and_no_member_can_settle_it(
@@ -248,7 +288,10 @@ async def test_a_card_sent_without_review_says_so_and_no_member_can_settle_it(
     assert (applied.resolved.status, applied.is_error) == ("approved", False)
     assert applied.content == (
         f"Sent without review (this chat's setting): request {request_id} to "
-        "Northlake Characterization Core."
+        "Northlake Characterization Core. Their progress shows on the request's card in "
+        "this chat, and anything that needs Alex Chen will come up here as a question; "
+        "you'll be told here when every conversation has ended. There's nothing to check "
+        "now: in a sentence, tell Alex Chen it's out and stop."
     )
 
 
@@ -517,31 +560,99 @@ async def test_a_declined_held_message_sends_nothing(db_sessionmaker: Sessionmak
     assert await _messages(db_sessionmaker, world_id, thread_id) == []
 
 
-async def test_a_held_message_sent_back_names_who_asked_and_sends_nothing(
+def _edit(world_id: UUID, body: str, escalation_id: UUID | None = None) -> SteerRequest:
+    key = uuid4()
+    return SteerRequest(
+        steer_id=steers.steer_id_for(world_id, NORTHLAKE, HELEN, key),
+        side="responder",
+        org_id=NORTHLAKE,
+        member_id=HELEN,
+        client_key=key,
+        body=body,
+        escalation_id=escalation_id,
+    )
+
+
+async def test_a_steer_is_recorded_once_and_its_id_never_takes_another_body(
     db_sessionmaker: Sessionmaker,
 ) -> None:
     world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
-    drafted, note = "Our other client has Nov 4.", "Don't mention other clients."
-    escalation_id = await _held(db_sessionmaker, world_id, thread_id, drafted)
-    applied = await _offline(db_sessionmaker).apply_resolution(
-        _resolve(world_id, thread_id, escalation_id, "revise", text=note)
-    )
+    activities = _offline(db_sessionmaker)
+    edit = _edit(world_id, "Don't name other clients.")
+    arg = RecordSteerInput(world_id=world_id, thread_id=thread_id, steer=edit)
+
+    recorded = await activities.record_steer(arg)
+    # A retried activity, or a retried POST's Update, finds the same row.
+    assert await activities.record_steer(arg) == recorded
     async with db_sessionmaker() as session:
         helen = await repo.get_required(session, Member, world_id, HELEN)
-    assert (applied.resolved.action, applied.resolved.message_id, applied.sent) == (
-        "revise",
-        None,
-        False,
+    assert (recorded.seq, recorded.author_name) == (1, helen.name)
+    other = edit.model_copy(update={"body": "Name them."})
+    with pytest.raises(ApplicationError) as conflict:
+        await activities.record_steer(arg.model_copy(update={"steer": other}))
+    assert conflict.value.type == STEER_CONFLICT_ERROR
+
+
+async def test_approving_a_rewritten_held_message_sends_that_rev_as_the_representatives(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    """EDIT.md §3.5: the approval sends the rev the member saw, stamped with the
+    representative's turn, and tells it what went out against its own rev 1."""
+    world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
+    drafted, rewrite = "Our other client has Nov 4.", "Nov 4 is taken; Nov 10 is open."
+    escalation_id = await _held(db_sessionmaker, world_id, thread_id, drafted)
+    reason = "A teammate approves every message in Ask mode."
+    async with unit_of_work(db_sessionmaker, world_id) as uow:
+        draft = ConsultDraft(
+            answer=rewrite,
+            needs_human=True,
+            needs_human_reason=reason,
+            route=None,
+            rationale=reason,
+        )
+        await escalations.add_draft(uow, escalation_id, draft, turn_id=uuid4(), draft_rev=2)
+        await uow.commit()
+
+    applied = await _offline(db_sessionmaker).apply_resolution(
+        _resolve(world_id, thread_id, escalation_id, "approve", draft_rev=2)
     )
-    # Who asked is the member who settled it, never a stand-in.
-    assert applied.owed == OwedResult(
-        tool_use_id="",
-        content=answerer.held_result("revise", text=note, drafted=drafted, member_name=helen.name),
-        is_error=True,
-    )
+
     assert applied.owed is not None
-    assert (applied.owed.content or "").startswith("Not sent: Helen asked you to change it.")
-    assert await _messages(db_sessionmaker, world_id, thread_id) == []
+    assert applied.owed.content == (
+        f"Sent as your side edited it:\n<released_text>\n{rewrite}\n</released_text>"
+    )
+    (message,) = await _messages(db_sessionmaker, world_id, thread_id)
+    # Rev 1's turn (none here), never the rewrite's.
+    assert (message.body, message.turn_id) == (rewrite, None)
+
+
+async def test_a_steer_settles_from_the_rows_its_parts_wrote_once(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
+    escalation_id = await _held(db_sessionmaker, world_id, thread_id, "Our client has Nov 4.")
+    activities = _offline(db_sessionmaker)
+    edit = _edit(world_id, "Don't mention clients.", escalation_id)
+    await activities.record_steer(
+        RecordSteerInput(world_id=world_id, thread_id=thread_id, steer=edit, draft_rev=2)
+    )
+    async with unit_of_work(db_sessionmaker, world_id) as uow:
+        await steers.set_guidance_outcome(
+            uow, edit.steer_id, outcome="updated", text="Don't mention other clients."
+        )
+        await uow.commit()
+
+    # The guidance landed; the rewrite didn't, and the item is still open.
+    settle = SettleSteerInput(world_id=world_id, steer_id=edit.steer_id, failure="model_error")
+    # Its `seq`, which the workflow needs when `record_steer` failed after its commit.
+    assert await activities.settle_steer(settle) == 1
+    await activities.settle_steer(settle.model_copy(update={"failure": "thread_closed"}))
+    assert await activities.settle_steer(settle.model_copy(update={"steer_id": uuid4()})) is None
+
+    async with db_sessionmaker() as session:
+        row = await repo.get_required(session, Steer, world_id, edit.steer_id)
+    assert (row.status, row.guidance_outcome, row.guidance_version) == ("failed", "updated", 1)
+    assert (row.draft_outcome, row.failure_reason) == ("failed", "model_error")
 
 
 async def test_an_unedited_approval_says_only_that_it_was_sent(
@@ -582,13 +693,16 @@ async def test_an_ended_thread_cancels_its_open_items(
     world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
     escalation_id = await routed_consult(db_sessionmaker, world_id, thread_id)
     activities = _offline(db_sessionmaker)
-    arg = ThreadStateInput(world_id=world_id, thread_id=thread_id, state=ended)
+    end_reason: EndReason = "quiet" if ended == "closed" else "deadline"
+    arg = ThreadStateInput(
+        world_id=world_id, thread_id=thread_id, state=ended, end_reason=end_reason
+    )
     for _ in range(2):
         await activities.set_thread_state(arg)
     async with db_sessionmaker() as session:
         thread = await repo.get_required(session, Thread, world_id, thread_id)
         escalation = await repo.get_required(session, Escalation, world_id, escalation_id)
-    assert (thread.state, thread.side_to_move) == (ended, None)
+    assert (thread.state, thread.side_to_move, thread.end_reason) == (ended, None, end_reason)
     assert escalation.status == "cancelled"
     assert await _notices(db_sessionmaker, world_id, thread_id) == []
 
@@ -657,7 +771,13 @@ async def test_a_refusal_tells_the_other_side_once(db_sessionmaker: Sessionmaker
     world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
     activities = _offline(db_sessionmaker)
     arg = ThreadStateInput(
-        world_id=world_id, thread_id=thread_id, state="closed", closed_by="responder"
+        world_id=world_id,
+        thread_id=thread_id,
+        state="closed",
+        end_reason="stopped",
+        closed_by="responder",
+        last_turn=True,
+        stop_reason="refused",
     )
     # A retry after the commit queues nothing more.
     for _ in range(2):
@@ -666,7 +786,12 @@ async def test_a_refusal_tells_the_other_side_once(db_sessionmaker: Sessionmaker
     assert [(side, kind) for side, kind, _ in notices] == [("requester", "closed")]
     async with db_sessionmaker() as session:
         thread = await repo.get_required(session, Thread, world_id, thread_id)
-    assert thread.state == "closed"
+    assert (thread.state, thread.end_reason, thread.closed_by, thread.stop_reason) == (
+        "closed",
+        "stopped",
+        "responder",
+        "refused",
+    )
 
 
 async def test_a_failed_last_turn_tells_its_org_why_there_is_no_summary_once(
@@ -675,7 +800,13 @@ async def test_a_failed_last_turn_tells_its_org_why_there_is_no_summary_once(
     world_id, thread_id = await _thread_with_northlake(db_sessionmaker)
     activities = _offline(db_sessionmaker)
     await activities.set_thread_state(
-        ThreadStateInput(world_id=world_id, thread_id=thread_id, state="closed")
+        ThreadStateInput(
+            world_id=world_id,
+            thread_id=thread_id,
+            state="closed",
+            end_reason="stopped",
+            stop_reason="session_budget",
+        )
     )
     turn_id = uuid4()
     arg = UnsummarizedInput(

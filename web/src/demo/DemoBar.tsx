@@ -1,7 +1,7 @@
 import { ArrowRight, CalendarDays, CircleSlash, RotateCcw, SlidersHorizontal, Wallet, WifiOff, X } from "lucide-react";
 import type { ReactNode } from "react";
 
-import type { SessionView } from "../api/types";
+import type { MemberView, SessionView } from "../api/types";
 import { useBudget } from "../app/budget";
 import { useMembers } from "../app/queries";
 import { budgetLine } from "../chat/failureCopy";
@@ -26,6 +26,11 @@ interface DemoBarProps {
  * The slim bar above the cloned app (ARCHITECTURE.md §11.4). It is styled unlike the
  * product on purpose, so demo controls are never mistaken for Claude: who you're acting
  * as, the world date, budget, cross-account alerts and Reset.
+ *
+ * The budget and Reset are pinned right and never leave it. Who and when take the room
+ * the alerts leave, measured on their own group: short of it, their labels drop first
+ * ("World date", "Acting as", the org's full name, "Demo controls"), and only then are
+ * they cut at their end.
  */
 export function DemoBar({ session, offline = false, reconnecting = false }: DemoBarProps) {
   const worldDate = useWorldDate(session?.world);
@@ -35,62 +40,88 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
     <header
       aria-label="Demo controls"
       style={{ height: "var(--demo-bar-height)" }}
-      className="flex shrink-0 items-center gap-1 overflow-x-auto bg-demo px-2.5 text-[12.5px] leading-none text-demo-text [scrollbar-width:none]"
+      className="flex shrink-0 items-center gap-1 bg-demo px-2.5 text-[12.5px] leading-none text-demo-text"
     >
-      <span className="mr-1 inline-flex h-5 items-center rounded-[4px] border border-demo-border px-1.5 font-mono text-[10px] font-medium tracking-[0.12em] text-demo-muted">
-        DEMO
-      </span>
-      <BarButton
-        onClick={() => {
-          openDemoControls();
-        }}
-        icon={<SlidersHorizontal size={13} strokeWidth={1.75} />}>
-        Demo controls
-      </BarButton>
-
-      <Divider />
-
-      {session === null ? (
-        <span className="px-1.5 text-demo-muted">
-          {offline ? "Can't reach Harmony: retrying" : "Not started: open Demo controls to begin"}
+      {/* Each label drops where the longest of the cast's own ("Dr. Helen Ward · Northlake
+          Characterization Core") would otherwise be cut. */}
+      <div className="@container/who flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+        <span className="mr-1 inline-flex h-5 shrink-0 items-center rounded-[4px] border border-demo-border px-1.5 font-mono text-[10px] font-medium tracking-[0.12em] text-demo-muted">
+          DEMO
         </span>
-      ) : (
-        <>
-          <span className="flex min-w-0 shrink-0 items-center gap-2 px-1.5" title="The account you're acting as">
-            <Avatar name={session.member.name} seed={session.member.org.slug} size={18} />
-            <span className="text-demo-muted">Acting as</span>
-            <span className="font-medium">{session.member.name}</span>
-            <span className="text-demo-muted">· {session.member.org.name}</span>
+        <BarButton
+          label="Demo controls"
+          labelClassName="@max-[504px]/who:hidden"
+          onClick={() => {
+            openDemoControls();
+          }}
+          icon={<SlidersHorizontal size={13} strokeWidth={1.75} />}
+        />
+
+        <Divider />
+
+        {session === null ? (
+          <span className="truncate px-1.5 text-demo-muted">
+            {offline ? "Can't reach Harmony: retrying" : "Not started: open Demo controls to begin"}
           </span>
-          <Divider />
-          {worldDate !== null && (
-            <span className="flex shrink-0 items-center gap-1.5 px-1.5" title="The world's date: the scenario's clock">
-              <CalendarDays size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
-              <span className="text-demo-muted">World date</span>
-              <span className="font-medium tabular-nums">{formatWorldDate(worldDate)}</span>
-            </span>
-          )}
-          <Budget />
-        </>
-      )}
+        ) : (
+          <>
+            <ActingAs member={session.member} />
+            <Divider />
+            {worldDate !== null && (
+              <span className="flex shrink-0 items-center gap-1.5 px-1.5" title="The world's date: the scenario's clock">
+                <CalendarDays size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
+                <span className="text-demo-muted @max-[770px]/who:hidden">World date</span>
+                <span className="font-medium tabular-nums">{formatWorldDate(worldDate)}</span>
+              </span>
+            )}
+          </>
+        )}
+      </div>
 
-      <span className="flex-1" />
+      {/* Gives way only when the alerts alone are wider than the bar's room. */}
+      <div className="flex min-w-0 items-center overflow-hidden">
+        {reconnecting && (
+          <span role="status" className="mr-1 flex shrink-0 items-center gap-1.5 px-1.5 text-demo-muted">
+            <WifiOff size={13} strokeWidth={1.75} aria-hidden />
+            Live updates paused: reconnecting…
+          </span>
+        )}
+        {alertsByAccount(alerts).map((account) => (
+          <AlertChip key={`${account.orgSlug}/${account.memberSlug}`} account={account} />
+        ))}
+      </div>
 
-      {reconnecting && (
-        <span role="status" className="mr-1 flex shrink-0 items-center gap-1.5 px-1.5 text-demo-muted">
-          <WifiOff size={13} strokeWidth={1.75} aria-hidden />
-          Live updates paused: reconnecting…
-        </span>
-      )}
-      {alertsByAccount(alerts).map((account) => (
-        <AlertChip key={`${account.orgSlug}/${account.memberSlug}`} account={account} />
-      ))}
-      {session !== null && (
-        <BarButton onClick={openResetConfirm} icon={<RotateCcw size={13} strokeWidth={1.75} />}>
-          Reset
-        </BarButton>
-      )}
+      <div className="flex shrink-0 items-center gap-1">
+        <Budget />
+        {session !== null && (
+          <BarButton label="Reset" onClick={openResetConfirm} icon={<RotateCcw size={13} strokeWidth={1.75} />} />
+        )}
+      </div>
     </header>
+  );
+}
+
+/** "Acting as Raj Patel · Northlake Characterization Core", down to "Raj Patel · Northlake", then "Raj Patel". */
+function ActingAs({ member }: { member: MemberView }) {
+  const org = member.org.name;
+  const short = shortOrgName(org);
+  return (
+    <span className="flex min-w-0 shrink-0 items-center gap-2 px-1.5" title="The account you're acting as">
+      <Avatar name={member.name} seed={member.org.slug} size={18} />
+      <span className="text-demo-muted @max-[700px]/who:hidden">Acting as</span>
+      <span className="font-medium">{member.name}</span>
+      <span className="text-demo-muted @max-[412px]/who:hidden">
+        ·{" "}
+        {short === org ? (
+          org
+        ) : (
+          <>
+            <span className="@max-[637px]/who:hidden">{org}</span>
+            <span className="hidden @max-[637px]/who:inline">{short}</span>
+          </>
+        )}
+      </span>
+    </span>
   );
 }
 
@@ -140,22 +171,26 @@ function Divider() {
 }
 
 function BarButton({
+  label,
+  labelClassName,
   onClick,
   icon,
-  children,
 }: {
+  label: string;
+  /** Hides the label where the bar is short of room; the icon stays, and the button keeps its name. */
+  labelClassName?: string;
   onClick: () => void;
   icon: ReactNode;
-  children: ReactNode;
 }) {
   return (
     <button
       type="button"
+      aria-label={label}
       onClick={onClick}
       className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-2 text-demo-text transition-colors hover:bg-demo-surface"
     >
       <span className="text-demo-muted">{icon}</span>
-      {children}
+      <span className={labelClassName}>{label}</span>
     </button>
   );
 }

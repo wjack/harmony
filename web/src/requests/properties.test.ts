@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { THREAD, requestsWorld, stopped, type RequestsWorld } from "../fixtures/requests";
+import { THREAD, reopened, requestsWorld, stopped, type RequestsWorld } from "../fixtures/requests";
 import { members } from "../fixtures/shell";
 import { propertiesOf } from "./properties";
 import type { ThreadDetail } from "./types";
@@ -23,11 +23,16 @@ describe("propertiesOf", () => {
       tone: "warning",
       needs: true,
     });
-    expect(propertiesOf(detail, open, members.raj.id).status).toEqual({ label: "Needs Helen", tone: "warning", needs: true });
+    expect(propertiesOf(detail, open, members.raj.id).status).toEqual({
+      label: "Waiting on Helen",
+      tone: "warning",
+      needs: true,
+    });
     const held = record(THREAD.vantage);
     expect(propertiesOf(held.detail, held.open, members.helen.id).status.label).toBe("Reply needs your review");
-    // The conversation's timeout, not a date anyone asked for: Details says when it expires.
-    expect(propertiesOf(detail, open, members.helen.id).expiresAt).toBe(detail.deadline_at);
+    // The conversation's timeout, not a date anyone asked for: Details says when it closes.
+    const properties = propertiesOf(detail, open, members.helen.id);
+    expect([properties.closesAt, properties.closedAt, properties.reopened]).toEqual([detail.deadline_at, null, null]);
   });
 
   it("says who shared a live thread with the viewer, and falls back to routed members", () => {
@@ -43,21 +48,22 @@ describe("propertiesOf", () => {
     });
   });
 
-  it("says a thread ended, or that the system stopped it", () => {
+  it("says Closed however a thread ended, with when", () => {
     const ended = record(THREAD.ridgeline);
-    expect(propertiesOf(ended.detail, ended.open, members.helen.id).status).toEqual({
-      label: "Closed",
-      tone: "success",
-      needs: false,
-    });
-    // An ended conversation has nothing left to expire.
-    expect(propertiesOf(ended.detail, ended.open, members.helen.id).expiresAt).toBeNull();
+    const properties = propertiesOf(ended.detail, ended.open, members.helen.id);
+    expect(properties.status).toEqual({ label: "Closed", tone: "muted", needs: false });
+    // An ended conversation has nothing left to close.
+    expect([properties.closesAt, properties.closedAt]).toEqual([null, ended.detail.ended_at]);
 
     const halted = record(THREAD.pacific, stopped(requestsWorld(NOW), THREAD.pacific, "demo_budget"));
-    expect(propertiesOf(halted.detail, halted.open, members.helen.id).status).toEqual({
-      label: "Stopped",
-      tone: "muted",
-      needs: false,
-    });
+    expect(propertiesOf(halted.detail, halted.open, members.helen.id).status.label).toBe("Closed");
+  });
+
+  it("says who reopened the live run, and when: a teammate by name, the counterparty by its org's", () => {
+    const ours = record(THREAD.ridgeline, reopened(requestsWorld(NOW), THREAD.ridgeline));
+    const run = ours.detail.runs.at(-1);
+    expect(propertiesOf(ours.detail, ours.open, members.helen.id).reopened).toEqual({ by: "Helen", at: run?.started_at });
+    const theirs = record(THREAD.ridgeline, reopened(requestsWorld(NOW), THREAD.ridgeline, "them"));
+    expect(propertiesOf(theirs.detail, theirs.open, members.helen.id).reopened?.by).toBe("Ridgeline Fabrication");
   });
 });

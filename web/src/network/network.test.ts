@@ -197,8 +197,18 @@ describe("status", () => {
     const closed = networkClosed.edges.find((edge) => edge.thread_id === THREAD_NORTHLAKE);
     if (closed === undefined) throw new Error("no closed edge");
     expect(edgeLabel(closed, parties, "ok")).toBe(closed.close_summary);
-    expect(edgeLabel({ ...closed, close_summary: null }, parties, "ok")).toBe("Closed");
-    expect(edgeLabel({ ...closed, state: "expired", close_summary: null }, parties, "ok")).toBe("Expired");
+    // With no summary of ours, it says why it ended, naming the org that closed it.
+    const unsummarized = { ...closed, close_summary: null };
+    expect(edgeLabel(unsummarized, parties, "ok")).toBe("Closed: Northlake closed it");
+    expect(edgeLabel(unsummarized, [orgs.henderson.name], "ok")).toBe("Closed");
+    expect(edgeLabel({ ...unsummarized, closed_by: null }, parties, "ok")).toBe("Closed");
+    expect(closingLine(unsummarized, parties, "ok")).toBe("Northlake closed it");
+    expect(closingLine(unsummarized, [orgs.henderson.name], "ok")).toBeNull();
+    // Expired is internal: it reads Closed, with its reason.
+    const quiet = { ...unsummarized, state: "expired" as const, end_reason: "quiet" as const, closed_by: null };
+    expect(edgeLabel(quiet, parties, "ok")).toBe("Closed: both sides went quiet");
+    expect(closingLine(quiet, parties, "ok")).toBe("Both sides went quiet");
+    expect(edgeLabel({ ...quiet, end_reason: "turn_limit" }, parties, "ok")).toBe("Closed: it reached its turn limit");
     expect(edgeStyle("closed").ended).toBe(true);
     expect(edgeStyle("awaiting_principal").tone).toBe("warning");
   });
@@ -210,11 +220,11 @@ describe("status", () => {
     expect(stopped.stop_reason).toBe("daily_budget");
     expect(edgeLabel(stopped, parties, "daily_exhausted")).toBe("Closed: The daily live-model budget ran out.");
     expect(edgeLabel(stopped, parties, "ok")).toBe("Closed: The daily live-model budget was busy or nearly used up.");
-    expect(closingLine(stopped, "daily_exhausted")).toBe(stoppedLine("daily_budget", "daily_exhausted"));
+    expect(closingLine(stopped, parties, "daily_exhausted")).toBe(stoppedLine("daily_budget", "daily_exhausted"));
     // After the other side refused, our side's last turn wrote a summary: it shows.
     const summarized = { ...stopped, stop_reason: "refused" as const, close_summary: "They declined; no quote." };
     expect(edgeLabel(summarized, parties, "ok")).toBe("They declined; no quote.");
-    expect(closingLine(summarized, "ok")).toBe("They declined; no quote.");
+    expect(closingLine(summarized, parties, "ok")).toBe("They declined; no quote.");
   });
 
 
@@ -224,6 +234,7 @@ describe("status", () => {
     expect(threadStatus("active", null).label).toBe("Messaged");
     expect(threadStatus("awaiting_principal", null).label).toBe("Needs human");
     expect(threadStatus("closed", null).label).toBe("Closed");
+    expect(threadStatus("expired", null)).toEqual(threadStatus("closed", null));
   });
 
   it("says there is nothing in flight, not no requests, when only earlier ones are listed", () => {

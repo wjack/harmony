@@ -12,6 +12,7 @@ import { AppProviders } from "../app/AppProviders";
 import { fetchStreamSnapshot } from "../app/snapshot";
 import { fixtureFetch, problem, type FixtureRoutes } from "../fixtures";
 import {
+  brief,
   cardRecipients,
   chatDeltaEnvelope,
   chatRoutes,
@@ -22,11 +23,15 @@ import {
   NORTHLAKE_GO_AHEAD_ID,
   NORTHLAKE_THREAD_ID,
   OUTREACH_CARD_ID,
+  REDRAFT_CARD_ID,
+  REDRAFT_MESSAGE,
   REQUEST_TITLE,
   requestAt,
   RIDGELINE_GO_AHEAD_ID,
   SEAL_QUESTION_ID,
   SUMMARIES,
+  RUNNING_SEARCH_LABEL,
+  SENT_REPLY,
   TURN,
   type ChatOptions,
   type ChatStage,
@@ -36,8 +41,7 @@ import { alexInbox, budgets, FIXTURE_NOW, members, orgs, sessionAs, shellRoutes,
 import { RealtimeDispatcher } from "../realtime/dispatcher";
 import { SidebarRequests } from "../requests/SidebarRequests";
 import { EventSources } from "../realtime/testing";
-import { ARRIVAL_PAUSE_MS } from "./cards/AskUserCard";
-import { OutreachCard } from "./cards/OutreachCard";
+import { ARRIVAL_PAUSE_MS, OutreachRecord } from "./cards/OutreachCard";
 import { RequestStatusPanel } from "./cards/RequestStatusCard";
 import { Markdown } from "./Markdown";
 import { failureLine, stoppedLine, type FailureReason } from "./failureCopy";
@@ -105,9 +109,13 @@ function renderRoutes(
   return { writes, sources, dispatcher, queryClient };
 }
 
-const askCard = () => screen.findByRole("listbox", { name: "Send this request to 2 organizations?" });
+/** The waiting card: a region named for what it is and the request's title. */
+const outreach = () => screen.findByRole("region", { name: `Harmony Network Request ${REQUEST_TITLE}` });
 const composer = () => screen.findByRole("textbox", { name: "Write your message to Claude" });
+const approveIn = (card: HTMLElement) => within(card).getByRole("button", { name: "Approve and send" });
+const tick = (card: HTMLElement, org: string) => within(card).getByRole<HTMLInputElement>("checkbox", { name: org });
 const APPROVE = `POST /api/cards/${OUTREACH_CARD_ID}/approve`;
+const REJECT = `POST /api/cards/${OUTREACH_CARD_ID}/reject`;
 
 let seq = 100;
 function snapshotEnvelope(entityType: string, entityId: string, data: EntitySnapshot["data"] = {}): EventEnvelope {
@@ -133,7 +141,7 @@ async function announce(sources: EventSources, entityType: string, entityId: str
 }
 
 beforeEach(() => {
-  // Measures once, on observe: enough for the clamps under `simulateLayout`.
+  // Measures once, on observe.
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -158,93 +166,151 @@ afterEach(() => {
   optimisticStore.setState({ byConversation: {} });
 });
 
-/**
- * jsdom lays nothing out, so a rough layout stands in: 80 characters to a line. A
- * `-webkit-line-clamp` box shows at most its lines, and a textarea is as tall as its
- * style says, so long text is cut off and short text fits.
- */
-function simulateLayout(): void {
-  const textHeight = (element: HTMLElement) => {
-    const textarea = element instanceof HTMLTextAreaElement;
-    const text = textarea ? element.value : element.textContent;
-    const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 80)), 0);
-    return lines * (textarea ? 22 : 20);
-  };
-  const boxHeight = (element: HTMLElement) => {
-    if (element instanceof HTMLTextAreaElement) return parseFloat(element.style.height) || 0;
-    const clamp = Number(element.style.webkitLineClamp);
-    return clamp > 0 ? Math.min(textHeight(element), clamp * 20) : textHeight(element);
-  };
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
-    return boxHeight(this);
-  });
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
-    return boxHeight(this);
-  });
-  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
-    return Math.max(textHeight(this), boxHeight(this));
-  });
-}
-
-it("asks before sending the request, and on Enter sends it to the organizations that fit", async () => {
+it("shows the request inline, in full, and sends it to the organizations Claude picked", async () => {
   const { writes } = renderChat("drafted");
-  const list = await askCard();
-  // Calder was screened as not a fit: listed for Alex to choose, but not sent by default.
-  const first = within(list).getByRole("option", { name: /Send to 2 organizations/ });
-  expect(first.getAttribute("aria-selected")).toBe("true");
-  expect(first.textContent).not.toContain("Calder");
+  const card = await outreach();
+  expect(within(card).getByText("Claude screened 14 organizations and picked 2.")).toBeTruthy();
+  // Every part reads in full: no clamps, no panels.
+  expect(within(card).getByRole("textbox", { name: "Brief" })).toHaveProperty("value", brief);
+  for (const row of cardRecipients.slice(0, 2)) {
+    expect(within(card).getByText(row.title ?? "")).toBeTruthy();
+    expect(within(card).getByRole("textbox", { name: `Ask for ${row.org.name}` })).toHaveProperty("value", row.ask);
+  }
+  expect(within(card).queryByRole("button", { name: /more/i })).toBeNull();
+  // The box at the bottom stays, asking what Claude should change.
+  expect(await composer()).toHaveProperty("placeholder", "What should Claude do differently?");
+  expect(within(card).getByText("Starts a conversation with Northlake Characterization Core and Ridgeline Fabrication · ⌘↵")).toBeTruthy();
 
-  fireEvent.keyDown(list, { key: "Enter" });
+  fireEvent.click(approveIn(card));
 
-  await screen.findByText("Sent to Northlake and Ridgeline.", { exact: false });
-  expect(writes).toEqual([
-    { route: APPROVE, body: { recipients: [orgs.northlake.id, orgs.ridgeline.id] } },
-  ]);
-  expect(screen.queryByRole("listbox")).toBeNull();
-  // The request's live status loads into the transcript.
+  expect(await screen.findByText(SENT_REPLY)).toBeTruthy();
+  expect(writes).toEqual([{ route: APPROVE, body: { recipients: [orgs.northlake.id, orgs.ridgeline.id] } }]);
+  // The card folds to a one-line record; the request's live status loads under it.
+  expect(await screen.findByText("Sent")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Approve and send" })).toBeNull();
   expect(await screen.findByText("Open in Requests")).toBeTruthy();
+  expect(await composer()).toHaveProperty("placeholder", "Reply…");
 });
 
-it("sends to a subset, with a not-a-fit organization unticked until chosen", async () => {
+it("sends to the ticked organizations, a not-a-fit one unticked until chosen", async () => {
   const { writes } = renderChat("drafted");
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Send to a subset/ }));
-  expect(screen.getByRole<HTMLInputElement>("checkbox", { name: /Calder Computational/ }).checked).toBe(false);
-  fireEvent.click(screen.getByRole("checkbox", { name: /Ridgeline Fabrication/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Send to 1 organization" }));
+  const card = await outreach();
+  expect(tick(card, "Calder Computational").checked).toBe(false);
+  fireEvent.click(tick(card, "Ridgeline Fabrication"));
+  expect(within(card).getByText("Left out: Ridgeline Fabrication gets nothing from this request. Tick it to add it back.")).toBeTruthy();
+  expect(within(card).queryByRole("textbox", { name: "Ask for Ridgeline Fabrication" })).toBeNull();
+  expect(within(card).getByText("Claude screened 14 organizations and picked 2; you've chosen 1.")).toBeTruthy();
+  expect(within(card).getByText("Starts a conversation with Northlake Characterization Core only · ⌘↵")).toBeTruthy();
+  fireEvent.click(approveIn(card));
 
   await waitFor(() => {
-    expect(writes).toEqual([
-      { route: `POST /api/cards/${OUTREACH_CARD_ID}/approve`, body: { recipients: [orgs.northlake.id] } },
-    ]);
+    expect(writes).toEqual([{ route: APPROVE, body: { recipients: [orgs.northlake.id] } }]);
   });
 });
 
-it("takes \"Something else\" as the card's rejection feedback", async () => {
-  const { writes } = renderChat("drafted");
-  await askCard();
-  fireEvent.change(screen.getByRole("textbox", { name: "Something else" }), {
-    target: { value: "Leave Ridgeline out" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
-
-  await screen.findAllByText("Not sent");
-  expect(writes).toEqual([
-    { route: `POST /api/cards/${OUTREACH_CARD_ID}/reject`, body: { feedback: "Leave Ridgeline out" } },
-  ]);
-  expect(screen.getByText("Leave Ridgeline out", { exact: false })).toBeTruthy();
-});
-
-it("puts the card away on Esc, and brings it back from the composer's strip", async () => {
+it("holds Approve with nothing ticked, or a part cleared", async () => {
   renderChat("drafted");
-  fireEvent.keyDown(await askCard(), { key: "Escape" });
+  const card = await outreach();
+  fireEvent.click(tick(card, "Northlake Characterization Core"));
+  fireEvent.click(tick(card, "Ridgeline Fabrication"));
+  expect(approveIn(card)).toHaveProperty("disabled", true);
+  expect(within(card).getByText("Tick at least one organization")).toBeTruthy();
 
-  const review = await screen.findByRole("button", { name: /Send this request to 2 organizations\?\s*Review/ });
-  expect(screen.getByRole("textbox", { name: "Write your message to Claude" })).toHaveProperty(
-    "placeholder",
-    "Tell Claude what to change instead…",
+  fireEvent.click(tick(card, "Northlake Characterization Core"));
+  fireEvent.change(within(card).getByRole("textbox", { name: "Brief" }), { target: { value: "  " } });
+  expect(approveIn(card)).toHaveProperty("disabled", true);
+  expect(within(card).getByText("The brief and each ask need some text")).toBeTruthy();
+});
+
+it("declines with an optional reason that only Claude in this chat sees", async () => {
+  const { writes } = renderChat("drafted");
+  const card = await outreach();
+  fireEvent.click(within(card).getByRole("button", { name: "Decline" }));
+  const step = within(card).getByRole("region", { name: "Don't send this request" });
+  expect(within(step).getByText(/Only Claude in this chat sees this\./)).toBeTruthy();
+  // Cancel puts the buttons back, every tick kept.
+  fireEvent.click(tick(card, "Ridgeline Fabrication"));
+  fireEvent.click(within(step).getByRole("button", { name: "Cancel" }));
+  expect(tick(card, "Ridgeline Fabrication").checked).toBe(false);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Decline" }));
+  const reason = within(card).getByRole("textbox", { name: "Reason" });
+  fireEvent.change(reason, { target: { value: "Not until the PI confirms the budget." } });
+  fireEvent.keyDown(reason, { key: "Enter", metaKey: true });
+
+  expect(await screen.findByText("Declined")).toBeTruthy();
+  expect(writes).toEqual([{ route: REJECT, body: { feedback: "Not until the PI confirms the budget." } }]);
+  expect(screen.queryByRole("button", { name: "Approve and send" })).toBeNull();
+});
+
+it("declines with no reason as an empty body", async () => {
+  const { writes } = renderChat("drafted");
+  const card = await outreach();
+  fireEvent.click(within(card).getByRole("button", { name: "Decline" }));
+  const step = within(card).getByRole("region", { name: "Don't send this request" });
+  fireEvent.click(within(step).getByRole("button", { name: "Decline" }));
+  await screen.findByText("Declined");
+  expect(writes).toEqual([{ route: REJECT, body: {} }]);
+});
+
+it("approves on ⌘↵ inside the card, and nowhere else", async () => {
+  const { writes } = renderChat("drafted");
+  const card = await outreach();
+  fireEvent.keyDown(await composer(), { key: "Enter", metaKey: true });
+  fireEvent.keyDown(document.body, { key: "Enter", metaKey: true });
+  expect(writes).toEqual([]);
+
+  fireEvent.keyDown(within(card).getByRole("textbox", { name: "Brief" }), { key: "Enter", metaKey: true });
+  await waitFor(() => {
+    expect(writes).toEqual([{ route: APPROVE, body: { recipients: [orgs.northlake.id, orgs.ridgeline.id] } }]);
+  });
+});
+
+it("folds to its title and who it goes to, keeping every tick", async () => {
+  renderChat("drafted");
+  const card = await outreach();
+  fireEvent.click(tick(card, "Ridgeline Fabrication"));
+  fireEvent.click(within(card).getByRole("button", { name: "Collapse" }));
+  expect(within(card).getByText("Waiting for you")).toBeTruthy();
+  expect(within(card).getByText("To Northlake Characterization Core")).toBeTruthy();
+  // Approving needs the card open.
+  expect(within(card).queryByRole("button", { name: "Approve and send" })).toBeNull();
+
+  fireEvent.click(within(card).getByRole("button", { name: "Show" }));
+  expect(tick(card, "Ridgeline Fabrication").checked).toBe(false);
+});
+
+it("shows Review while the card is out of view, which opens it and scrolls to it", async () => {
+  const observers: { callback: IntersectionObserverCallback; target: Element | null }[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      readonly #entry: (typeof observers)[number];
+      constructor(callback: IntersectionObserverCallback) {
+        this.#entry = { callback, target: null };
+        observers.push(this.#entry);
+      }
+      observe(target: Element): void {
+        this.#entry.target = target;
+      }
+      disconnect(): void {}
+    },
   );
-  fireEvent.click(review);
-  await askCard();
+  const scrolled = vi.fn();
+  Element.prototype.scrollTo = scrolled;
+  renderChat("drafted");
+  const card = await outreach();
+  fireEvent.click(within(card).getByRole("button", { name: "Collapse" }));
+  expect(screen.queryByRole("button", { name: /Review/ })).toBeNull();
+
+  act(() => {
+    for (const { callback, target } of observers) {
+      if (target !== null) callback([{ isIntersecting: false, target } as IntersectionObserverEntry], {} as IntersectionObserver);
+    }
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /Send this request to 2 organizations\?\s*Review/ }));
+  expect(within(card).getByRole("button", { name: "Approve and send" })).toBeTruthy();
+  expect(scrolled).toHaveBeenCalledWith(expect.objectContaining({ behavior: "smooth" }));
 });
 
 it("answers a counterparty's question inline", async () => {
@@ -332,7 +398,7 @@ it("says responses will arrive while the request is active, and stops once it cl
 
 it("streams the turn's text from chat deltas while Claude works", async () => {
   const { sources } = renderChat("working");
-  await screen.findByText("Searching the Harmony network");
+  await screen.findByText(RUNNING_SEARCH_LABEL);
   await waitFor(() => {
     expect(sources.opened).toHaveLength(1);
   });
@@ -351,113 +417,108 @@ it("streams the turn's text from chat deltas while Claude works", async () => {
   expect(screen.queryByText(/found two organizations/)).toBeNull();
 });
 
-it("leaves the card up on Enter over its dismiss buttons, which only put it away", async () => {
+it("sends edited wording with only what changed, and says so under the buttons and in the record", async () => {
   const { writes } = renderChat("drafted");
-  await askCard();
-  for (const name of ["Skip for now", "Skip"]) {
-    fireEvent.keyDown(screen.getByRole("button", { name }), { key: "Enter" });
-    expect(screen.getByRole("listbox")).toBeTruthy();
-  }
-  // The browser turns Enter on a button into a click.
-  fireEvent.click(screen.getByRole("button", { name: "Skip" }));
-  await screen.findByRole("button", { name: /Review/ });
-  expect(writes).toEqual([]);
-});
-
-it("goes back from a panel on Esc, keeping what was chosen", async () => {
-  renderChat("drafted");
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Send to a subset/ }));
-  expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: /Northlake/ }));
-  const ridgeline = screen.getByRole("checkbox", { name: /Ridgeline Fabrication/ });
-  fireEvent.click(ridgeline);
-  fireEvent.keyDown(ridgeline, { key: "Escape" });
-
-  const list = await screen.findByRole("listbox", { name: "Send this request to 1 organization?" });
-  expect(document.activeElement).toBe(list);
-  fireEvent.click(within(list).getByRole("option", { name: /Send to a subset/ }));
-  expect(screen.getByRole("checkbox", { name: /Ridgeline Fabrication/ })).toHaveProperty("checked", false);
-});
-
-it("keeps \"Something else\" while the card is put away", async () => {
-  renderChat("drafted");
-  await askCard();
-  const other = screen.getByRole("textbox", { name: "Something else" });
-  fireEvent.change(other, { target: { value: "Leave Ridgeline" } });
-  fireEvent.keyDown(other, { key: "Escape" });
-  fireEvent.click(await screen.findByRole("button", { name: /Review/ }));
-  await askCard();
-  expect(screen.getByRole("textbox", { name: "Something else" })).toHaveProperty("value", "Leave Ridgeline");
-});
-
-it("sends an edited brief with only what changed", async () => {
-  const { writes } = renderChat("drafted");
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Edit brief/ }));
-  const brief = screen.getByRole("textbox", { name: "Brief" });
-  const send = screen.getByRole("button", { name: "Send with changes" });
-  expect(send).toHaveProperty("disabled", true);
-  // Limits live in each organization's ask, which only that conversation's representative reads (3.13 E2).
-  const hint = brief.getAttribute("aria-describedby");
-  expect(hint === null ? "" : document.getElementById(hint)?.textContent).toContain(
-    "A budget or other limit goes in each organization's ask, which only your representative in that conversation sees.",
-  );
-  fireEvent.change(brief, { target: { value: `${(brief as HTMLTextAreaElement).value}\n\nResults by Nov 4 if you can.  ` } });
-  fireEvent.click(send);
+  const card = await outreach();
+  const briefBox = within(card).getByRole<HTMLTextAreaElement>("textbox", { name: "Brief" });
+  expect(within(card).getByText("Click the brief or an ask to change the wording")).toBeTruthy();
+  fireEvent.change(briefBox, { target: { value: `${briefBox.value}\n\nResults by Nov 4 if you can.  ` } });
+  const ask = within(card).getByRole("textbox", { name: "Ask for Northlake Characterization Core" });
+  fireEvent.change(ask, { target: { value: "Quote XRD only, under $900." } });
+  // Each changed part says so, with Undo; Calder isn't ticked, so it has no ask to edit.
+  expect(within(card).getAllByText("· edited by you")).toHaveLength(2);
+  expect(within(card).queryByRole("textbox", { name: "Ask for Calder Computational" })).toBeNull();
+  expect(
+    within(card).getByText("Starts a conversation with Northlake Characterization Core and Ridgeline Fabrication, with your edits · ⌘↵"),
+  ).toBeTruthy();
+  fireEvent.click(approveIn(card));
 
   await waitFor(() => {
     expect(writes).toHaveLength(1);
   });
-  const [write] = writes;
-  expect(write?.route).toBe(APPROVE);
-  expect(write?.body).toEqual({
-    recipients: [orgs.northlake.id, orgs.ridgeline.id],
-    brief: expect.stringMatching(/^XRD and SEM\/EDS[\s\S]*Results by Nov 4 if you can\.$/) as unknown,
+  expect(writes[0]).toEqual({
+    route: APPROVE,
+    body: {
+      recipients: [orgs.northlake.id, orgs.ridgeline.id],
+      brief: expect.stringMatching(/^XRD and SEM\/EDS[\s\S]*Results by Nov 4 if you can\.$/) as unknown,
+      asks: { [orgs.northlake.id]: "Quote XRD only, under $900." },
+    },
   });
+  // The card folds to its record, which still says what went out wasn't Claude's draft.
+  expect(
+    await screen.findByText(/^Sent to Northlake Characterization Core and Ridgeline Fabrication, with your edits/),
+  ).toBeTruthy();
 });
 
-it("takes a message sent while the card is put away as the card's feedback", async () => {
+it("puts Claude's wording back on Undo my edits", async () => {
+  renderChat("drafted");
+  const card = await outreach();
+  const ask = within(card).getByRole("textbox", { name: "Ask for Ridgeline Fabrication" });
+  fireEvent.change(ask, { target: { value: "Quote it." } });
+  fireEvent.click(within(card).getByRole("button", { name: "Undo my edits" }));
+  expect(ask).toHaveProperty("value", RIDGELINE.ask);
+  expect(within(card).queryByText("· edited by you")).toBeNull();
+});
+
+it("takes a message sent while the card waits as a request to redraft it", async () => {
   const { writes } = renderChat("drafted");
-  fireEvent.keyDown(await askCard(), { key: "Escape" });
+  await outreach();
   const box = await composer();
-  fireEvent.change(box, { target: { value: "Leave Ridgeline out" } });
+  fireEvent.change(box, { target: { value: REDRAFT_MESSAGE } });
   fireEvent.keyDown(box, { key: "Enter" });
 
-  await screen.findAllByText("Not sent");
-  expect(writes).toEqual([
-    { route: `POST /api/conversations/${CONVERSATION_ID}/messages`, body: { text: "Leave Ridgeline out" } },
-  ]);
-  // On the card, not as a message.
-  expect(screen.getByText("Leave Ridgeline out", { exact: false })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: /Review/ })).toBeNull();
+  // The old card folds into one quiet row, the message reads as Alex's, and the redraft lands at the end.
+  expect(await screen.findByText("Earlier version")).toBeTruthy();
+  expect(writes).toEqual([{ route: `POST /api/conversations/${CONVERSATION_ID}/messages`, body: { text: REDRAFT_MESSAGE } }]);
+  expect(screen.getByText(REDRAFT_MESSAGE)).toBeTruthy();
+  const card = await outreach();
+  expect(within(card).getAllByText("· rewritten by Claude").length).toBeGreaterThan(0);
 });
 
-it("keeps a card that arrives mid-draft behind the composer, with the draft", async () => {
+it("pages a rewritten part back to Claude's earlier wording, which goes as an edit", async () => {
+  const { writes } = renderChat("drafted", { rejected: { with: "message", text: REDRAFT_MESSAGE } });
+  const card = await outreach();
+  const briefBox = within(card).getByRole<HTMLTextAreaElement>("textbox", { name: "Brief" });
+  expect(briefBox.value).toContain("sealed vials");
+  const [earlier] = within(card).getAllByRole("button", { name: "Earlier version" });
+  if (earlier === undefined) throw new Error("no pager on the brief");
+  fireEvent.click(earlier);
+  expect(briefBox.value).not.toContain("sealed vials");
+  fireEvent.click(approveIn(card));
+
+  await waitFor(() => {
+    expect(writes).toHaveLength(1);
+  });
+  expect(writes[0]?.route).toBe(`POST /api/cards/${REDRAFT_CARD_ID}/approve`);
+  expect(writes[0]?.body).toMatchObject({ brief: expect.not.stringContaining("sealed vials") as unknown });
+});
+
+it("shows a card that arrives mid-draft at the end of the chat, leaving the draft in the box", async () => {
   const story = chatStory("working");
   const { writes, sources } = renderRoutes(story.routes);
   fireEvent.change(await composer(), { target: { value: "Also ask Calder" } });
   story.advance("drafted");
   await announce(sources, "conversation", CONVERSATION_ID);
 
-  await screen.findByRole("button", { name: /Send this request to 2 organizations\?\s*Review/ });
-  expect(screen.queryByRole("listbox")).toBeNull();
+  await outreach();
   expect(await composer()).toHaveProperty("value", "Also ask Calder");
   expect(writes).toEqual([]);
 });
 
-it("opens a card that arrives over an empty composer, ignoring keys for a moment", async () => {
+it("holds Approve on a card that just arrived, for a moment", async () => {
   const story = chatStory("working");
   const { writes, sources } = renderRoutes(story.routes);
   await composer();
   story.advance("drafted");
   await announce(sources, "conversation", CONVERSATION_ID);
 
-  const list = await askCard();
-  expect(document.activeElement).toBe(list);
-  fireEvent.keyDown(list, { key: "1" });
-  fireEvent.keyDown(list, { key: "Enter" });
+  const card = await outreach();
+  expect(approveIn(card)).toHaveProperty("disabled", true);
+  fireEvent.click(approveIn(card));
   await act(() => new Promise((resolve) => setTimeout(resolve, ARRIVAL_PAUSE_MS + 50)));
   expect(writes).toEqual([]);
 
-  fireEvent.keyDown(list, { key: "Enter" });
+  fireEvent.click(approveIn(card));
   await waitFor(() => {
     expect(writes).toEqual([{ route: APPROVE, body: { recipients: [orgs.northlake.id, orgs.ridgeline.id] } }]);
   });
@@ -550,7 +611,8 @@ it("says so when the chat isn't there", async () => {
       <RouterProvider router={router} />
     </AppProviders>,
   );
-  expect(await screen.findByText("This chat isn't here")).toBeTruthy();
+  // Whose it is, from `GET /api/demo/whose`; this id is in no world of the demo.
+  expect(await screen.findByText("This chat isn't in this demo")).toBeTruthy();
 });
 
 // --- The live demo's failure states (LIVE_DEMO_PLAN 3.5) ---------------------------------
@@ -601,29 +663,26 @@ const HOLDS = [
   ["session_exhausted", budgets.sessionExhausted, "Session budget used up"],
 ] as const;
 
-it.each(HOLDS)("holds every send on the outreach card while the budget is %s, and says so", async (_state, budget, line) => {
+it.each(HOLDS)("holds Approve, Decline and the box on a waiting card while the budget is %s", async (_state, budget, line) => {
   const { writes } = renderRoutes({ ...chatRoutes("drafted"), "GET /api/budget": budget });
-  const list = await askCard();
-  expect(await screen.findByText(line)).toBeTruthy();
-  const send = within(list).getByRole("option", { name: /Send to 2 organizations/ });
-  expect(send.getAttribute("aria-disabled")).toBe("true");
-  fireEvent.keyDown(list, { key: "Enter" });
-  fireEvent.click(send);
+  const card = await outreach();
+  // One strip, on the card's top edge, not on the box.
+  expect(await screen.findAllByText(line)).toHaveLength(1);
+  await waitFor(() => {
+    expect(approveIn(card)).toHaveProperty("disabled", true);
+  });
+  expect(within(card).getByRole("button", { name: "Decline" })).toHaveProperty("disabled", true);
+  expect(within(card).getByText("Nothing goes out until the budget is back")).toBeTruthy();
+  expect(await composer()).toHaveProperty("disabled", true);
+  expect(
+    screen.getByText("Claude can't redraft until the budget is back. Ticking and changing the wording still work."),
+  ).toBeTruthy();
+  fireEvent.keyDown(within(card).getByRole("textbox", { name: "Brief" }), { key: "Enter", metaKey: true });
 
-  // "Something else" would start Claude's turn as the composer would; it holds the same way.
-  fireEvent.change(screen.getByRole("textbox", { name: "Something else" }), { target: { value: "Leave Ridgeline out" } });
-  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty("disabled", true);
-  fireEvent.keyDown(screen.getByRole("textbox", { name: "Something else" }), { key: "Enter" });
-
-  // Choosing and rewording still work; only the sends hold.
-  fireEvent.click(within(list).getByRole("option", { name: /Send to a subset/ }));
-  fireEvent.click(screen.getByRole("checkbox", { name: /Ridgeline Fabrication/ }));
-  expect(screen.getByRole("button", { name: "Send to 1 organization" })).toHaveProperty("disabled", true);
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: /Edit brief/ }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), { target: { value: "A shorter brief." } });
-  expect(screen.getByRole("button", { name: "Send with changes" })).toHaveProperty("disabled", true);
-
+  // Ticking and rewording still work; only what starts Claude's turn holds.
+  fireEvent.click(tick(card, "Ridgeline Fabrication"));
+  fireEvent.change(within(card).getByRole("textbox", { name: "Brief" }), { target: { value: "A shorter brief." } });
+  expect(within(card).getByText("· edited by you")).toBeTruthy();
   expect(writes).toEqual([]);
 });
 
@@ -643,9 +702,9 @@ it.each(HOLDS)("holds an inline answer while the budget is %s, and says so", asy
 it("sends the outreach card once the budget is ok again", async () => {
   let budget: (typeof budgets)[keyof typeof budgets] = budgets.paused;
   const { writes, queryClient } = renderRoutes({ ...chatRoutes("drafted"), "GET /api/budget": () => budget });
-  const list = await askCard();
+  const card = await outreach();
   await screen.findByText("Live models are paused");
-  fireEvent.keyDown(list, { key: "Enter" });
+  fireEvent.click(approveIn(card));
   expect(writes).toEqual([]);
 
   budget = budgets.ok;
@@ -653,7 +712,7 @@ it("sends the outreach card once the budget is ok again", async () => {
   await waitFor(() => {
     expect(screen.queryByText("Live models are paused")).toBeNull();
   });
-  fireEvent.keyDown(await askCard(), { key: "Enter" });
+  fireEvent.click(approveIn(card));
   await waitFor(() => {
     expect(writes).toEqual([{ route: APPROVE, body: { recipients: [orgs.northlake.id, orgs.ridgeline.id] } }]);
   });
@@ -714,11 +773,13 @@ it("names the request's card Harmony Network Request, with the request's title i
   expect(within(card).getByText(REQUEST_TITLE)).toBeTruthy();
   cleanup();
 
-  render(<OutreachCard item={outreachCardAt(conversationAt(initialState("sent")))} />);
-  const outreach = screen.getByRole("region", { name: "Harmony Network Request" });
-  expect(within(outreach).getByText(REQUEST_TITLE)).toBeTruthy();
-  // Each organization's subject, as it will read it.
+  render(<OutreachRecord item={outreachCardAt(conversationAt(initialState("sent")))} sentAt={null} />);
+  const outreach = screen.getByRole("region", { name: `Harmony Network Request ${REQUEST_TITLE}` });
+  expect(within(outreach).getByText("Sent to Northlake Characterization Core and Ridgeline Fabrication")).toBeTruthy();
+  // Show what was sent reads it in full: each organization's subject, as it read it.
+  fireEvent.click(within(outreach).getByRole("button", { name: "Show what was sent" }));
   expect(within(outreach).getByText("Airtight holder quote")).toBeTruthy();
+  expect(within(outreach).getByText("Not sent to Calder Computational.")).toBeTruthy();
 });
 
 // --- Sending without review (LIVE_DEMO_PLAN 3.10) --------------------------------------
@@ -733,13 +794,14 @@ it.each([
   ["pending", initialState("drafted", { auto: true }), "Sending…"],
   ["approved", initialState("sent", { auto: true }), "Sent without review"],
   ["rejected", initialState("drafted", { auto: true, autoFailure: "Ridgeline wasn't screened as a fit." }), "Not sent"],
-] as const)("shows an unreviewed card %s with its line and nothing to press", (status, state, line) => {
+] as const)("shows an unreviewed card %s with its line and nothing to decide", (status, state, line) => {
   const item = outreachCardAt(conversationAt(state));
   expect(item.status).toBe(status);
-  render(<OutreachCard item={item} />);
-  const card = screen.getByRole("region", { name: "Harmony Network Request" });
+  render(<OutreachRecord item={item} sentAt={null} />);
+  const card = screen.getByRole("region", { name: `Harmony Network Request ${REQUEST_TITLE}` });
   expect(within(card).getByText(line)).toBeTruthy();
-  expect(within(card).queryAllByRole("button")).toEqual([]);
+  expect(within(card).queryByRole("button", { name: "Approve and send" })).toBeNull();
+  expect(within(card).queryByRole("button", { name: "Decline" })).toBeNull();
   if (status === "rejected") expect(within(card).getByText("Not sent: Ridgeline wasn't screened as a fit.")).toBeTruthy();
 });
 
@@ -747,7 +809,7 @@ it("asks nothing while Claude sends without review", async () => {
   renderChat("drafted", { auto: true, override: true });
   expect(await screen.findByText("Sending…")).toBeTruthy();
   await composer();
-  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Approve and send" })).toBeNull();
   expect(screen.queryByRole("button", { name: /Review/ })).toBeNull();
 });
 
@@ -764,20 +826,6 @@ it.each([
   await waitFor(() => {
     expect(chip() !== null).toBe(shown);
   });
-});
-
-it("says in words that the chat sends without review, at phone width too", async () => {
-  renderChat("sent", { override: true });
-  const trigger = await screen.findByRole("button", { name: "Sends without review" });
-  // jsdom applies no media queries: read which label each Tailwind breakpoint shows.
-  const labels = [...trigger.querySelectorAll("span")].map((span) => ({
-    text: span.textContent,
-    classes: span.className.split(/\s+/),
-  }));
-  const shown = (hiddenBy: string) =>
-    labels.filter(({ classes }) => !classes.includes(hiddenBy) && !classes.includes("hidden")).map(({ text }) => text);
-  expect(shown("max-sm:hidden")).toEqual(["No review"]);
-  expect(shown("sm:hidden")).toEqual(["Sends without review"]);
 });
 
 it("changes this chat's send mode from the chip's menu", async () => {
@@ -992,33 +1040,22 @@ function renderCard(patch: Partial<OutreachCardItem>) {
   return renderRoutes({ ...chatRoutes("drafted"), "GET /api/conversations/{conversation_id}": () => ({ ...detail, items }) });
 }
 
-const [NORTHLAKE, RIDGELINE] = cardRecipients as [CardRecipient, CardRecipient, CardRecipient];
+const [, RIDGELINE] = cardRecipients as [CardRecipient, CardRecipient, CardRecipient];
 
 it("starts a row Claude didn't suggest unticked, whatever its fit", async () => {
   renderCard({ recipients: cardRecipients.map((row) => (row === RIDGELINE ? { ...row, suggested: false } : row)) });
-  const list = await screen.findByRole("listbox", { name: "Send this request to 1 organization?" });
-  fireEvent.click(within(list).getByRole("option", { name: /Send to a subset/ }));
-  expect(screen.getByRole<HTMLInputElement>("checkbox", { name: /Northlake/ }).checked).toBe(true);
-  expect(screen.getByRole<HTMLInputElement>("checkbox", { name: /Ridgeline Fabrication/ }).checked).toBe(false);
-});
-
-it("titles the card, and the composer's strip, by the ticked set", async () => {
-  renderChat("drafted");
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Send to a subset/ }));
-  fireEvent.click(screen.getByRole("checkbox", { name: /Calder Computational/ }));
-  expect(screen.getByRole("heading", { name: "Send this request to 3 organizations?" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("checkbox", { name: /Northlake/ }));
-  expect(screen.getByRole("heading", { name: "Send this request to 2 organizations?" })).toBeTruthy();
-
-  fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
-  expect(await screen.findByRole("button", { name: /Send this request to 2 organizations\?\s*Review/ })).toBeTruthy();
+  const card = await outreach();
+  expect(tick(card, "Northlake Characterization Core").checked).toBe(true);
+  expect(tick(card, "Ridgeline Fabrication").checked).toBe(false);
+  expect(within(card).getByText("· 1 of 3")).toBeTruthy();
 });
 
 it("sends to every row once all are ticked, a near miss included", async () => {
   const { writes } = renderChat("drafted");
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Send to a subset/ }));
-  fireEvent.click(screen.getByRole("checkbox", { name: /Calder Computational/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Send to 3 organizations" }));
+  const card = await outreach();
+  fireEvent.click(tick(card, "Calder Computational"));
+  expect(within(card).getByText("Starts a conversation with each of them · ⌘↵")).toBeTruthy();
+  fireEvent.click(approveIn(card));
   await waitFor(() => {
     expect(writes).toEqual([
       { route: APPROVE, body: { recipients: [orgs.northlake.id, orgs.ridgeline.id, orgs.calder.id] } },
@@ -1026,105 +1063,19 @@ it("sends to every row once all are ticked, a near miss included", async () => {
   });
 });
 
-it("shows each organization's subject and ask in the subset view", async () => {
-  renderChat("drafted");
-  const card = await screen.findByRole("region", { name: "Send this request to 2 organizations?" });
-  fireEvent.click(within(card).getByRole("option", { name: /Send to a subset/ }));
-  for (const row of cardRecipients) {
-    expect(within(card).getByText(row.title ?? "")).toBeTruthy();
-    expect(within(card).getByText(row.ask ?? "")).toBeTruthy();
-  }
-});
-
-it("sends an edited ask in asks, for that organization only", async () => {
+it("changes how the chat sends from the card, for Claude's next request", async () => {
   const { writes } = renderChat("drafted");
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Edit brief/ }));
-  // Only the ticked organizations have an ask to edit.
-  expect(screen.queryByRole("textbox", { name: "Ask for Calder Computational" })).toBeNull();
-  const ask = screen.getByRole("textbox", { name: "Ask for Northlake Characterization Core" });
-  expect(ask).toHaveProperty("value", NORTHLAKE.ask);
-  fireEvent.change(ask, { target: { value: "Quote XRD only, under $900." } });
-  fireEvent.click(screen.getByRole("button", { name: "Send with changes" }));
+  const card = await outreach();
+  expect(within(card).getByText(/This chat: review before sending/)).toBeTruthy();
+  fireEvent.keyDown(within(card).getByRole("button", { name: "Change how this chat sends requests" }), { key: "Enter" });
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByText("Applies from Claude's next request; this one still waits for you.")).toBeTruthy();
+  fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Send without review" }));
   await waitFor(() => {
     expect(writes).toEqual([
-      {
-        route: APPROVE,
-        body: { recipients: [orgs.northlake.id, orgs.ridgeline.id], asks: { [orgs.northlake.id]: "Quote XRD only, under $900." } },
-      },
+      { route: `PATCH /api/conversations/${CONVERSATION_ID}`, body: { send_without_confirmation: true } },
     ]);
   });
-});
-
-// --- View more (LIVE_DEMO_PLAN 3.11) ---------------------------------------------------
-
-const viewMore = (within_: HTMLElement) => within(within_).queryAllByRole("button", { name: "View more" });
-
-it("clamps a long brief, and long asks, behind View more in the choose and subset views", async () => {
-  simulateLayout();
-  renderChat("drafted", { long: true });
-  const card = await screen.findByRole("region", { name: "Send this request to 2 organizations?" });
-  // The brief; the names under the first option fit.
-  expect(viewMore(card)).toHaveLength(1);
-
-  fireEvent.click(within(card).getByRole("option", { name: /Send to a subset/ }));
-  // The brief, and each organization's ask.
-  expect(viewMore(card)).toHaveLength(4);
-  fireEvent.click(viewMore(card)[0] ?? card);
-  expect(within(card).getByRole("button", { name: "View less" }).getAttribute("aria-expanded")).toBe("true");
-});
-
-it("grows an edit box past seven lines to its whole text on View more, with nothing left to scroll", async () => {
-  simulateLayout();
-  renderChat("drafted", { long: true });
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Edit brief/ }));
-  const toggleFor = (box: HTMLElement) =>
-    screen
-      .queryAllByRole("button", { name: /^View (more|less)$/ })
-      .find((button) => button.getAttribute("aria-controls") === box.id);
-
-  const brief = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Brief" });
-  expect(brief.clientHeight).toBeLessThan(brief.scrollHeight);
-  const more = toggleFor(brief);
-  if (more === undefined) throw new Error("no View more for the brief");
-  fireEvent.click(more);
-  expect(brief.clientHeight).toBeGreaterThanOrEqual(brief.scrollHeight);
-  expect(more.textContent).toBe("View less");
-
-  // Six lines fit in the seven a box shows, so the ask has nothing to unfold.
-  const ask = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Ask for Northlake Characterization Core" });
-  expect(ask.clientHeight).toBeGreaterThanOrEqual(ask.scrollHeight);
-  expect(toggleFor(ask)).toBeUndefined();
-});
-
-it("shows no View more where the text fits", async () => {
-  simulateLayout();
-  renderCard({
-    brief: "Quote XRD on 12 powders by Nov 6.",
-    recipients: cardRecipients.map((row) => ({ ...row, ask: "Quote it." })),
-  });
-  const card = await screen.findByRole("region", { name: "Send this request to 2 organizations?" });
-  expect(viewMore(card)).toEqual([]);
-  fireEvent.click(within(card).getByRole("option", { name: /Send to a subset/ }));
-  expect(viewMore(card)).toEqual([]);
-  fireEvent.click(within(card).getByRole("button", { name: "Back" }));
-  fireEvent.click(within(await askCard()).getByRole("option", { name: /Edit brief/ }));
-  expect(viewMore(card)).toEqual([]);
-});
-
-it("clamps a long list of names under the first option, which View more only unfolds", async () => {
-  simulateLayout();
-  const many = Array.from({ length: 8 }, (_, index): CardRecipient => ({
-    ...NORTHLAKE,
-    org: {
-      id: `0b1d7a3e-0000-4000-8000-0000000009${String(index).padStart(2, "0")}`,
-      slug: `lab-${index}`,
-      name: `Materials Laboratory Number ${index}`,
-    },
-  }));
-  const { writes } = renderCard({ brief: "Quote XRD on 12 powders by Nov 6.", recipients: many });
-  const card = await screen.findByRole("region", { name: "Send this request to 8 organizations?" });
-  const first = within(card).getByRole("option", { name: /Send to all 8/ });
-  fireEvent.click(within(first).getByRole("button", { name: "View more" }));
-  expect(within(first).getByRole("button", { name: "View less" })).toBeTruthy();
-  expect(writes).toEqual([]);
+  // This card still waits.
+  expect(approveIn(card)).toBeTruthy();
 });

@@ -174,8 +174,9 @@ def chat_item_lines(item: ChatItem, owner: str) -> list[str]:
             return ["", "Claude:", *_indent(markdown)]
         case ThinkingSummaryItem(text=text):
             return [f"  (thinking) {text}"]
-        case ToolActivityItem(label=label, detail=detail, status=status):
-            return [f"  [{status}] {label}" + (f" · {detail}" if detail else "")]
+        case ToolActivityItem(label=label, detail=detail, status=status, outcome=outcome):
+            line = f"  [{status}] {label}" + (f" · {outcome}" if outcome else "")
+            return [line, *(_indent(detail, "      ") if detail else [])]
         case OutreachCardItem():
             names = ", ".join(r.org.name for r in item.recipients if r.selected)
             title = brief_title(item.brief)

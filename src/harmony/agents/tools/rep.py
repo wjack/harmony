@@ -8,17 +8,20 @@
   `agent_approved`, id `escalations.held_message_id`) once a teammate approves it.
 - `consult(question)`: opens a consult (`domain.consults.open`) and stops the turn until
   an answer is released; the tool result is the released answer. The counterparty hears
-  nothing.
+  nothing. It is refused once the turn has sent a message: that handed the move to the
+  counterparty, and the consult would take it back until its answer. The
+  representative asks at the start of its next turn instead.
 - `close(summary)`: ends the thread for both sides. The summary is this side's
   `rep_sessions.close_summary`, for its own org only and never sent; a `close` message
   with an empty body marks the point in the thread, and the counterparty's
   representative gets a `closed` notice. On a thread the counterparty closed, `close`
   only stores this side's summary (its one last turn). A `close` is never held, even
   in *Ask*: nothing it writes reaches the counterparty but the marker. It is refused
-  while the counterparty has sent no message: a closed thread can't be reopened, and
-  the way to wait for a reply is to end the turn (LIVE_DEMO_PLAN 3.13 E1). Before this
-  side has sent one either (its opener declined, say), there is no reply to wait for:
-  the refusal says that ending the turn without sending ends the conversation.
+  while the counterparty has sent no message in this run (`RepToolScope.run_start_seq`:
+  a reopened thread's side that reopened it waits for a reply to its new message): the
+  way to wait for a reply is to end the turn (LIVE_DEMO_PLAN 3.13 E1). Before this side
+  has sent one either (its opener declined, say), there is no reply to wait for: the
+  refusal says that ending the turn without sending ends the conversation.
 
 Every call first checks, under the thread's row lock, that this side may act now: the
 thread is live, nothing of this side's waits on a person, and it is this side's turn
@@ -33,7 +36,16 @@ A response with text and no tool call is a `send_message` only when it answers t
 turn's opening (the runtime passes no other to `text_reply`), the turn has sent nothing
 yet and it had something to answer (`RepToolScope.bare_text_sends`): the model answered
 in prose instead of calling the tool. Other text, after a refused `close` say, is the
-model's own and stays in its transcript.
+model's own and stays in its transcript. In a turn that opened with new guidance from
+its side (`RepToolScope.guided`), such a reply is held for a person whatever the mode
+(`GUIDED_TEXT_HOLD`): right after guidance it is likely to acknowledge it.
+
+A member's Edit (a steer, docs/design/EDIT.md §3.7) recorded after the turn started
+(`steers.max_seq` above `RepToolScope.steer_seq`) means the turn works from old
+instructions: a send before the turn has sent anything is held for a person
+(`STEERED_HOLD`), so the move stays with this side; a send after one, or a `close`, is
+refused (`STEERED_NOT_SENT`, `STEERED_NOT_CLOSED`), so the counterparty moves next as
+usual and the side's next turn opens with the new guidance.
 
 Owner: R-agents (the tool names, schemas and input models are the contract's).
 """
@@ -61,7 +73,7 @@ from harmony.db import repo
 from harmony.db.models import Consult, Escalation, Org, Thread, ThreadMessage
 from harmony.db.models.choices import Autonomy, EscalationKind, Side
 from harmony.db.uow import UnitOfWork, unit_of_work
-from harmony.domain import consults, escalations, routing, settings, threads
+from harmony.domain import consults, escalations, routing, settings, steers, threads
 from harmony.ids import side_effect_id
 
 SEND_MESSAGE: Final = "send_message"
@@ -93,8 +105,10 @@ CONSULT_TOOL: Final[ToolDefinition] = {
     "name": CONSULT,
     "description": (
         "Ask your own side for something you don't have: a fact, a price, an exception, "
-        "or a decision. You wait for the answer, which comes back as this tool's result; "
-        "the counterparty hears nothing unless you tell them."
+        "or a decision. Consult before you reply: once you've sent a message this turn, "
+        "it's the counterparty's move, so ask at the start of your next turn, after "
+        "theirs. You wait for the answer, which comes back as this tool's result; the "
+        "counterparty hears nothing unless you tell them."
     ),
     "input_schema": {
         "type": "object",
@@ -115,8 +129,8 @@ CONSULT_TOOL: Final[ToolDefinition] = {
 CLOSE_TOOL: Final[ToolDefinition] = {
     "name": CLOSE,
     "description": (
-        "End the conversation for good, for both sides, once it's settled or clearly "
-        "going nowhere. Not for waiting: to wait for their reply, stop calling tools. "
+        "End the conversation for both sides once it's settled or clearly going "
+        "nowhere. Not for waiting: to wait for their reply, stop calling tools. "
         "The summary is for your own organization only and is never sent to the "
         "counterparty."
     ),
@@ -173,10 +187,21 @@ SENT: Final = (
     "To wait for their reply, end your turn now: stop calling tools."
 )
 CLOSED: Final = "Closed. Nothing more reaches the counterparty."
+# Owed to a `consult` or a held message still waiting on a person when the thread ended
+# (its deadline): a reopened run's first turn opens with it (REOPEN.md §4.9).
+CUT_OFF_CONSULT: Final = "No answer: the conversation closed before your side decided."
+CUT_OFF_HELD: Final = "Not sent: the conversation closed before your side decided."
 # A `close` before the counterparty has written anything.
 NOT_REPLIED: Final = (
     "{counterparty} hasn't replied yet. To wait for their reply, end your turn: stop "
-    "calling tools. `close` ends the conversation for good."
+    "calling tools. `close` ends the conversation."
+)
+# A `consult` after this turn sent a message (FEEDBACK_R2_PLAN decision 1): the send
+# handed the move over, and a consult would hold it for this side until its answer.
+CONSULT_AFTER_SEND: Final = (
+    "Not asked: your message already went out, so it's {counterparty}'s move. Don't "
+    "close. End your turn now: stop calling tools. Ask your side at the start of your "
+    "next turn."
 )
 # A `close` before either side has written anything: the thread expires once this
 # turn ends with nothing sent (`ThreadWorkflow`).
@@ -185,8 +210,25 @@ NOTHING_SENT: Final = (
     "If you end your turn without sending, it ends there. To reach them, use "
     "`send_message`."
 )
-# The held draft's reason (the inbox derives its own "Why this needs you").
+# Why a message was held, stored as its draft's reason ("Why this needs you").
 _ASK_HOLD: Final = "A teammate approves every message in Ask mode."
+STEERED_HOLD: Final = "Claude wrote this before your side's latest edit reached it."
+GUIDED_TEXT_HOLD: Final = (
+    "Claude answered in plain text just after your side's edit reached it, so a teammate "
+    "checks it first."
+)
+# A send or close after a steer was recorded mid-turn, once the turn has sent.
+STEERED_NOT_SENT: Final = (
+    "Not sent: your side changed how you should handle this conversation after this turn "
+    "began, and your earlier message already reached {counterparty}, so it's their move. "
+    "End your turn now: stop calling tools. Your side's update reaches you at the start "
+    "of your next turn."
+)
+STEERED_NOT_CLOSED: Final = (
+    "Not closed: your side changed how you should handle this conversation after this "
+    "turn began. End your turn now: stop calling tools. Your side's update reaches you "
+    "at the start of your next turn."
+)
 _HELD_KIND: Final[EscalationKind] = "outbound_review"
 
 
@@ -201,6 +243,14 @@ class RepToolScope(_Input):
     turn_id: UUID
     # See `TurnContext.bare_text_sends`.
     bare_text_sends: bool = True
+    # The turn opened with a guidance block: a bare text reply is held (module docstring).
+    guided: bool = False
+    # The newest steer `seq` for this side when the turn started: a later one is an
+    # Edit that arrived mid-turn.
+    steer_seq: int = Field(default=0, ge=0)
+    # The thread's highest message seq when this run began: `close` counts only the
+    # messages after it (0 for a thread's first run).
+    run_start_seq: int = Field(default=0, ge=0)
 
 
 class _Refused(Exception):
@@ -302,15 +352,28 @@ class RepToolExecutor:
                 "The conversation is waiting on a person on your side. Nothing can be sent "
                 "until they decide; end your turn."
             )
+        if isinstance(args, ConsultInput) and await _sent_this_turn(
+            session, scope.world_id, thread_id=thread.id, turn_id=scope.turn_id
+        ):
+            refusal = CONSULT_AFTER_SEND.format(counterparty=await self._counterparty(session))
+            raise _Refused(refusal)
         if thread.side_to_move not in (None, scope.side) and not await _sent_this_turn(
             session, scope.world_id, thread_id=thread.id, turn_id=scope.turn_id
         ):
             raise _Refused("It isn't your turn. Wait for the counterparty's reply.")
         if isinstance(args, CloseInput) and not await _has_written(
-            session, scope.world_id, thread_id=thread.id, org_id=scope.counterparty_org_id
+            session,
+            scope.world_id,
+            thread_id=thread.id,
+            org_id=scope.counterparty_org_id,
+            after_seq=scope.run_start_seq,
         ):
             wrote = await _has_written(
-                session, scope.world_id, thread_id=thread.id, org_id=scope.org_id
+                session,
+                scope.world_id,
+                thread_id=thread.id,
+                org_id=scope.org_id,
+                after_seq=scope.run_start_seq,
             )
             refusal = NOT_REPLIED if wrote else NOTHING_SENT
             raise _Refused(refusal.format(counterparty=await self._counterparty(session)))
@@ -320,6 +383,13 @@ class RepToolExecutor:
         scope = self._scope
         org = await repo.get_required(session, Org, scope.world_id, scope.counterparty_org_id)
         return " ".join(org.name.split())
+
+    async def _steered_since_start(self, session: AsyncSession) -> bool:
+        """Whether a steer for this side was recorded after the turn started, whatever
+        its status (EDIT.md §3.7)."""
+        scope = self._scope
+        newest = await steers.max_seq(session, scope.world_id, scope.thread_id, scope.side)
+        return newest > scope.steer_seq
 
     async def _mode(self, session: AsyncSession) -> Autonomy:
         """The side's mode toward the counterparty, read live at the decision (§3)."""
@@ -336,7 +406,7 @@ class RepToolExecutor:
     ) -> ToolExecution:
         match args:
             case SendMessageInput(text=text):
-                return await self._send(uow, text, effect_id)
+                return await self._send(uow, text, effect_id, bare=tool_use_id == TEXT_REPLY_ID)
             case ConsultInput(question=question):
                 return await self._consult(uow, question, effect_id, tool_use_id)
             case CloseInput(summary=summary):
@@ -346,10 +416,24 @@ class RepToolExecutor:
 
     # --- Messages -------------------------------------------------------------------
 
-    async def _send(self, uow: UnitOfWork, text: str, message_id: UUID) -> ToolExecution:
+    async def _send(
+        self, uow: UnitOfWork, text: str, message_id: UUID, *, bare: bool
+    ) -> ToolExecution:
+        """Send, or hold for a person: after a mid-turn Edit, a guided turn's bare text,
+        or in *Ask* (module docstring)."""
         scope = self._scope
-        if await self._mode(uow.session) == "ask":
-            return await self._hold(uow, text, message_id)
+        session = uow.session
+        if await self._steered_since_start(session):
+            if await _sent_this_turn(
+                session, scope.world_id, thread_id=scope.thread_id, turn_id=scope.turn_id
+            ):
+                refusal = STEERED_NOT_SENT.format(counterparty=await self._counterparty(session))
+                raise _Refused(refusal)
+            return await self._hold(uow, text, message_id, reason=STEERED_HOLD)
+        if bare and scope.guided:
+            return await self._hold(uow, text, message_id, reason=GUIDED_TEXT_HOLD)
+        if await self._mode(session) == "ask":
+            return await self._hold(uow, text, message_id, reason=_ASK_HOLD)
         message = await threads.append_message(
             uow,
             scope.thread_id,
@@ -371,6 +455,8 @@ class RepToolExecutor:
             # The counterparty closed it: only the summary is left to write.
             await threads.store_close_summary(uow, scope.thread_id, scope.side, summary)
             return ToolExecution(ends_turn=True, owed_result=CLOSED)
+        if await self._steered_since_start(session):
+            raise _Refused(STEERED_NOT_CLOSED)
         await threads.store_close_summary(uow, scope.thread_id, scope.side, summary)
         message = await threads.append_message(
             uow,
@@ -382,7 +468,9 @@ class RepToolExecutor:
             provenance="agent",
             turn_id=scope.turn_id,
         )
-        await threads.set_state(uow, scope.thread_id, "closed")
+        await threads.set_state(
+            uow, scope.thread_id, "closed", end_reason="closed", closed_by=scope.side
+        )
         org = await repo.get_required(session, Org, scope.world_id, scope.org_id)
         await context.queue_notice(
             uow,
@@ -412,10 +500,12 @@ class RepToolExecutor:
 
     # --- Held for a person --------------------------------------------------------------
 
-    async def _hold(self, uow: UnitOfWork, text: str, message_id: UUID) -> ToolExecution:
-        """Hold a message for a teammate (*Ask*): an `outbound_review` escalation whose
-        draft is the message, sent once approved (`escalations.held_message_id`). The
-        turn stops; its result is owed then."""
+    async def _hold(
+        self, uow: UnitOfWork, text: str, message_id: UUID, *, reason: str
+    ) -> ToolExecution:
+        """Hold a message for a teammate: an `outbound_review` escalation whose draft
+        (rev 1, with `reason` as why it needs them) is the message, sent once approved
+        (`escalations.held_message_id`). The turn stops; its result is owed then."""
         scope = self._scope
         escalation, created = await escalations.open(
             uow,
@@ -430,9 +520,9 @@ class RepToolExecutor:
             draft = ConsultDraft(
                 answer=text,
                 needs_human=True,
-                needs_human_reason=_ASK_HOLD,
+                needs_human_reason=reason,
                 route=None,
-                rationale=_ASK_HOLD,
+                rationale=reason,
             )
             await escalations.add_draft(
                 uow, escalation.id, draft, turn_id=scope.turn_id, draft_rev=1
@@ -477,7 +567,7 @@ async def _sent_this_turn(
     session: AsyncSession, world_id: UUID, *, thread_id: UUID, turn_id: UUID
 ) -> bool:
     """Whether this turn already sent a message: that handed the move over, and the turn
-    may go on sending."""
+    may go on sending but not consult."""
     found = await session.scalar(
         select(ThreadMessage.id)
         .where(
@@ -491,9 +581,10 @@ async def _sent_this_turn(
 
 
 async def _has_written(
-    session: AsyncSession, world_id: UUID, *, thread_id: UUID, org_id: UUID
+    session: AsyncSession, world_id: UUID, *, thread_id: UUID, org_id: UUID, after_seq: int
 ) -> bool:
-    """Whether `org_id` has sent a message on the thread (a close marker isn't one)."""
+    """Whether `org_id` has sent a message on the thread after `after_seq` (a close
+    marker isn't one)."""
     found = await session.scalar(
         select(ThreadMessage.id)
         .where(
@@ -501,6 +592,7 @@ async def _has_written(
             ThreadMessage.thread_id == thread_id,
             ThreadMessage.from_org_id == org_id,
             ThreadMessage.kind == "message",
+            ThreadMessage.seq > after_seq,
         )
         .limit(1)
     )
@@ -534,12 +626,19 @@ __all__ = [
     "CLOSE",
     "CLOSED",
     "CONSULT",
+    "CONSULT_AFTER_SEND",
+    "CUT_OFF_CONSULT",
+    "CUT_OFF_HELD",
+    "GUIDED_TEXT_HOLD",
     "NOTHING_SENT",
     "NOT_REPLIED",
     "REP_INPUTS",
     "REP_TOOLS",
     "SEND_MESSAGE",
     "SENT",
+    "STEERED_HOLD",
+    "STEERED_NOT_CLOSED",
+    "STEERED_NOT_SENT",
     "TEXT_REPLY_ID",
     "CloseInput",
     "ConsultInput",

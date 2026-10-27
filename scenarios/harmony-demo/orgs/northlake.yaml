@@ -23,7 +23,7 @@ members:
   - slug: raj
     name: Raj Patel
     title: Staff scientist, XRD and SEM
-    role: member
+    role: admin
     profile: Runs the instruments; sample prep and air-free handling questions.
 
 settings:

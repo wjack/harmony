@@ -1,0 +1,81 @@
+/*
+ * Proposed type scale and spacing, injected with page.addStyleTag to preview the effect.
+ * Not a repo change. In the repo this becomes tokens in web/src/theme/tokens.css
+ * (@theme --text-* with paired line heights) plus a sweep that replaces the 26 ad-hoc
+ * text-[Npx] sizes with five steps. Here the arbitrary classes are remapped in place.
+ */
+
+/* ---- 1. Type scale: five UI steps + prose, no half pixels ---------------------------- */
+:root {
+  --fs-xs: 12px;   --lh-xs: 16px;   /* captions, meta, section labels, disclaimer */
+  --fs-sm: 13px;   --lh-sm: 18px;   /* secondary text, hints, card body */
+  --fs-base: 14px; --lh-base: 20px; /* UI default: sidebar, buttons, titles in cards, inputs in cards */
+  --fs-md: 16px;   --lh-md: 24px;   /* user bubble, chat composer */
+  --fs-prose: 16px; --lh-prose: 1.5; /* assistant and agent messages, drafts (serif) */
+  --gutter: 16px;  /* minimum side margin for the composer and the docked card */
+}
+
+.text-\[12\.5px\], .text-\[11\.5px\] { font-size: var(--fs-xs) !important; }
+.text-\[13\.5px\] { font-size: var(--fs-sm) !important; }
+.text-\[14\.5px\], .text-\[15px\], .text-\[15\.5px\] { font-size: var(--fs-base) !important; }
+
+/* Prose: Claude measures ~16px with ~23-24px leading; lists don't open up to 1.65. */
+.chat-prose { font-size: var(--fs-prose) !important; line-height: var(--lh-prose) !important; }
+.chat-prose li { line-height: var(--lh-prose) !important; }
+.chat-prose-sm { font-size: var(--fs-sm) !important; line-height: var(--lh-sm) !important; }
+.chat-prose-sm.chat-prose-lead { font-size: var(--fs-base) !important; line-height: var(--lh-base) !important; }
+.font-serif.leading-\[1\.6\] { line-height: var(--lh-prose) !important; }
+.font-serif.text-\[15px\].leading-\[1\.6\] { font-size: var(--fs-prose) !important; }
+
+/* Decision card title: 16px medium -> 15px; it sits under a 13px eyebrow. */
+h2.text-\[16px\].leading-\[1\.45\] { font-size: 15px !important; line-height: 22px !important; }
+
+/* ---- 2. Density in the docked ask-user card ------------------------------------------ */
+section.rounded-composer[tabindex="-1"] > div:first-child { padding-top: 12px !important; padding-bottom: 8px !important; }
+section.rounded-composer[tabindex="-1"] h2.font-serif { font-size: 17px !important; line-height: 24px !important; }
+section.rounded-composer[tabindex="-1"] [role="option"] { padding-top: 8px !important; padding-bottom: 8px !important; }
+section.rounded-composer[tabindex="-1"] [role="option"] > span:first-child,
+section.rounded-composer[tabindex="-1"] [role="listbox"] > div:last-child > span:first-child { width: 26px !important; height: 26px !important; }
+section.rounded-composer[tabindex="-1"] [role="option"] .block { line-height: var(--lh-base) !important; }
+
+/* Size the docked card against the chat column, not the window (the chat view becomes a
+   size container). Choosing: at most 55% of the column, so the transcript keeps ~45%; the
+   header and the choices stay put and only the brief scrolls. Subset and edit: the panel
+   may take the column down to the header, with ONE scroll (the panel) and no clamped,
+   scrolling textareas inside it. */
+div.flex.h-full.min-h-0.flex-col.bg-canvas:has(> header) { container-type: size; container-name: chatcol; }
+section.rounded-composer[tabindex="-1"] { display: flex; flex-direction: column; }
+section.rounded-composer[tabindex="-1"]:has([role="listbox"]) { max-height: 55cqh; }
+section.rounded-composer[tabindex="-1"]:not(:has([role="listbox"])) { max-height: calc(100cqh - 48px - 48px); }
+section.rounded-composer[tabindex="-1"] > * { flex-shrink: 0; }
+section.rounded-composer[tabindex="-1"]:has([role="listbox"]) > div:nth-child(2) { flex-shrink: 1; min-height: 40px; overflow-y: auto; }
+/* In a panel the brief above it is the gist only (2 lines), the panel body scrolls. */
+section.rounded-composer[tabindex="-1"]:not(:has([role="listbox"])) > div:nth-child(2):not(:has(.px-2.pb-2)) [id] { display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+section.rounded-composer[tabindex="-1"]:not(:has([role="listbox"])) > div:nth-child(2):not(:has(.px-2.pb-2)) button { display: none; }
+section.rounded-composer[tabindex="-1"] > div:has(> .px-2.pb-2) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+section.rounded-composer[tabindex="-1"] .px-2.pb-2 { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+section.rounded-composer[tabindex="-1"] .max-h-\[min\(56vh\,560px\)\] { max-height: none !important; flex: 1 1 auto; min-height: 0; }
+section.rounded-composer[tabindex="-1"] textarea {
+  field-sizing: content; height: auto !important; max-height: none !important; overflow: hidden !important;
+}
+section.rounded-composer[tabindex="-1"] textarea + button[aria-expanded] { display: none; }
+
+/* ---- 3. Gutters: the composer and docked card never touch the sidebar or window edge -- */
+main .relative.mx-auto.w-full.max-w-\[768px\].shrink-0 {
+  max-width: calc(768px + 2 * var(--gutter)) !important;
+  padding-left: var(--gutter) !important;
+  padding-right: var(--gutter) !important;
+}
+
+/* The scroll-to-latest button sits inside a fade as tall as its offset, so it never sits on
+   unfaded text; while the docked card is open it is redundant and hides. */
+main .relative.mx-auto.w-full.max-w-\[768px\].shrink-0 > div[aria-hidden].-top-6 { top: -48px !important; height: 48px !important; }
+main .relative.mx-auto.w-full.max-w-\[768px\].shrink-0:has(section.rounded-composer[tabindex="-1"]) > button[aria-label="Scroll to the latest message"] { display: none !important; }
+
+/* ---- 4. Sidebar rhythm: 32px rows with no 1px gap (Claude measures 31.5px) ----------- */
+nav[aria-label="Sidebar"] ul.gap-px { gap: 0 !important; }
+
+/* ---- 5. Customize: the section list doesn't need 300px at narrow widths -------------- */
+@media (max-width: 1099px) {
+  div.w-\[300px\].shrink-0 { width: 240px !important; }
+}

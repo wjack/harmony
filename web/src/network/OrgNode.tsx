@@ -55,6 +55,29 @@ function SuggestedTag() {
   );
 }
 
+// Each box is two of its name's lines tall (18px, 16px).
+const TWO_LINES = {
+  card: { box: "max-h-9", name: "text-ui-sm font-semibold", meta: "text-ui-xs" },
+  compact: { box: "max-h-8", name: "text-ui-xs font-medium", meta: "text-[11px] leading-4" },
+} as const;
+
+/**
+ * A card's two lines: the org's name, then `meta`. A name too long for one line takes
+ * the meta's line instead of being cut, and only a name longer than two lines ends in
+ * "…", so a name that fits never looks cut short.
+ */
+function TwoLines({ name, meta, size }: { name: string; meta: string; size: keyof typeof TWO_LINES }) {
+  const style = TWO_LINES[size];
+  return (
+    <div title={name} className={cx("min-w-0 flex-1 overflow-hidden", style.box)}>
+      <div data-org-name className={cx("line-clamp-2 break-words text-ink", style.name)}>
+        {name}
+      </div>
+      <div className={cx("truncate text-muted", style.meta)}>{meta}</div>
+    </div>
+  );
+}
+
 /** The requester or a recipient (or a suggested org not contacted): Railway's service card in Claude's tokens. */
 function FullCard({ data, selected }: { data: OrgNodeData; selected: boolean }) {
   const { node, tier, suggested } = data.placed;
@@ -76,18 +99,7 @@ function FullCard({ data, selected }: { data: OrgNodeData; selected: boolean }) 
       {suggested && <SuggestedTag />}
       <div className="flex min-w-0 items-center gap-2.5">
         <OrgAvatar name={node.org.name} seed={node.org.slug} size={28} />
-        {/* Two lines: the name, then the kind. A name too long for one line takes the
-            kind's line instead of being cut, so the org is always named in full. */}
-        <div title={node.org.name} className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-[18px] break-words">
-          <span data-org-name className="font-semibold text-ink">
-            {node.org.name}
-          </span>
-          <br />
-          <span className="text-xs text-muted">
-            {kindLabel(node.kind)}
-            {data.isHome && " · You"}
-          </span>
-        </div>
+        <TwoLines name={node.org.name} meta={`${kindLabel(node.kind)}${data.isHome ? " · You" : ""}`} size="card" />
       </div>
       <div className="flex min-w-0 items-center justify-between gap-2">
         {anchor ? (
@@ -127,6 +139,7 @@ function FullCard({ data, selected }: { data: OrgNodeData; selected: boolean }) 
 function CompactCard({ data, selected }: { data: OrgNodeData; selected: boolean }) {
   const { node, suggested } = data.placed;
   const status = node.participant;
+  const meta = status === "screened" && node.fit !== null ? FIT_LABELS[node.fit] : kindLabel(node.kind);
   return (
     <div
       style={{ width: COMPACT_WIDTH, height: COMPACT_HEIGHT, ...(suggested ? SUGGESTED_RING : {}) }}
@@ -136,13 +149,7 @@ function CompactCard({ data, selected }: { data: OrgNodeData; selected: boolean 
       )}
     >
       <OrgAvatar name={node.org.name} seed={node.org.slug} size={22} />
-      <div title={node.org.name} className="min-w-0 flex-1">
-        <div className="truncate text-xs leading-4 font-medium text-ink">{node.org.name}</div>
-        <div className="truncate text-[11px] leading-4 text-muted">
-          {status === "screened" && node.fit !== null ? FIT_LABELS[node.fit] : kindLabel(node.kind)}
-          {data.isHome && " · You"}
-        </div>
-      </div>
+      <TwoLines name={node.org.name} meta={`${meta}${data.isHome ? " · You" : ""}`} size="compact" />
       {status !== null && status !== "screened" && <StatusPill status={status} size="sm" />}
       <Handles />
     </div>

@@ -5,14 +5,23 @@
  * it, and a reply to Vantage held for review because Northlake trusts Vantage on Ask.
  * Beside them sit threads Claude is handling and ones already closed.
  *
- * The routes are a small in-memory server: resolving, reassigning, redrafting, notes
- * and sharing change the world, so the gallery's buttons really move items between
- * sections. Timestamps are relative to `now`, so ages read as they would in the app.
+ * The routes are a small in-memory server: resolving, reassigning, Edits, Reopen,
+ * comments and sharing change the world, so the gallery's buttons really move items
+ * between sections. Timestamps are relative to `now`, so ages read as they would in the app.
  */
+import type {
+  AddSteer,
+  EndReason,
+  GuidanceView,
+  ReopenBlock,
+  ReopenOffer,
+  ReopenRequest,
+  SteerView,
+} from "../api/types";
 import type { BudgetState, BudgetView } from "../app/budget";
 import { mentionedSlugs } from "../requests/mentions";
-import { northlakeSettings } from "./customize";
-import { problem, type FixtureRoutes } from "./index";
+import { customizeRoutes, northlakeSettings } from "./customize";
+import { problem, type FixtureRequest, type FixtureRoutes } from "./index";
 import { members, orgs, sessionAs, shellRoutes } from "./shell";
 import type {
   ActivityLine,
@@ -29,6 +38,7 @@ import type {
   OrgRef,
   RepresentativeContext,
   ResolveEscalation,
+  Side,
   ThreadAccess,
   ThreadDetail,
   ThreadMessage,
@@ -124,32 +134,36 @@ export function hendersonDraft(createdAt: string): EscalationDraft {
     short_question: HENDERSON_SHORT_QUESTION,
     route: { assignees: [{ slug: "helen", why: HENDERSON_WHY.helen }] },
     rationale:
-      "The public calendar has XRD booked until Nov 10, so without Raj's reserve block the honest answer is no. " +
-      "His note puts the block on Wed, Nov 4, 09:00 to 13:00, enough for about 14 powders. " +
+      "The public calendar has XRD booked until Nov 10, so without the reserve block the honest answer is no. " +
+      "The reserve-slot schedule puts the block on Wed, Nov 4, 09:00 to 13:00, enough for about 14 powders. " +
       "The price is the external academic list: 12 × ($45 + $60) + $150 = $1,410.",
     activity: [
       searched("XRD availability before Nov 6"),
       read("Public calendar"),
-      read("Raj's note, reserve XRD block"),
+      read("XRD reserve-slot schedule"),
       read("External academic price list"),
     ],
+    rewritten_by: null,
     created_at: createdAt,
   };
 }
 
-/** What "Redraft" returns for Henderson (the fixture can't think). */
-function hendersonRedraft(rev: number, createdAt: string): EscalationDraft {
-  const first = hendersonDraft(createdAt);
-  return {
-    ...first,
-    draft_rev: rev,
-    answer:
-      "Yes. We can run XRD on Wednesday, Nov 4 and SEM/EDS the same week, with results to you by Thursday, Nov 5. " +
-      "At list price that's $1,410 for all 12.\n\n" +
-      "Please ship the powders sealed under argon to arrive by Tuesday, Nov 3; we'll handle the glovebox transfer on our side.",
-    rationale: `Redrafted as asked: shorter, and the shipping deadline is its own paragraph. ${first.rationale}`,
-  };
-}
+/** Henderson's answer as Claude rewrites it after an Edit (the fixture can't think). */
+export const HENDERSON_REWRITE =
+  "Yes. We can run XRD on Wednesday, Nov 4 and SEM/EDS the same week, with results to you by Thursday, Nov 5. " +
+  "At list price that's $1,410 for all 12.\n\n" +
+  "Please ship the powders sealed under argon to arrive by Tuesday, Nov 3; we'll handle the glovebox transfer on our side.";
+
+/** Vantage's held reply as Claude rewrites it after an Edit. */
+const VANTAGE_REWRITE =
+  "We don't share who books our instruments or what clients pay. " +
+  "Our public calendar shows which Thursday SEM slots are open, and our external academic price list is on our directory listing.";
+
+/** What Helen tells Claude in the fixtures' Edits. */
+export const EDIT_INSTRUCTION = "Keep it shorter, and give the shipping deadline its own paragraph.";
+
+/** What Helen types to reopen a conversation in the fixtures. */
+export const REOPEN_INSTRUCTION = "Offer them our general capabilities sheet instead.";
 
 /** A message the representative wrote in Ask mode, held as an `outbound_review` draft. */
 function heldDraft(answer: string, createdAt: string): EscalationDraft {
@@ -160,11 +174,12 @@ function heldDraft(answer: string, createdAt: string): EscalationDraft {
     route: null,
     rationale: HELD_REASON,
     activity: [],
+    rewritten_by: null,
     created_at: createdAt,
   };
 }
 
-const VANTAGE_REPLY =
+export const VANTAGE_REPLY =
   "We don't share who books our instruments or what individual clients pay. " +
   "Our external academic price list and the open slots on our public calendar are on our directory listing, and we're happy to quote for work you'd like run yourselves.";
 
@@ -250,7 +265,7 @@ function representative(counterparty: OrgRef, frozenAt: string): RepresentativeC
     parts.push({ kind: "sharing", label: `Also for ${counterparty.name}`, text: extra.sharing_description });
   }
   parts.push({ kind: "instructions", label: "Instructions", text: northlakeSettings.instructions });
-  return { parts, notices: [], released: [], frozen_at: frozenAt };
+  return { parts, notices: [], released: [], guidance: [], frozen_at: frozenAt };
 }
 
 function consult(
@@ -333,10 +348,13 @@ interface ThreadParts {
   notes?: NoteView[];
   closeSummary?: string;
   deadline?: string;
+  reopen?: ReopenOffer;
 }
 
 /** Why the system stopped a thread (a spent budget, a model error), never a person. */
 export type StopReason = NonNullable<ThreadDetail["stop_reason"]>;
+
+const ENDED: ReadonlySet<ThreadState> = new Set(["closed", "expired"]);
 
 function thread(parts: ThreadParts): ThreadRecord {
   const notes = parts.notes ?? [];
@@ -353,10 +371,12 @@ function thread(parts: ThreadParts): ThreadRecord {
       released_at: asked.released_at,
     });
   }
-  const last = [parts.messages.at(-1)?.created_at, notes.at(-1)?.created_at, parts.createdAt]
-    .filter((at): at is string => at !== undefined)
-    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
-  return {
+  const last =
+    [parts.messages.at(-1)?.created_at, notes.at(-1)?.created_at, parts.createdAt]
+      .filter((at): at is string => at !== undefined)
+      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? parts.createdAt;
+  const ended = parts.state === "closed" || parts.state === "expired";
+  const record: ThreadRecord = {
     detail: {
       id: parts.threadId,
       title: parts.title,
@@ -365,13 +385,20 @@ function thread(parts: ThreadParts): ThreadRecord {
       side: "responder",
       requester: parts.requester,
       responder: northlake,
-      last_activity_at: last ?? parts.createdAt,
+      last_activity_at: last,
+      run: 1,
+      end_reason: null,
+      ended_at: null,
+      closed_by: null,
+      run_finished_at: null,
       version: 1,
       side_to_move: null,
       deadline_at: parts.deadline ?? null,
       created_at: parts.createdAt,
       messages: parts.messages,
       access: parts.access,
+      reopen: null,
+      runs: [{ run: 1, started_at: parts.createdAt, reopened: null, ended: null }],
     },
     workspace: {
       thread_id: parts.threadId,
@@ -381,9 +408,18 @@ function thread(parts: ThreadParts): ThreadRecord {
       notes,
       representative: context,
       close_summary: parts.closeSummary ?? null,
+      steers: [],
+      guidance: null,
+      earlier_summaries: [],
       version: 1,
     },
   };
+  if (ended) {
+    // The requester closed it, or it went quiet: a seeded thread's two ways to end.
+    endRun(record, parts.state === "closed" ? { end_reason: "closed", closed_by: "requester" } : { end_reason: "quiet" });
+    if (parts.reopen !== undefined) record.detail.reopen = parts.reopen;
+  }
+  return record;
 }
 
 function hendersonThread({ at }: Clock): ThreadRecord {
@@ -551,6 +587,7 @@ function ridgelineThread({ at }: Clock): ThreadRecord {
     route: { assignees: [{ slug: "helen", why: "you schedule the SEM" }] },
     rationale: "SEM is open from Nov 3 on the public calendar, and the list price for secondary-electron imaging is $160 per sample.",
     activity: [searched("SEM calendar this week"), searched("SEM price list")],
+    rewritten_by: null,
     created_at: at(60 * 73),
   };
   return thread({
@@ -635,6 +672,8 @@ function surveyThread({ at }: Clock): ThreadRecord {
     ],
     closeSummary:
       "Vantage Market Intelligence asked for our full rate card and repeat-client discounts. We pointed them to the public price list and declined the rest; they closed the conversation.",
+    // Seeded history: no run of it ever ran here, so there's no Reopen.
+    reopen: { state: "blocked", block: "history" },
   });
 }
 
@@ -657,32 +696,6 @@ export function requestsWorld(now: number = Date.now()): RequestsWorld {
   return { threads: new Map(threads.map((record) => [record.detail.id, record])) };
 }
 
-/**
- * Henderson's item routed to both Helen and Raj, each with their own why: routing names
- * everyone who can answer, and each reads why it came to them.
- */
-export function routedToBoth(world: RequestsWorld): RequestsWorld {
-  const record = world.threads.get(THREAD.henderson);
-  const item = record?.workspace.escalations.find((candidate) => candidate.id === ESCALATION.henderson);
-  if (record === undefined || item === undefined) return world;
-  item.assignees = [helen, raj];
-  item.drafts = item.drafts.map((draft) =>
-    draft.draft_rev === 1
-      ? {
-          ...draft,
-          route: {
-            assignees: [
-              { slug: helen.slug, why: HENDERSON_WHY.helen },
-              { slug: raj.slug, why: HENDERSON_WHY.raj },
-            ],
-          },
-        }
-      : draft,
-  );
-  record.detail.access.push(routed(raj));
-  return world;
-}
-
 /** Henderson's item routed to Raj alone, and that routing his only way into the thread. */
 export function routedToRaj(world: RequestsWorld): RequestsWorld {
   const record = world.threads.get(THREAD.henderson);
@@ -699,10 +712,71 @@ export function routedToRaj(world: RequestsWorld): RequestsWorld {
   return world;
 }
 
+// --- How a run ends, and Reopen (REOPEN.md) -----------------------------------------
+
+/** How a run ended, as `RunEnded` records it. */
+interface RunEnding {
+  end_reason: EndReason;
+  closed_by?: Side | null;
+  stop_reason?: StopReason | null;
+}
+
+const ALLOWED: ReopenOffer = { state: "allowed", block: null };
+
 /**
- * `threadId` stopped by the system for `reason`, the way the thread workflow records it:
- * closed, with `stop_reason` set, and this side's `summary` only when its last turn
- * wrote one (the other side refused; a failed or capped thread gets no last turn).
+ * End the thread's current run the way the thread workflow records it, at its last
+ * activity: closed by a side or a stop, expired otherwise, with Reopen offered. Open
+ * items are cancelled, and nothing more is owed.
+ */
+function endRun(record: ThreadRecord, ending: RunEnding): void {
+  const { detail, workspace } = record;
+  const at = detail.last_activity_at;
+  detail.state = ending.end_reason === "closed" || ending.end_reason === "stopped" ? "closed" : "expired";
+  detail.end_reason = ending.end_reason;
+  detail.closed_by = ending.closed_by ?? null;
+  detail.stop_reason = ending.stop_reason ?? null;
+  detail.ended_at = at;
+  detail.run_finished_at = at;
+  detail.side_to_move = null;
+  detail.reopen = ALLOWED;
+  const run = detail.runs.find((row) => row.run === detail.run);
+  if (run !== undefined) {
+    run.ended = {
+      state: detail.state,
+      end_reason: ending.end_reason,
+      closed_by: detail.closed_by,
+      stop_reason: detail.stop_reason ?? null,
+      at,
+    };
+  }
+  for (const item of workspace.escalations) {
+    if (item.status === "open") item.status = "cancelled";
+  }
+}
+
+function recordOf(world: RequestsWorld, threadId: string): ThreadRecord {
+  const record = world.threads.get(threadId);
+  if (record === undefined) throw new Error(`no fixture thread ${threadId}`);
+  return record;
+}
+
+/** `threadId`'s run ended as `ending` says, with no summary of ours unless one is given. */
+export function ended(
+  world: RequestsWorld,
+  threadId: string,
+  ending: RunEnding,
+  summary: string | null = null,
+): RequestsWorld {
+  const record = recordOf(world, threadId);
+  endRun(record, ending);
+  record.workspace.close_summary = summary;
+  return world;
+}
+
+/**
+ * `threadId` stopped by the system for `reason`: closed, with `stop_reason` set, and this
+ * side's `summary` only when its last turn wrote one (the other side refused; a failed
+ * or capped thread gets no last turn).
  */
 export function stopped(
   world: RequestsWorld,
@@ -710,43 +784,203 @@ export function stopped(
   reason: StopReason,
   summary: string | null = null,
 ): RequestsWorld {
-  const record = world.threads.get(threadId);
-  if (record === undefined) return world;
-  record.detail.state = "closed";
-  record.detail.stop_reason = reason;
-  record.workspace.close_summary = summary;
-  for (const item of record.workspace.escalations) {
-    if (item.status === "open") item.status = "cancelled";
-  }
+  return ended(world, threadId, { end_reason: "stopped", stop_reason: reason }, summary);
+}
+
+/** `threadId` ended without a close: both sides went quiet, nothing was sent, or a limit. */
+export function expired(
+  world: RequestsWorld,
+  threadId: string,
+  reason: Exclude<EndReason, "closed" | "stopped"> = "quiet",
+): RequestsWorld {
+  return ended(world, threadId, { end_reason: reason });
+}
+
+/** What Reopen offers on `threadId`: blocked for a reason, or wrapping up. */
+export function reopenOffer(world: RequestsWorld, threadId: string, state: ReopenOffer): RequestsWorld {
+  recordOf(world, threadId).detail.reopen = state;
   return world;
 }
 
 /** `threadId` waits on the requester's side, deciding what its representative may say. */
 export function waitingOnThem(world: RequestsWorld, threadId: string): RequestsWorld {
-  const record = world.threads.get(threadId);
-  if (record === undefined) return world;
+  const record = recordOf(world, threadId);
   record.detail.state = "awaiting_principal";
   record.detail.side_to_move = "requester";
   return world;
 }
 
-/**
- * `threadId` ended without a close (two silent turns, its turn limit or its deadline),
- * the way the thread workflow records it: expired, no `stop_reason`, no summary.
- */
-export function expired(world: RequestsWorld, threadId: string): RequestsWorld {
-  const record = world.threads.get(threadId);
-  if (record === undefined) return world;
-  record.detail.state = "expired";
-  record.detail.stop_reason = null;
-  record.workspace.close_summary = null;
-  for (const item of record.workspace.escalations) {
-    if (item.status === "open") item.status = "cancelled";
-  }
+/** Our Claude consulted our side on `threadId` and the answerer is still working on it. */
+export function checking(world: RequestsWorld, threadId: string): RequestsWorld {
+  const record = recordOf(world, threadId);
+  const { at } = clock(Date.parse(record.detail.last_activity_at) + 60_000);
+  record.detail.state = "awaiting_principal";
+  record.detail.side_to_move = "responder";
+  record.workspace.consults.push(
+    consult(id("9c9"), "Can we hold SEM time the week of Nov 16 for four foils, at 5 kV and 15 kV?", at(0), {}),
+  );
   return world;
 }
 
-const ENDED: ReadonlySet<ThreadState> = new Set(["closed", "expired"]);
+function steer(fields: Partial<SteerView> & Pick<SteerView, "id" | "kind" | "body" | "created_at">): SteerView {
+  return {
+    author: helen,
+    status: "working",
+    escalation_id: null,
+    draft_rev: null,
+    guidance_outcome: null,
+    guidance_version: null,
+    draft_outcome: null,
+    failure_reason: null,
+    version: 1,
+    ...fields,
+  };
+}
+
+/** What Claude follows after a steer: the fixture can't think, so it keeps the member's words. */
+function writeGuidance(record: ThreadRecord, from: SteerView, at: string): GuidanceView {
+  const current = record.workspace.guidance;
+  const guidance: GuidanceView = {
+    version: (current?.version ?? 0) + 1,
+    text: current === null ? from.body : `${current.text} ${from.body}`,
+    created_at: at,
+    steer_id: from.id,
+    by: from.author,
+    delivered_at: null,
+  };
+  record.workspace.guidance = guidance;
+  return guidance;
+}
+
+/** The open item's next rev, rewritten from `from` (the fixture's canned rewrite). */
+function rewrite(record: ThreadRecord, item: EscalationView, from: SteerView, rev: number, at: string): void {
+  const latest = item.drafts.at(-1);
+  if (latest === undefined) return;
+  const answer =
+    item.id === ESCALATION.henderson ? HENDERSON_REWRITE : item.id === ESCALATION.vantage ? VANTAGE_REWRITE : latest.answer;
+  item.drafts.push({ ...latest, draft_rev: rev, answer, rewritten_by: { steer_id: from.id, author: from.author }, created_at: at });
+  item.current_draft_rev = rev;
+  item.version += 1;
+  touch(record, at);
+}
+
+/** One of Helen's Edits on `threadId`, as `fields` leaves it (done, guidance updated, by default). */
+export function edited(world: RequestsWorld, threadId: string, fields: Partial<SteerView> = {}): RequestsWorld {
+  const record = recordOf(world, threadId);
+  const at = new Date(Date.parse(record.detail.last_activity_at) + 60_000).toISOString();
+  const made = steer({
+    id: id(`9s${String(record.workspace.steers.length + 1)}`),
+    kind: "edit",
+    body: EDIT_INSTRUCTION,
+    created_at: at,
+    status: "done",
+    guidance_outcome: "updated",
+    ...fields,
+  });
+  if (made.guidance_outcome === "updated") made.guidance_version = writeGuidance(record, made, at).version;
+  record.workspace.steers.push(made);
+  return world;
+}
+
+/** Helen's Edit on the open item of `threadId`, rewritten into rev 2 and followed from now on. */
+export function rewritten(world: RequestsWorld, threadId: string): RequestsWorld {
+  const record = recordOf(world, threadId);
+  const item = openEscalations(record)[0];
+  if (item === undefined) return edited(world, threadId);
+  const rev = (item.drafts.at(-1)?.draft_rev ?? 0) + 1;
+  edited(world, threadId, { escalation_id: item.id, draft_rev: rev, draft_outcome: "rewritten" });
+  const made = record.workspace.steers.at(-1);
+  if (made !== undefined) rewrite(record, item, made, rev, made.created_at);
+  return world;
+}
+
+/**
+ * A new run after the thread closed, opened by our side's reopen `attempt` (which then
+ * writes guidance and is done) or by theirs (only their org is named), with the
+ * reopener's next message. The closed run's summary moves to the archive.
+ */
+function openRun(record: ThreadRecord, attempt: SteerView | null, at: string): void {
+  const { detail, workspace } = record;
+  const ours = attempt !== null;
+  const run = detail.run + 1;
+  if (attempt !== null) {
+    Object.assign(attempt, { status: "done", guidance_outcome: "updated", version: attempt.version + 1 });
+    attempt.guidance_version = writeGuidance(record, attempt, at).version;
+  }
+  if (workspace.close_summary !== null) workspace.earlier_summaries.push({ run: detail.run, text: workspace.close_summary });
+  workspace.close_summary = null;
+  detail.runs.push({
+    run,
+    started_at: at,
+    reopened: ours
+      ? { org: northlake, side: "responder", by: attempt.author, steer_id: attempt.id }
+      : { org: detail.requester, side: "requester", by: null, steer_id: null },
+    ended: null,
+  });
+  Object.assign(detail, {
+    run,
+    state: "active",
+    end_reason: null,
+    closed_by: null,
+    stop_reason: null,
+    ended_at: null,
+    run_finished_at: null,
+    reopen: null,
+    side_to_move: ours ? "requester" : "responder",
+    deadline_at: new Date(Date.parse(at) + 20 * 3_600_000).toISOString(),
+  } satisfies Partial<ThreadDetail>);
+  const seq = (detail.messages.at(-1)?.seq ?? 0) + 1;
+  const reply = ours
+    ? "Picking this back up: we can't hold specific slots for you, but here is our general capabilities sheet, with what each instrument does and our external academic price list."
+    : "We'd like to pick this back up: could you send your general capabilities sheet?";
+  // The reopener's Claude writes its message after the run starts.
+  const sent = new Date(Date.parse(at) + 40_000).toISOString();
+  detail.messages.push(message(seq, ours ? northlake : detail.requester, "agent", reply, sent, `r${String(run)}`));
+  touch(record, sent);
+}
+
+/** `threadId` closed, then reopened by our side (Helen, with what she typed) or theirs. */
+export function reopened(world: RequestsWorld, threadId: string, by: "us" | "them" = "us"): RequestsWorld {
+  const record = recordOf(world, threadId);
+  if (!ENDED.has(record.detail.state)) endRun(record, { end_reason: "quiet" });
+  const at = new Date(Date.parse(record.detail.last_activity_at) + 60 * 60_000).toISOString();
+  let attempt: SteerView | null = null;
+  if (by === "us") {
+    attempt = steer({ id: id(`9r${String(record.detail.run + 1)}`), kind: "reopen", body: REOPEN_INSTRUCTION, created_at: at });
+    record.workspace.steers.push(attempt);
+  }
+  openRun(record, attempt, at);
+  return world;
+}
+
+/** Helen's reopen of the closed `threadId`, still being picked up: nothing shared has changed. */
+export function reopenWorking(world: RequestsWorld, threadId: string): RequestsWorld {
+  const record = recordOf(world, threadId);
+  const at = new Date(Date.parse(record.detail.last_activity_at) + 60 * 60_000).toISOString();
+  record.workspace.steers.push(steer({ id: id("9r9"), kind: "reopen", body: REOPEN_INSTRUCTION, created_at: at }));
+  return world;
+}
+
+/** Helen's reopen of the closed `threadId` that failed for `reason`: nothing was sent. */
+export function reopenFailed(
+  world: RequestsWorld,
+  threadId: string,
+  reason: NonNullable<SteerView["failure_reason"]> = "unchanged",
+): RequestsWorld {
+  reopenWorking(world, threadId);
+  const attempt = recordOf(world, threadId).workspace.steers.at(-1);
+  if (attempt !== undefined) Object.assign(attempt, { status: "failed", failure_reason: reason, version: 2 });
+  return world;
+}
+
+const BLOCK_DETAIL: Record<ReopenBlock, string> = {
+  history: "This conversation can't be reopened.",
+  unfinished: "Claude didn't finish wrapping it up.",
+  not_asked: "Only the requester can reopen this conversation.",
+  limit: "It was reopened twice.",
+  refused: "The other side declined to continue.",
+  they_closed: "The other side closed it after you reopened it.",
+};
 
 function accessFor(record: ThreadRecord, member: MemberView): ThreadAccess["reason"][] {
   const reasons = record.detail.access.filter((row) => row.member_id === member.id).map((row) => row.reason);
@@ -855,10 +1089,13 @@ export interface RequestsRouteOptions {
   /** Every resolve answers 409 `escalation_not_open`, as if this member got there first. */
   resolvedFirstBy?: MemberView;
   /**
-   * A redraft starts but never lands, as when the worker's failure report is lost with a
-   * dropped stream; asking again meanwhile gets the server's 409 with no `resolved_by`.
+   * An Edit starts (its rev reserved) but never settles, as when the worker's report is
+   * lost with a dropped stream. By default an Edit lands at once: guidance updated, and
+   * the open item rewritten.
    */
-  redraftNeverLands?: boolean;
+  steerHangs?: boolean;
+  /** How a reopen settles: opened, or failed for a reason. By default it stays working. */
+  reopenSettles?: "opened" | NonNullable<SteerView["failure_reason"]>;
   /** What `GET /api/budget` says (default `ok`: live models off, nothing stopped). */
   budget?: BudgetState;
 }
@@ -982,6 +1219,7 @@ function applyResolve(
     org_id: northlake.id,
   };
 
+  // Anything else (a past action no longer available) changes nothing.
   switch (action) {
     case "approve":
       if (asked === null) {
@@ -1006,9 +1244,7 @@ function applyResolve(
       if (asked !== null) release(record, asked, settled(TAKEN_OVER, "What they sent", text), by, at);
       else if (text !== "") told(record, item, settled(`Not sent: ${TAKEN_OVER}`, "What they sent", text), by, at);
       break;
-    // A held message sent back: nothing crosses, and the member's words are an
-    // instruction to the representative, never text it may pass on, so nothing is listed.
-    case "revise":
+    default:
       break;
   }
   record.detail.state = "active";
@@ -1031,12 +1267,17 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
   const notFound = () => problem(404, "not_found", "Thread not found.");
   const notOpen = (resolvedBy: MemberRef | null, detail = "This was already resolved.") =>
     problem(409, "escalation_not_open", detail, { resolved_by: resolvedBy });
-  const redrafting = new Set<string>();
+  // The tab acts as `actor`; a write for anyone else came from a tab that missed a switch.
+  const memberChanged = () => problem(409, "member_changed", "You switched member.", { member: ref(actor) });
+  /** Steers by thread and `client_key`, so a retried POST gets the same steer back. */
+  const steersByKey = new Map<string, SteerView>();
 
   return {
     ...shellRoutes(actor),
     "GET /api/session": () => session,
     "GET /api/budget": (): BudgetView => ({ live: false, state: options.budget ?? "ok" }),
+    // The decision card says which mode held a message, from our side's settings.
+    "GET /api/orgs/{slug}/harmony": customizeRoutes(actor)["GET /api/orgs/{slug}/harmony"],
     "GET /api/inbox": () => inboxFor(world, actor),
     "GET /api/threads/{thread_id}": ({ params }) => {
       const record = visible(params.thread_id ?? "");
@@ -1080,39 +1321,89 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
       return { escalation_id: item.id, assignees: [target.id] };
     },
 
-    "POST /api/escalations/{escalation_id}/redraft": ({ params }) => {
-      const found = findEscalation(world, params.escalation_id ?? "");
-      // Like the workflow's validator: only an open consult, one redraft at a time.
-      if (found?.item.status !== "open" || found.item.kind !== "consult" || redrafting.has(found.item.id)) {
-        return notOpen(null, `escalation ${params.escalation_id ?? ""} can't be redrafted now`);
+    // A 202's body isn't in the fixture types, so these two handlers type their request.
+    "POST /api/threads/{thread_id}/steers": ({ params, body }: FixtureRequest) => {
+      const record = visible(params.thread_id ?? "");
+      if (record === null) return notFound();
+      const input = bodyOf<AddSteer>(body);
+      if (input.as_member_id !== actor.id) return memberChanged();
+      const key = `${record.detail.id}:${input.client_key ?? ""}`;
+      const known = steersByKey.get(key);
+      if (known !== undefined) return { steer_id: known.id, escalation_id: known.escalation_id, draft_rev: known.draft_rev };
+      if (ENDED.has(record.detail.state)) return problem(409, "thread_closed", "This conversation is closed.");
+      const running = record.workspace.steers.find((other) => other.kind === "edit" && other.status === "working");
+      if (running !== undefined) {
+        return problem(409, "steer_running", "Claude is still working on an edit.", { by: running.author });
       }
-      const { record, item } = found;
-      const latest = item.drafts.at(-1);
-      const rev = (latest?.draft_rev ?? 0) + 1;
-      if (options.redraftNeverLands === true) {
-        redrafting.add(item.id);
-        return { escalation_id: item.id, draft_rev: rev };
+      const item = openEscalations(record).find((candidate) => candidate.id === input.escalation_id) ?? null;
+      const at = new Date().toISOString();
+      const made = steer({
+        id: freshId(),
+        kind: "edit",
+        author: ref(actor),
+        body: (input.body ?? "").trim(),
+        created_at: at,
+        escalation_id: item?.id ?? null,
+        draft_rev: item === null ? null : (item.drafts.at(-1)?.draft_rev ?? 0) + 1,
+      });
+      record.workspace.steers.push(made);
+      steersByKey.set(key, made);
+      if (options.steerHangs !== true) {
+        made.status = "done";
+        made.guidance_outcome = "updated";
+        made.guidance_version = writeGuidance(record, made, at).version;
+        if (item !== null && made.draft_rev !== null) {
+          rewrite(record, item, made, made.draft_rev, at);
+          made.draft_outcome = "rewritten";
+        }
+        made.version += 1;
+      }
+      touch(record, at);
+      return { steer_id: made.id, escalation_id: made.escalation_id, draft_rev: made.draft_rev };
+    },
+
+    "POST /api/threads/{thread_id}/reopen": ({ params, body }: FixtureRequest) => {
+      const record = visible(params.thread_id ?? "");
+      if (record === null) return notFound();
+      const input = bodyOf<ReopenRequest>(body);
+      if (input.as_member_id !== actor.id) return memberChanged();
+      const { detail, workspace } = record;
+      const text = (input.body ?? "").trim();
+      const known = steersByKey.get(`${detail.id}:${input.client_key ?? ""}`);
+      if (known !== undefined) return { steer_id: known.id, thread_id: detail.id };
+      if (!ENDED.has(detail.state)) {
+        const current = detail.runs.find((row) => row.run === detail.run)?.reopened ?? null;
+        const reopenedBy = current === null ? null : { org: current.org, member: current.by };
+        return problem(409, "thread_open", "This conversation is open.", { reopened_by: reopenedBy });
+      }
+      const attempt = workspace.steers.find((other) => other.kind === "reopen" && other.status === "working");
+      if (attempt !== undefined) {
+        return problem(409, "reopen_in_progress", "Someone is reopening this conversation.", {
+          reopened_by: { org: northlake, member: attempt.author },
+        });
+      }
+      const reopenState = detail.reopen;
+      if (reopenState?.state === "wrapping_up") return problem(409, "closing_in_progress", "Claude is still wrapping up.");
+      if (reopenState?.state === "blocked" && reopenState.block !== null) {
+        return problem(409, "not_reopenable", BLOCK_DETAIL[reopenState.block], { block: reopenState.block });
       }
       const at = new Date().toISOString();
-      const next =
-        item.id === ESCALATION.henderson
-          ? hendersonRedraft(rev, at)
-          : latest === undefined
-            ? undefined
-            : { ...latest, draft_rev: rev, created_at: at };
-      if (next !== undefined) {
-        item.drafts.push(next);
-        item.current_draft_rev = rev;
-        item.version += 1;
-        touch(record, at);
-      }
-      return { escalation_id: item.id, draft_rev: rev };
+      const made = steer({ id: freshId(), kind: "reopen", author: ref(actor), body: text, created_at: at });
+      workspace.steers.push(made);
+      steersByKey.set(`${detail.id}:${input.client_key ?? ""}`, made);
+      const settles = options.reopenSettles;
+      if (settles === "opened") openRun(record, made, at);
+      else if (settles !== undefined) Object.assign(made, { status: "failed", failure_reason: settles, version: 2 });
+      touch(record, at);
+      return { steer_id: made.id, thread_id: detail.id };
     },
 
     "POST /api/threads/{thread_id}/notes": ({ params, body }) => {
       const record = visible(params.thread_id ?? "");
       if (record === null) return notFound();
-      const text = bodyOf<{ body: string }>(body).body ?? "";
+      const input = bodyOf<{ body: string; as_member_id: string }>(body);
+      if (input.as_member_id !== actor.id) return memberChanged();
+      const text = input.body ?? "";
       const mentioned = mentionedSlugs(text)
         .map((slug) => Object.values(members).find((candidate) => candidate.slug === slug))
         .filter((member): member is MemberView => member?.org.id === northlake.id);

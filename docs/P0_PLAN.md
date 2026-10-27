@@ -149,6 +149,7 @@ SQLAlchemy 2 models, one file per aggregate, plus `migrations/versions/0001_init
   - Ridgeline: Dana Okafor (admin).
   - Calder: one admin.
   - Vantage: one member.
+  - Round 2 (FEEDBACK_R2_PLAN §1.7, E1) made every demo member an admin; tests that need a non-admin make one in their fixtures.
 - Take names, slugs, titles, approval limits, routing prompts and knowledge visibility from [SCENARIO.md](SCENARIO.md) wherever it covers them. Skeletons need only a few knowledge items per org; P1 fills in the rest.
 - **Access fixtures.** Seed one historical closed Northlake ↔ Henderson thread. Give Helen `thread_access` reason `routed` and Alex reason `routed` on the Henderson side. Raj gets no access. Add one thread routed to Raj only. Access tests and the act-as check depend on this.
 - `cli_seed.py` provides `harmony seed --scenario harmony-demo`, which prints the world ID and per-table row counts.
@@ -185,7 +186,7 @@ SQLAlchemy 2 models, one file per aggregate, plus `migrations/versions/0001_init
 1. start creates a world;
 2. Alex sees only the Henderson-visible thread;
 3. Helen sees the routed thread;
-4. Raj sees neither, and `GET /api/threads/{id}` returns 404;
+4. Raj sees neither, and `GET /api/threads/{id}` returns 404 (round 2 made every demo member an admin, so the script now checks Jordan at Vantage, an org that isn't on the thread);
 5. act-as with a member ID from another world returns 403;
 6. reset changes the world ID, the old world is `retiring`/`retired`, and the member slugs still resolve.
 

@@ -36,8 +36,8 @@ from uuid import UUID
 
 from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
+from sqlalchemy import func, select, tuple_
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,10 +52,12 @@ from harmony.db.models import (
     Thread,
     ThreadAccess,
     ThreadMessage,
+    ThreadRun,
     World,
 )
 from harmony.db.models.choices import (
     AccessReason,
+    EndReason,
     FailureReason,
     Provenance,
     Side,
@@ -95,9 +97,10 @@ async def open(
     deadline_at: datetime | None,
 ) -> Thread:
     """Open the thread `active` with the requester to move, titled with the request's
-    title for this recipient, and give the request's creator `routed` access on the
-    requester side. Idempotent on `thread_id`. The responder side's access is routed
-    when its first escalation is (§10); its admins see it regardless."""
+    title for this recipient, record its first run, and give the request's creator
+    `routed` access on the requester side. Idempotent on `thread_id`. The responder
+    side's access is routed when its first escalation is (§10); its admins see it
+    regardless."""
     session = uow.session
     existing = await repo.get(session, Thread, uow.world_id, thread_id)
     if existing is not None:
@@ -115,6 +118,18 @@ async def open(
         title=_recipient_title(request, responder_org_id),
     )
     session.add(thread)
+    await session.flush()
+    session.add(
+        ThreadRun(
+            world_id=uow.world_id,
+            thread_id=thread_id,
+            run=1,
+            started_at=datetime.now(UTC),
+            deadline_at=deadline_at,
+            max_turns=MAX_TURNS,
+            start_seq=0,
+        )
+    )
     await session.flush()
     if request.created_by_member_id is not None:
         await add_access(
@@ -246,24 +261,83 @@ async def set_state(
     state: ThreadState,
     *,
     side_to_move: Side | None = None,
+    end_reason: EndReason | None = None,
+    closed_by: Side | None = None,
     stop_reason: FailureReason | None = None,
 ) -> Thread:
-    """Move the thread to `state`. A terminal thread never leaves its state.
+    """Move the thread to `state`. A terminal thread leaves its state only through
+    `reopen`, which starts its next run.
 
-    `stop_reason` says why the system ended it (a refused reservation, a model error, a
-    refusal); it is stored only on the move into a terminal state."""
+    The move into a terminal state stores how the run ended: `end_reason` (required
+    then), `closed_by` (the side whose representative closed it, or refused),
+    `stop_reason` (why the system ended it: a refused reservation, a model error, a
+    refusal) and `ended_at`."""
+    if state in TERMINAL_STATES and end_reason is None:
+        raise ValueError(f"thread {thread_id} can't end without an end_reason")
     thread = await locked(uow, thread_id)
     if thread.state in TERMINAL_STATES or (
         thread.state == state and thread.side_to_move == side_to_move
     ):
         return thread
+    now = datetime.now(UTC)
     thread.state = state
     thread.side_to_move = None if state in TERMINAL_STATES else side_to_move
     if state in TERMINAL_STATES:
+        thread.end_reason = end_reason
+        thread.closed_by = closed_by
         thread.stop_reason = stop_reason
+        thread.ended_at = now
+    thread.last_activity_at = now
+    snapshot(uow, thread)
+    return thread
+
+
+async def reopen(
+    uow: UnitOfWork,
+    thread_id: UUID,
+    *,
+    run: int,
+    side_to_move: Side,
+    deadline_at: datetime | None,
+) -> Thread:
+    """Start the ended thread's run `run` (REOPEN.md §4.4): live again with the
+    reopening side to move, a new deadline, and nothing left of how the last run
+    ended. The caller holds the thread lock and has checked it may reopen."""
+    thread = await locked(uow, thread_id)
+    if thread.state not in TERMINAL_STATES:
+        raise ValueError(f"thread {thread_id} is {thread.state}, not ended")
+    thread.state = "active"
+    thread.side_to_move = side_to_move
+    thread.run = run
+    thread.end_reason = None
+    thread.ended_at = None
+    thread.closed_by = None
+    thread.stop_reason = None
+    thread.run_finished_at = None
+    thread.deadline_at = deadline_at
     thread.last_activity_at = datetime.now(UTC)
     snapshot(uow, thread)
     return thread
+
+
+async def runs(session: AsyncSession, world_id: UUID, thread_id: UUID) -> list[ThreadRun]:
+    """The thread's runs, first to latest; none for seeded history."""
+    rows = await session.scalars(
+        repo.in_world(ThreadRun, world_id)
+        .where(ThreadRun.thread_id == thread_id)
+        .order_by(ThreadRun.run)
+    )
+    return list(rows)
+
+
+async def last_seq(session: AsyncSession, world_id: UUID, thread_id: UUID) -> int:
+    """The thread's highest message seq (0 before any message)."""
+    seq = await session.scalar(
+        select(func.max(ThreadMessage.seq)).where(
+            ThreadMessage.world_id == world_id, ThreadMessage.thread_id == thread_id
+        )
+    )
+    return seq or 0
 
 
 async def store_close_summary(uow: UnitOfWork, thread_id: UUID, side: Side, summary: str) -> None:
@@ -456,6 +530,7 @@ __all__ = [
     "add_access",
     "append_message",
     "cassette_key",
+    "last_seq",
     "locked",
     "open",
     "opening_lines",
@@ -463,9 +538,11 @@ __all__ = [
     "org_of",
     "other",
     "parties",
+    "reopen",
     "requester_title",
     "responder_title",
     "row_data",
+    "runs",
     "seeded_threads",
     "set_state",
     "side_of",

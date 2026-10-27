@@ -27,7 +27,7 @@ const FIT_STYLE: Record<Fit, string> = {
 export function FitBadge({ fit }: { fit: Fit | null }) {
   if (fit === null) return null;
   return (
-    <span className={cx("inline-flex h-5 items-center rounded-full px-2 text-[11.5px] font-medium", FIT_STYLE[fit])}>
+    <span className={cx("inline-flex h-5 items-center rounded-full px-2 text-ui-xs font-medium", FIT_STYLE[fit])}>
       {FIT_LABEL[fit]}
     </span>
   );
@@ -71,7 +71,7 @@ export function Pill({
     <span
       title={title}
       className={cx(
-        "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium whitespace-nowrap",
+        "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-ui-xs font-medium whitespace-nowrap",
         shrinks ? "min-w-0" : "shrink-0",
         PILL_STYLE[tone],
       )}

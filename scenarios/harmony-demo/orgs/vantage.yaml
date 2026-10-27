@@ -12,7 +12,7 @@ members:
   - slug: jordan
     name: Jordan Pike
     title: Analyst
-    role: member
+    role: admin
     profile: Sources characterization and testing capacity for clients.
 
 settings:

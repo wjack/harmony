@@ -152,9 +152,10 @@ def test_every_seeded_request_has_a_title() -> None:
     assert "Thursday" in recipient.ask
 
 
-def test_a_seeded_message_runs_long_enough_to_clamp() -> None:
-    """The web's requests spec opens the seal thread as Raj to check "View more": a
-    message of at least 900 characters runs past 12 lines at 390px. Its text is free."""
+def test_a_seeded_message_runs_long_enough_to_check_it_shows_in_full() -> None:
+    """The web's requests spec opens the seal thread as Raj to check that a long message
+    shows in full, not cut short: one of at least 900 characters, many lines at any
+    width. Its text is free."""
     scenario = load_scenario("harmony-demo")
     seal = next(t for t in scenario.threads if t.slug == "ridgeline-northlake-seal-sem")
     assert max(len(m.body) for m in seal.messages if m.sender == "northlake") >= 900

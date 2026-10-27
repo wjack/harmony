@@ -21,7 +21,7 @@ list sweep and the activities' status guard still catch it.)
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -80,6 +80,7 @@ async def start_world_workflow[S, P, R](
     id_conflict_policy: WorkflowIDConflictPolicy = WorkflowIDConflictPolicy.FAIL,
     start_signal: str | None = None,
     start_signal_args: Sequence[Any] = (),
+    memo: Mapping[str, Any] | None = None,
 ) -> WorkflowHandle[S, R]:
     """Start `run(arg)` as a workflow of `world_id` and record it.
 
@@ -87,7 +88,8 @@ async def start_world_workflow[S, P, R](
     that is `retiring` or `retired`; nothing is started or recorded then. Pass
     `start_signal` for signal-with-start (entity workflows), usually with
     `id_conflict_policy=USE_EXISTING`. Recording is idempotent, so restarting the same
-    ID is fine.
+    ID is fine, and a closed ID starts again (the SDK's default `ALLOW_DUPLICATE`). A
+    `memo` is readable through `describe()` (a reopen names its attempt there).
     """
     prefix = f"w:{world_id}:"
     if not workflow_id.startswith(prefix):
@@ -122,4 +124,5 @@ async def start_world_workflow[S, P, R](
             id_conflict_policy=id_conflict_policy,
             start_signal=start_signal,
             start_signal_args=start_signal_args,
+            memo=memo,
         )

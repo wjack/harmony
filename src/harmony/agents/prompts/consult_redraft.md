@@ -2,9 +2,11 @@
 
 A teammate at {org_name} reviewed this draft and asked you for a new one. It needed a person because: {why}
 
+{draft_heading}
+
 {draft}
 
-What the teammate asked for:
+What {member_first} asked for:
 
 {instruction}
 

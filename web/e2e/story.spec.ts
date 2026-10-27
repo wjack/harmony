@@ -3,7 +3,7 @@
  * against the real API, worker, Postgres and Temporal (scripts/e2e_ui.sh).
  *
  * Alex sends the suggested message, approves the outreach for Northlake and Ridgeline
- * and answers Ridgeline's seal question inline. Helen opens Northlake's flagged answer
+ * on its card at the end of the chat, and answers Ridgeline's seal question inline. Helen opens Northlake's flagged answer
  * from the sidebar's Needs you and approves it. Alex says yes to both, both
  * conversations close and Claude sums up. Then the network view, what Northlake's
  * representative saw, and Customize → Harmony's sharing.
@@ -26,7 +26,6 @@ const RIDGELINE = "Ridgeline Fabrication";
 const CALDER = "Calder Computational";
 /** The request's title as Northlake's representative wrote it (the scripted cassette's). */
 const NORTHLAKE_TITLE = "XRD and SEM/EDS quote";
-const PHONE = { width: 390, height: 844 };
 
 test.describe.configure({ timeout: 6 * 60_000 });
 
@@ -75,6 +74,16 @@ async function answerInline(page: Page, org: string, text: string): Promise<void
   await box.fill(text);
   await page.getByRole("region").filter({ has: box }).getByRole("button", { name: "Send answer" }).click();
   await expect(box).toBeHidden(TURNS);
+}
+
+/** Claude's texts in the chat, oldest first. */
+function claudeTexts(page: Page): Locator {
+  return page.locator(".chat-prose");
+}
+
+/** How many sentences `text` has. */
+function sentences(text: string): number {
+  return text.trim().split(/(?<=[.!?])\s+/).filter((part) => part !== "").length;
 }
 
 /** The live status card's row for `org`. */
@@ -191,17 +200,26 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  await test.step("the outreach card lists Calder as not a fit, and its first option leaves it out", async () => {
-    await expect(page.getByText("Send this request to 2 organizations?")).toBeVisible(TURNS);
-    const brief = page.getByRole("region", { name: "Harmony Network Request", exact: true }).first();
-    await expect(brief).toContainText("Henderson Lab");
-    for (const org of [NORTHLAKE, RIDGELINE, CALDER]) await expect(brief).toContainText(org);
-    await expect(brief.getByRole("listitem").filter({ hasText: CALDER })).toContainText("Not a fit");
+  await test.step("the outreach card reads in full at the end of the chat, Calder unticked, and Alex approves it there", async () => {
+    const approve = page.getByRole("button", { name: "Approve and send" });
+    const card = page.getByRole("region", { name: /^Harmony Network Request / }).filter({ has: approve });
+    await expect(card).toBeVisible(TURNS);
+    await expect(card.getByRole("textbox", { name: "Brief" })).toHaveValue(/Henderson Lab/);
+    for (const org of [NORTHLAKE, RIDGELINE, CALDER]) await expect(card).toContainText(org);
+    await expect(card.getByRole("listitem").filter({ hasText: CALDER })).toContainText("Not a fit");
+    await expect(card.getByRole("checkbox", { name: CALDER })).not.toBeChecked();
+    await expect(card).toContainText(`Starts a conversation with ${NORTHLAKE} and ${RIDGELINE}`);
+    // Everything shows in full: nothing is cut behind "View more".
+    await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
 
-    const first = page.getByRole("option", { name: /Send to 2 organizations/ });
-    await expect(first).not.toContainText(CALDER);
-    await first.click();
+    const before = await claudeTexts(page).count();
+    await card.getByRole("button", { name: "Approve and send" }).click();
     await expect(statusRow(page, CALDER)).toContainText("Not sent", TURNS);
+    await expect(page.getByRole("region", { name: /^Harmony Network Request / }).getByText("Sent", { exact: true })).toBeVisible();
+
+    // Claude says one sentence: it's out, and where progress shows.
+    await expect.poll(async () => (await claudeTexts(page).count()) - before, TURNS).toBe(1);
+    await expect.poll(async () => sentences(await claudeTexts(page).last().innerText()), TURNS).toBe(1);
   });
 
   await test.step("Ridgeline's question reaches Alex inline, and he answers", async () => {
@@ -241,13 +259,13 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  await test.step("as Helen, the request explains why Northlake's answer came to her, and she approves it", async () => {
+  await test.step("as Helen, Northlake's answer reads in full with what Claude looked at, and she approves it", async () => {
     await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
     const needsYou = sidebar(page).getByRole("region", { name: "Needs you" });
     await needsYou.getByRole("link").filter({ hasText: NORTHLAKE_TITLE }).first().click();
 
     const card = page.getByRole("region", { name: "Needs your decision" });
-    await expect(card.getByRole("region", { name: "Why it came to you" })).toBeVisible(TURNS);
+    await expect(card.getByRole("heading", { level: 2 })).toBeVisible(TURNS);
     // Details beside the transcript at the default laptop width, every value in full.
     const details = await openDetails(page);
     await expect(details).toContainText("Dr. Helen Ward");
@@ -259,23 +277,10 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect(lookedAt).toContainText("Raj's note, reserve XRD block");
 
     // The decision reads in full at the end of the thread: the whole question and draft.
-    await expect(card.getByRole("heading", { level: 2 })).toBeVisible();
     expect(await cutShortText(card)).toEqual([]);
+    await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
 
-    await test.step("on a 390×844 phone the request opens at the card's question, under a title that fits", async () => {
-      await page.setViewportSize(PHONE);
-      await page.reload();
-      await expect(card.getByRole("heading", { level: 2 })).toBeInViewport({ ratio: 1, ...TURNS });
-      const title = page.getByRole("heading", { level: 1, name: NORTHLAKE_TITLE });
-      await expect(title).toBeVisible();
-      const overflow = await title.evaluateAll((titles: Measured[]) =>
-        titles.map((each) => each.scrollWidth - each.clientWidth),
-      );
-      expect(overflow).toEqual([0]);
-      await page.setViewportSize({ width: 1440, height: 900 });
-    });
-
-    const approve = page.getByRole("region", { name: "Your decision" }).getByRole("button", { name: "Approve and send" });
+    const approve = card.getByRole("button", { name: "Approve and send" });
     await approve.click();
     await expect(approve).toBeHidden(TURNS);
   });
@@ -289,6 +294,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect(statusRow(page, NORTHLAKE)).toContainText("Closed", TURNS);
     await expect(statusRow(page, RIDGELINE)).toContainText("Closed", TURNS);
     await expect(page.getByText(/\$1,735/).first()).toBeVisible(TURNS);
+    await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
   });
 
   await test.step("the network view shows both conversations Closed and Calder Screened, at a readable size", async () => {

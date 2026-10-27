@@ -58,6 +58,9 @@ EXPECTED_TABLES = {
     "world_workflows",
     "cards",
     "rep_transcript",
+    "steers",
+    "rep_guidance",
+    "thread_runs",
 }
 
 # model_calls is keyed by the globally unique turn: `call_model_checkpointed` looks
@@ -169,6 +172,9 @@ def test_global_tables_carry_no_world_id_in_their_key(table: str) -> None:
         ("chat_messages", ("world_id", "conversation_id", "seq")),
         ("escalations", ("world_id", "dedupe_key")),
         ("consults", ("world_id", "dedupe_key")),
+        ("steers", ("world_id", "thread_id", "side", "seq")),
+        ("rep_guidance", ("world_id", "thread_id", "side", "version")),
+        ("rep_guidance", ("world_id", "steer_id")),
     ],
 )
 def test_sequences_and_dedupe_keys_are_unique(table: str, columns: tuple[str, ...]) -> None:
@@ -195,6 +201,7 @@ def test_snapshot_entities() -> None:
         "thread",
         "consult",
         "escalation",
+        "steer",
     }
 
 
@@ -211,6 +218,16 @@ def test_every_snapshot_entity_has_a_version(entity_type: str) -> None:
     else:
         # Immutable versioned rows: the version is part of the key.
         assert version.primary_key
+
+
+@pytest.mark.parametrize("entity_type", sorted(SNAPSHOT_ENTITIES))
+def test_snapshot_omits_name_real_columns(entity_type: str) -> None:
+    model = SNAPSHOT_ENTITIES[entity_type]
+    assert model.snapshot_omits <= set(sa_inspect(model, raiseerr=True).columns.keys())
+
+
+def test_a_steer_snapshot_leaves_out_the_members_unsaved_draft() -> None:
+    assert SNAPSHOT_ENTITIES["steer"].snapshot_omits == {"draft_text"}
 
 
 def test_foreign_keys_are_checked_at_commit_except_the_outbox_insert() -> None:

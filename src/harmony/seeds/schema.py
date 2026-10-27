@@ -241,7 +241,7 @@ class ThreadsSpec(_Strict):
 
 # `agents.models.EscalationAction`, restated: importing it would be circular (agents ->
 # auth -> worlds -> seeds). tests/unit/test_story.py keeps the two equal.
-StoryAction = Literal["approve", "decline", "take_over", "revise"]
+StoryAction = Literal["approve", "decline", "take_over"]
 # A `demo.notice` / `demo.needs_human` kind, such as `needs_human`.
 NoticeKind = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.]*$", max_length=64)]
 

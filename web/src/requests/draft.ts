@@ -1,5 +1,5 @@
 /**
- * The escalation panel's edit model: the member's edit of one draft rev, and the
+ * The decision card's edit model: the member's edit of one draft rev, and the
  * `resolve` bodies built from it. Pure, so what gets sent is unit-tested.
  */
 import type { EscalationDraft, EscalationKind, ResolveEscalation } from "./types";
@@ -9,8 +9,9 @@ export interface DraftEdits {
   answer?: string;
 }
 
-export function isEdited(edits: DraftEdits): boolean {
-  return edits.answer !== undefined;
+/** Whether the member's wording differs from Claude's: typing it back as it was isn't an edit. */
+export function isEdited(rev: EscalationDraft | null, edits: DraftEdits): boolean {
+  return edits.answer !== undefined && edits.answer !== (rev?.answer ?? "");
 }
 
 /** The answer (or, for an outbound review, the reply) as it stands after edits. */

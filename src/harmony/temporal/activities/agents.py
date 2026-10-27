@@ -25,7 +25,17 @@ sharing check per draft rev, and each screener call in `AgentScreen`.
 - `answer_consult`: internal Claude answers a consult for one draft rev with its tool
   loop (`agents.consult.answer`); for the first draft, the sharing check runs when the
   mode toward this counterparty asks for it (`release.needs_sharing_check`), and
-  `agents.consult.settle` releases the answer or escalates it to a person.
+  `agents.consult.settle` releases the answer or escalates it to a person. A later rev
+  is a steer's rewrite of the waiting draft, with the member's instruction.
+- `write_guidance`: a steer's guidance call (`agents.steer.write_guidance`), stored as
+  the side's next guidance version, or as why it was rejected (docs/design/EDIT.md
+  §3.3). Idempotent per steer.
+- `rewrite_held`: a steer's rewrite of a held message (`agents.steer.rewrite_held`),
+  stored as the item's reserved rev while it is still open (EDIT.md §3.5).
+
+A representative turn opens with its side's newest guidance once (the workflow names
+the version; `context.guidance_block` leaves out one the transcript already holds),
+and such a `guided` turn holds a bare text reply for a person.
 
 A refused reservation (`BudgetExhausted`) publishes `demo.notice {kind: "budget"}` and
 leaves the activity as a non-retryable `ApplicationError` carrying the refusing cap
@@ -57,7 +67,8 @@ from temporalio import activity
 
 from harmony.agents import consult as answerer
 from harmony.agents import context, keys, release
-from harmony.agents.consult import AnswerFailed, DraftReady, SharingCheck
+from harmony.agents import steer as steering
+from harmony.agents.consult import AnswerFailed, ConsultDraft, DraftReady, SharingCheck
 from harmony.agents.discovery import AgentScreen
 from harmony.agents.runtime import (
     CardRaised,
@@ -79,10 +90,20 @@ from harmony.agents.transcript import (
     SqlTranscriptStore,
 )
 from harmony.db import repo
-from harmony.db.models import Card, ChatMessage, Org, Thread, ThreadMessage, World
-from harmony.db.models.choices import Side
+from harmony.db.models import (
+    Card,
+    ChatMessage,
+    Escalation,
+    EscalationDraft,
+    Org,
+    Steer,
+    Thread,
+    ThreadMessage,
+    World,
+)
+from harmony.db.models.choices import Side, SteerGuidanceOutcome
 from harmony.db.uow import UnitOfWork, unit_of_work
-from harmony.domain import agent_turns, clock, consults
+from harmony.domain import agent_turns, clock, consults, escalations, steers
 from harmony.domain import threads as thread_domain
 from harmony.domain.conversations import NO_MEMBER_MESSAGE
 from harmony.domain.settings import mode_toward
@@ -108,6 +129,8 @@ HEARTBEAT_INTERVAL_S: Final = 5.0
 OPEN_THREAD: Final = "The thread with {counterparty} is open. Send your opening message."
 NOTHING_NEW: Final = "No new message from {counterparty} since your last turn."
 THREAD_ENDED: Final = "The conversation with {counterparty} has ended."
+# The first turn of the side that reopened the conversation (REOPEN.md §4.3).
+REOPENED: Final = "The conversation with {counterparty} is open again."
 # What a model call raises when it fails (`harmony.llm.errors`) and a person can stand
 # in for. A refused reservation isn't one: it stops the thread with its reason (3.5),
 # since every model call after it would be refused too.
@@ -182,6 +205,16 @@ class RepTurnInput(_Payload):
     owed: list[OwedResult] = []
     # Counterparty messages after this thread seq are new to this side.
     deliver_after_seq: int = Field(default=0, ge=0)
+    # The side's newest guidance version: the turn opens with it unless the
+    # representative already has it.
+    guidance_version: int | None = None
+    # The side's newest steer `seq` as the turn starts (`RepToolScope.steer_seq`).
+    steer_seq: int = Field(default=0, ge=0)
+    # The reopening side's first turn of a reopened run: with nothing else to open
+    # with, it is told the conversation is open again, and asked to write.
+    reopened: bool = False
+    # The thread's highest message seq when this run began (`RepToolScope.run_start_seq`).
+    run_start_seq: int = Field(default=0, ge=0)
 
 
 class RepTurnResult(_Payload):
@@ -210,8 +243,28 @@ class AnswerConsultInput(_Payload):
     # The k-th consult of (thread, side): the answerer's cassette turn.
     consult_turn: int = Field(ge=1)
     draft_rev: int = Field(default=1, ge=1)
-    # A member's redraft instruction.
+    # A steer's rewrite (`draft_rev` > 1): the member's instruction, their unsaved
+    # wording of the draft (which the rewrite starts from) and their name.
     instruction: str | None = None
+    base_text: str | None = None
+    member_name: str | None = None
+
+
+# --- a steer's parts -----------------------------------------------------------------
+
+
+class SteerPartInput(_Payload):
+    world_id: UUID
+    steer_id: UUID
+    cassette_thread: str
+
+
+class GuidanceWritten(_Payload):
+    """`write_guidance`'s result: what the steer's guidance came to."""
+
+    outcome: SteerGuidanceOutcome
+    # The guidance version written, when `updated`.
+    version: int | None = None
 
 
 class ConsultReleased(_Payload):
@@ -359,7 +412,8 @@ class AgentActivities:
                 notices=notices,
                 first_step=turn.first_step,
                 # Resumed, the opening is the card's own result: once the request went
-                # out (approved, or sent without review) it asks for no answer (3.13 E1b).
+                # out (approved, or sent without review) it needs no answer, and Claude
+                # says in a sentence that it's out (3.13 E1b, FEEDBACK_R2_PLAN decision 7).
                 quiet_opening=card_sent and notices is None,
                 # The chat's owner watches every reply, in any org.
                 stream_to_ui=True,
@@ -423,6 +477,16 @@ class AgentActivities:
                 incoming = await _incoming(session, thread, counterparty_id, turn.deliver_after_seq)
                 streams = await org_streams_tokens(session, turn.world_id, turn.org_id)
                 today = await clock.today(session, turn.world_id)
+                guidance = await context.guidance_block(
+                    session,
+                    turn.world_id,
+                    turn.thread_id,
+                    turn.side,
+                    turn.guidance_version,
+                    org_name=org.name,
+                    counterparty_name=counterparty.name,
+                    before_turn=turn.turn_id,
+                )
             frozen = await self._rep_session(turn, _tier(org))
             async with unit_of_work(self._sessionmaker, turn.world_id) as uow:
                 notices = await context.flush_notices(
@@ -436,7 +500,10 @@ class AgentActivities:
             # Nor does a held message declined without a reason leave anything to
             # answer: text after it acknowledges the representative's own side, and
             # sent, it would be held as a new message for the same person to decline.
-            quiet = nothing_new or (not incoming and _only_declined(turn.owed))
+            # A reopened turn is asked to write, whatever it is owed.
+            quiet = not turn.reopened and (
+                nothing_new or (not incoming and _only_declined(turn.owed))
+            )
             # Text written after a code-written "nothing new" answers nobody, and on an
             # ended thread nothing more reaches the counterparty: it stays private rather
             # than streaming as a message that is never sent (3.13 E3).
@@ -451,6 +518,9 @@ class AgentActivities:
                     counterparty_org_id=counterparty_id,
                     turn_id=turn.turn_id,
                     bare_text_sends=bare_text_sends,
+                    guided=guidance is not None,
+                    steer_seq=turn.steer_seq,
+                    run_start_seq=turn.run_start_seq,
                 ),
             )
             ctx = TurnContext(
@@ -473,6 +543,7 @@ class AgentActivities:
                     [m.body for m in incoming],
                     counterparty_name=counterparty.name,
                     fallback=fallback,
+                    guidance=guidance,
                 ),
                 notices=notices,
                 stream_to_ui=streams,
@@ -575,6 +646,8 @@ class AgentActivities:
                     consult_id=consult.consult_id,
                     draft_rev=consult.draft_rev,
                     instruction=consult.instruction,
+                    base_text=consult.base_text,
+                    member_name=consult.member_name,
                     attempt=attempt,
                     model_override=self._model_override,
                     cassette_thread=consult.cassette_thread,
@@ -656,6 +729,144 @@ class AgentActivities:
             cassette_thread=consult.cassette_thread,
             consult_turn=consult.consult_turn,
         )
+
+    @activity.defn
+    async def write_guidance(self, part: SteerPartInput) -> GuidanceWritten:
+        """The steer's guidance (docs/design/EDIT.md §3.3): internal Claude's one call,
+        checked, then stored as the side's next version, or as why it was rejected. A
+        steer whose guidance outcome is already stored returns it and calls nothing; a
+        retried attempt replays its checkpointed call."""
+        await ensure_world_live(self._sessionmaker, part.world_id)
+        async with (
+            _heartbeating(self._heartbeat_interval_s),
+            self._budget_refusals(part.world_id),
+            domain_errors(),
+        ):
+            async with self._sessionmaker() as session:
+                row = await repo.get_required(session, Steer, part.world_id, part.steer_id)
+                if row.guidance_outcome is not None:
+                    return GuidanceWritten(
+                        outcome=row.guidance_outcome, version=row.guidance_version
+                    )
+            started = time.monotonic()
+            parsed = await steering.write_guidance(
+                self._sessionmaker,
+                self._checkpointed(part.world_id),
+                world_id=part.world_id,
+                steer_id=part.steer_id,
+                cassette_thread=part.cassette_thread,
+                attempt=activity.info().attempt,
+                model_override=self._model_override,
+            )
+            if parsed.outcome == "rejected":
+                activity.logger.info(
+                    "steer %s guidance rejected: %s: %s",
+                    part.steer_id,
+                    parsed.failure,
+                    parsed.detail,
+                )
+            async with unit_of_work(self._sessionmaker, part.world_id) as uow:
+                stored = await steers.set_guidance_outcome(
+                    uow,
+                    part.steer_id,
+                    outcome=parsed.outcome,
+                    text=parsed.text,
+                    failure=parsed.failure,
+                )
+                await _record_steer_turn(
+                    uow,
+                    stored,
+                    keys.steer_guidance_turn_id(stored.id),
+                    steering.GUIDANCE_STEP,
+                    latency_ms=_elapsed_ms(started),
+                )
+                written = GuidanceWritten(
+                    outcome=stored.guidance_outcome or parsed.outcome,
+                    version=stored.guidance_version,
+                )
+                await uow.commit()
+        return written
+
+    @activity.defn
+    async def rewrite_held(self, part: SteerPartInput) -> int | None:
+        """The steer's rewrite of its held message (docs/design/EDIT.md §3.5), stored as
+        the reserved rev with rev 1's reason, only while the item is open. Returns the
+        rev written, None when none was (the item was resolved, or the call refused or
+        returned nothing usable). Idempotent: a written rev is returned as it is."""
+        await ensure_world_live(self._sessionmaker, part.world_id)
+        async with (
+            _heartbeating(self._heartbeat_interval_s),
+            self._budget_refusals(part.world_id),
+            domain_errors(),
+        ):
+            async with self._sessionmaker() as session:
+                row = await repo.get_required(session, Steer, part.world_id, part.steer_id)
+                if row.escalation_id is None or row.draft_rev is None:
+                    return None
+                rev = row.draft_rev
+                key = (part.world_id, row.escalation_id, rev)
+                if await session.get(EscalationDraft, key) is not None:
+                    return rev
+                item = await repo.get_required(session, Escalation, part.world_id, key[1])
+                if item.status != "open":
+                    return None
+            started = time.monotonic()
+            rewritten = await steering.rewrite_held(
+                self._sessionmaker,
+                self._checkpointed(part.world_id),
+                world_id=part.world_id,
+                steer_id=part.steer_id,
+                cassette_thread=part.cassette_thread,
+                attempt=activity.info().attempt,
+                model_override=self._model_override,
+            )
+            turn_id = keys.steer_rewrite_turn_id(part.steer_id)
+            async with unit_of_work(self._sessionmaker, part.world_id) as uow:
+                written = await _add_held_rewrite(uow, row, rewritten, turn_id=turn_id)
+                await _record_steer_turn(
+                    uow, row, turn_id, steering.REWRITE_STEP, latency_ms=_elapsed_ms(started)
+                )
+                await uow.commit()
+        return written
+
+
+async def _add_held_rewrite(
+    uow: UnitOfWork, steer: Steer, rewritten: str | None, *, turn_id: UUID
+) -> int | None:
+    """`rewritten` as the steer's reserved rev of its held item, still open, with rev
+    1's reason (why the representative's message needed a person)."""
+    if rewritten is None or steer.escalation_id is None or steer.draft_rev is None:
+        return None
+    item = await escalations.locked(uow, steer.escalation_id)
+    if item.status != "open":
+        return None
+    first = await escalations.first_draft(uow.session, item)
+    reason = first.rationale if first is not None else ""
+    draft = ConsultDraft(
+        answer=rewritten,
+        needs_human=True,
+        needs_human_reason=reason or None,
+        route=None,
+        rationale=reason,
+    )
+    await escalations.add_draft(uow, item.id, draft, turn_id=turn_id, draft_rev=steer.draft_rev)
+    return steer.draft_rev
+
+
+async def _record_steer_turn(
+    uow: UnitOfWork, steer: Steer, turn_id: UUID, step: int, *, latency_ms: int
+) -> None:
+    """One part's `agent_turns` row: the cost of its one call."""
+    await agent_turns.record(
+        uow,
+        turn_id=turn_id,
+        role="steer",
+        org_id=steer.org_id,
+        thread_id=steer.thread_id,
+        side=steer.side,
+        steps=range(step, step + 1),
+        latency_ms=latency_ms,
+    )
 
 
 async def _record_consult_turns(
@@ -781,6 +992,15 @@ def _new_turn(turn: InternalTurnInput) -> bool:
 
 
 def network_note(update: NetworkUpdate) -> str:
+    """The note a request's end leaves in its chat. Each round's text differs, so the
+    match that keeps a note from going out twice (`_unstored_updates`) tells them apart
+    (REOPEN.md §6.4)."""
+    if update.round > 1:
+        return (
+            f"{_NETWORK_NOTE_PREFIX}{update.request_id} has ended again (round "
+            f"{update.round}), after one was reopened. Check get_request_status, then tell "
+            "the member how it went."
+        )
     return (
         f"{_NETWORK_NOTE_PREFIX}{update.request_id} has ended. "
         "Check get_request_status, then tell the member how it went."
@@ -793,14 +1013,20 @@ def rep_opening(
     *,
     counterparty_name: str,
     fallback: str = OPEN_THREAD,
+    guidance: str | None = None,
 ) -> list[JsonObject]:
-    """Owed tool results first, then the counterparty's new messages, each inside the
-    code-written delimiter (§2.1). With neither, the code-written `fallback`."""
+    """Owed tool results first (a held bare-text result after the rest), then the side's
+    new `guidance` block, then the counterparty's new messages, each inside the
+    code-written delimiter (§2.1). With neither results nor messages, the code-written
+    `fallback`, after the guidance. The counterparty's words come last, so what the
+    turn answers is them, not the guidance (docs/design/EDIT.md §3.6)."""
     texts = [
         context.wrap_counterparty(body, counterparty_name=counterparty_name) for body in incoming
     ]
     if not owed and not texts:
         texts = [fallback.format(counterparty=counterparty_name)]
+    if guidance is not None:
+        texts.insert(0, guidance)
     return opening_blocks(owed, texts)
 
 
@@ -835,6 +1061,8 @@ async def _incoming(
 
 def _fallback(turn: RepTurnInput, thread: Thread) -> str:
     """What a turn opens with when nothing is owed and nothing new came in."""
+    if turn.reopened:
+        return REOPENED
     if thread.state in thread_domain.TERMINAL_STATES:
         return THREAD_ENDED
     if turn.side == "requester" and turn.turn == 1:
@@ -881,6 +1109,7 @@ async def _heartbeating(interval_s: float) -> AsyncGenerator[None]:
 __all__ = [
     "NOTHING_NEW",
     "OPEN_THREAD",
+    "REOPENED",
     "THREAD_ENDED",
     "AgentActivities",
     "AnswerConsultInput",
@@ -888,10 +1117,12 @@ __all__ = [
     "ConsultDecision",
     "ConsultEscalated",
     "ConsultReleased",
+    "GuidanceWritten",
     "InternalTurnInput",
     "InternalTurnResult",
     "RepTurnInput",
     "RepTurnResult",
+    "SteerPartInput",
     "internal_notices",
     "internal_opening",
     "network_note",

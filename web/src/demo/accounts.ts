@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
-import { matchPath, useLocation, useNavigate } from "react-router";
+import { matchPath, useLocation, useNavigate, type NavigateFunction } from "react-router";
 
 import { describeError, unwrap } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
 import type { DemoEvent, EventEnvelope, Inbox, MemberDirectory, MemberView, SessionView } from "../api/types";
 import { useApi, useDispatcher } from "../app/context";
 import { useActAs, useMembers, useSession, useStartSession } from "../app/queries";
+import type { MemberChange, RealtimeDispatcher } from "../realtime/dispatcher";
 import { firstName, shortOrgName } from "../shell/names";
 import { answeringChat, escalationPath, itemForEscalation } from "../shell/escalationPlace";
 import { dismissToastWithKey, dismissToastsWithKeyPrefix, toast } from "../shell/toasts";
@@ -21,6 +22,7 @@ import {
 } from "./alerts";
 import { STORY_MEMBER_SLUG, findMember, orgName } from "./cast";
 import { closeDemoControls, closeResetConfirm } from "./store";
+import { clearUnsaved, unsavedSources } from "./unsaved";
 
 const CUE_TOAST_PREFIX = "needs-human:";
 
@@ -61,6 +63,63 @@ interface SwitchOptions {
   to?: string;
 }
 
+const SWITCH_TOAST = "account-switch";
+
+/**
+ * A switch this tab asked for, from just before its request until something reports
+ * it: the response, this tab's stream or another tab, whichever comes first. That one
+ * lands it, once (FEEDBACK_R2_PLAN §2.6). Module state: each tab answers for its own.
+ */
+interface SwitchIntent {
+  /** Who it switches to; null for a reset, which lands on whoever the world starts as. */
+  memberId: string | null;
+  /** Where landing goes; null to stay. */
+  to: string | null;
+  /** What landing says and tidies up. */
+  onLand: () => void;
+  landed: boolean;
+}
+
+let intent: SwitchIntent | null = null;
+
+function expectSwitch(next: SwitchIntent): void {
+  intent = next;
+}
+
+function forgetSwitch(pending: SwitchIntent): void {
+  if (intent === pending) intent = null;
+}
+
+function land(pending: SwitchIntent, navigate: NavigateFunction): void {
+  if (pending.landed) return;
+  pending.landed = true;
+  forgetSwitch(pending);
+  if (pending.to !== null) void navigate(pending.to);
+  pending.onLand();
+}
+
+/** This tab's own switch that `change` reports, if one is waiting. */
+function intentFor(change: MemberChange): SwitchIntent | null {
+  if (intent === null) return null;
+  // A refused stream only shows that the epoch moved; with a switch of this tab's own
+  // in flight, that's the one.
+  const ours = change.memberId === null || intent.memberId === null || intent.memberId === change.memberId;
+  return ours ? intent : null;
+}
+
+/** Acting as `member` settles their cue, and the "… needs you" addressed to `previous`. */
+function settleCues(member: MemberView, previous: MemberView | undefined): void {
+  clearAlertsFor(member.slug, member.org.slug);
+  dismissToastWithKey(cueToastKey(member.org.slug, member.slug));
+  if (previous !== undefined) dismissToastWithKey(cueToastKey(previous.org.slug, previous.slug));
+}
+
+/** A reset leaves the world every cue pointed into. */
+function dropAllCues(): void {
+  clearAllAlerts();
+  dismissToastsWithKeyPrefix(CUE_TOAST_PREFIX);
+}
+
 /**
  * Act as another member (ARCHITECTURE.md §11.3): the API switches the session, the
  * dispatcher reopens the stream and swaps the cache, and the shell remounts as them.
@@ -78,19 +137,27 @@ export function useSwitchAccount() {
   const switchTo = useCallback(
     async (member: MemberView, options: SwitchOptions = {}): Promise<boolean> => {
       const previous = queryClient.getQueryData<SessionView>(queryKeys.session)?.member;
+      const pending: SwitchIntent = {
+        memberId: member.id,
+        to: options.to ?? sectionForMemberPage(pathname),
+        onLand: () => {
+          settleCues(member, previous);
+          toast({ text: `Switched to ${member.name}`, key: SWITCH_TOAST });
+        },
+        landed: false,
+      };
+      // Recorded before the request: the switch's event can beat its response.
+      expectSwitch(pending);
       try {
         await mutateAsync(member.id);
       } catch (error) {
-        toast({ text: `Couldn't switch to ${member.name}: ${describeError(error)}`, key: "account-switch" });
+        forgetSwitch(pending);
+        // Reported by the stream already, so it happened, whatever became of the response.
+        if (pending.landed) return true;
+        toast({ text: `Couldn't switch to ${member.name}: ${describeError(error)}`, key: SWITCH_TOAST });
         return false;
       }
-      clearAlertsFor(member.slug, member.org.slug);
-      dismissToastWithKey(cueToastKey(member.org.slug, member.slug));
-      // "… needs you" was addressed to the member we were acting as.
-      if (previous !== undefined) dismissToastWithKey(cueToastKey(previous.org.slug, previous.slug));
-      const to = options.to ?? sectionForMemberPage(pathname);
-      if (to !== null) void navigate(to);
-      toast({ text: `Switched to ${member.name}`, key: "account-switch" });
+      land(pending, navigate);
       return true;
     },
     [mutateAsync, navigate, pathname, queryClient],
@@ -119,23 +186,100 @@ export function useFollowAlert() {
 
 /**
  * Reset forks a fresh world and retires the old one (§11.1); the session's epoch moves,
- * so the dispatcher rebuilds from a fresh snapshot as for an account switch.
+ * so the dispatcher rebuilds from a fresh snapshot as for an account switch, and it
+ * lands like one: on New chat, once.
  */
 export function useResetDemo() {
   const api = useApi();
   const dispatcher = useDispatcher();
   const navigate = useNavigate();
   return useMutation({
-    mutationFn: () => unwrap(api.POST("/api/worlds/reset")),
-    onSuccess: (result) => {
-      // Every cue pointed into the retired world.
-      clearAllAlerts();
-      dismissToastsWithKeyPrefix(CUE_TOAST_PREFIX);
-      closeResetConfirm();
-      void dispatcher.memberChanged(result.session.epoch);
-      void navigate("/");
-      toast({ text: "Demo reset", key: "demo-reset" });
+    onMutate: (): SwitchIntent => {
+      const pending: SwitchIntent = {
+        memberId: null,
+        to: "/",
+        onLand: () => {
+          dropAllCues();
+          toast({ text: "Demo reset", key: "demo-reset" });
+        },
+        landed: false,
+      };
+      expectSwitch(pending);
+      return pending;
     },
+    mutationFn: () => unwrap(api.POST("/api/worlds/reset")),
+    onSuccess: ({ session }, _variables, pending) => {
+      closeResetConfirm();
+      void dispatcher.memberChanged(session.epoch, { sessionId: session.session_id, memberId: session.member.id });
+      land(pending, navigate);
+    },
+    onError: (_error, _variables, pending) => {
+      if (pending !== undefined) forgetSwitch(pending);
+    },
+  });
+}
+
+/**
+ * Follows every switch this tab hears of, before the new member renders. Mount once,
+ * next to `useDemoCues`, in the part of the shell that outlives switches.
+ *
+ * This tab's own switch lands where it asked. Any other (another tab's switch or
+ * reset, the storyrun CLI) leaves the previous member's own item for its section,
+ * replacing the URL, so the new member never meets it; then, once the new member's
+ * session is in, it settles the cues they or the new world made stale and says if
+ * unsaved Customize edits went with the old frame.
+ */
+export function useFollowSwitch(): void {
+  const dispatcher = useDispatcher();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
+  useEffect(
+    () =>
+      dispatcher.onMemberChanged((change) => {
+        const pending = intentFor(change);
+        if (pending !== null) {
+          land(pending, navigate);
+          return;
+        }
+        const section = sectionForMemberPage(pathnameRef.current);
+        if (section !== null) void navigate(section, { replace: true });
+        const dropped = unsavedSources().length > 0;
+        clearUnsaved();
+        const before = queryClient.getQueryData<SessionView>(queryKeys.session);
+        afterRebuild(dispatcher, () => {
+          const after = queryClient.getQueryData<SessionView>(queryKeys.session);
+          if (after === undefined) return;
+          if (before !== undefined && before.world_id !== after.world_id) dropAllCues();
+          else settleCues(after.member, before?.member);
+          if (dropped) {
+            toast({
+              text: `Your unsaved Customize changes were dropped when you switched to ${after.member.name} in another tab.`,
+              key: "unsaved-dropped",
+              durationMs: 8_000,
+            });
+          }
+        });
+      }),
+    [dispatcher, navigate, queryClient],
+  );
+}
+
+/** Runs `then` once the dispatcher has rebuilt as the new member; never if it can't. */
+function afterRebuild(dispatcher: RealtimeDispatcher, then: () => void): void {
+  const unsubscribe = dispatcher.store.subscribe((state, previous) => {
+    if (state.generation !== previous.generation) {
+      unsubscribe();
+      then();
+    } else if (state.status === "no-session" || state.status === "locked" || state.status === "stopped") {
+      unsubscribe();
+    }
   });
 }
 

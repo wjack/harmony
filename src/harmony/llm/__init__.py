@@ -19,10 +19,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-# The roles in ARCHITECTURE.md §5: `answerer` is the consult answerer and router, and
-# `sharing_check` judges a draft answer against the org's sharing description(s).
+# The roles in ARCHITECTURE.md §5: `answerer` is the consult answerer and router,
+# `sharing_check` judges a draft answer against the org's sharing description(s), and
+# `steer` turns a member's Edit into guidance and rewrites a held message (EDIT.md §7).
 ModelRole = Literal[
-    "internal", "representative", "answerer", "sharing_check", "synthesizer", "screener"
+    "internal", "representative", "answerer", "sharing_check", "synthesizer", "screener", "steer"
 ]
 
 # Receives each raw Messages API stream event (`message_start`, `content_block_delta`,

@@ -7,8 +7,8 @@
 # and proposes the recipients, each with its own title and ask (the budget is split
 # between the asks, since each representative sees only its own conversation), with
 # Calder listed but not suggested: the outreach card pauses the turn at step 2, and it
-# resumes at step 3 once Alex approves. Turn 2 is woken when the request closes (both
-# conversations ended) and sums up in prose.
+# resumes at step 3 once Alex approves, saying in one sentence that it's out. Turn 2 is
+# woken when the request closes (both conversations ended) and sums up in prose.
 scenario: harmony-demo
 entries:
   - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 0}
@@ -106,9 +106,8 @@ entries:
     content:
       - type: text
         text: >-
-          Sent. The representatives take it from here, and you'll see progress in this
-          chat. If one of them needs something only you can answer, or before agreeing to
-          a price, the question will come to you here.
+          It's out to Northlake Characterization Core and Ridgeline Fabrication; their
+          progress shows on the request's card.
   - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 2, step: 0}
     content:
       - type: thinking

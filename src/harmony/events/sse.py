@@ -49,8 +49,10 @@ from harmony.events.bus import (
     SubscriptionClosed,
 )
 from harmony.events.schemas import (
+    LENS_HIDDEN_ENTITY_TYPES,
     DemoNotice,
     DurableEvent,
+    EntitySnapshot,
     EventEnvelope,
     EventScope,
     ScopeKind,
@@ -93,7 +95,8 @@ class Viewer:
     """Whom one stream delivers to: the acting member as of the stream's epoch.
 
     `lens` is the network view (`?lens=network`): a demo lens that sees every event in
-    the world, both sides of every thread, but still only its own session's events.
+    the world, both sides of every thread, but still only its own session's events, and
+    never an org's instructions to its own Claude (`lens_hidden`).
     """
 
     session_id: UUID
@@ -132,6 +135,12 @@ def may_receive(viewer: Viewer, scope: EventScope, thread_visible: Callable[[UUI
             if scope.org_id != viewer.org_id or scope.thread_id is None:
                 return False
             return viewer.role == "admin" or thread_visible(scope.thread_id)
+
+
+def lens_hidden(event: DurableEvent) -> bool:
+    """What an org tells its own Claude (`LENS_HIDDEN_ENTITY_TYPES`): the network view
+    never receives it, though it sees every other event of both sides."""
+    return isinstance(event, EntitySnapshot) and event.entity_type in LENS_HIDDEN_ENTITY_TYPES
 
 
 def needs_thread_check(viewer: Viewer, scope: EventScope) -> bool:
@@ -454,6 +463,8 @@ class EventStream:
     def _visible(self, scope: EventScope, event: DurableEvent, visible: dict[UUID, bool]) -> bool:
         # Defence in depth: the UnitOfWork already refuses entity data in demo scope.
         if scope.kind == "demo" and not isinstance(event, DemoNotice):
+            return False
+        if self._viewer.lens and lens_hidden(event):
             return False
         return may_receive(self._viewer, scope, lambda thread_id: visible.get(thread_id, False))
 

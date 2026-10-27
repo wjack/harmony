@@ -2,6 +2,7 @@ import { ChevronDown } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cx, Menu, MenuCheckItem, MenuContent, MenuTrigger } from "../shell/ui";
+import { DISABLED_CONTROL } from "./fields";
 
 export interface SelectOption<T extends string> {
   value: T;
@@ -51,7 +52,8 @@ export function Select<T extends string>({
           // The name keeps the current value, as a labelled select's would.
           aria-label={ariaLabel === undefined ? undefined : `${ariaLabel}: ${current?.label ?? placeholder}`}
           className={cx(
-            "flex h-9 w-full items-center gap-2 rounded-control border border-border-strong bg-surface px-3 text-left text-sm text-ink transition-colors outline-none hover:bg-canvas focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/15 focus-visible:outline-none disabled:bg-canvas disabled:text-secondary data-[state=open]:border-accent",
+            "flex h-9 w-full items-center gap-2 rounded-control border border-border-strong bg-surface px-3 text-left text-sm text-ink transition-colors outline-none enabled:hover:bg-canvas focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/15 focus-visible:outline-none data-[state=open]:border-accent",
+            DISABLED_CONTROL,
             className,
           )}
         >

@@ -4,8 +4,11 @@
   command as typed, on the scripted model over tests/fixtures/cassettes, with its own
   in-process worker against a local Temporal dev server and this test's database. The
   cassettes key Alex's first chat, not its text, so any message he sends plays it, and
-  approving every listed row brings in Calder, whose side is scripted too. The report
-  then prints every engine field (3.14, 5.2), and the world is retired.
+  approving every listed row brings in Calder, whose side is scripted too. `--edit` has
+  Dana tell Ridgeline's Claude something once Ridgeline has asked its question: the
+  cassettes write its guidance, and `guidance_followed` reports what Ridgeline sent next
+  (EDIT.md §9). The report then prints every engine field (3.14, 5.2), and the world is
+  retired.
 - `in_process` against an app with `ACCESS_CODE` set unlocks the gate as a visitor
   would, then starts a session.
 """
@@ -60,6 +63,9 @@ ENGINE_FIELDS: Final = (
 CHECKS: Final = (
     "early_closes:",
     "close_refusals:",
+    "consults_after_send:",
+    "closes_after_refused_consult:",
+    "status_checks_after_send:",
     "waiting_closes:",
     "empty_turn_failures:",
     "empty_end_turns_handled:",
@@ -78,7 +84,9 @@ CHECKS: Final = (
     "auto_send_breaches:",
     "auto_requests_per_turn (max):",
     "duplicate_auto_recipients:",
+    "guidance_followed:",
 )
+EDIT: Final = "ridgeline:henderson:2:Let's not give the Kalrez option"
 RUN_TIMEOUT_S: Final = 240
 COUNTERPARTIES: Final = (
     "Northlake Characterization Core",
@@ -125,7 +133,17 @@ async def test_a_message_plays_headless_and_the_report_prints_every_field(
     result = await asyncio.to_thread(
         CliRunner().invoke,
         cli_run.app,
-        [SCENARIO, "--message", MESSAGE, "--approve", "all", "--timeout", str(RUN_TIMEOUT_S)],
+        [
+            SCENARIO,
+            "--message",
+            MESSAGE,
+            "--approve",
+            "all",
+            "--edit",
+            EDIT,
+            "--timeout",
+            str(RUN_TIMEOUT_S),
+        ],
         env={"COLUMNS": "160"},
     )
     output = result.output
@@ -144,6 +162,20 @@ async def test_a_message_plays_headless_and_the_report_prints_every_field(
     # Henderson's openers to Northlake and Ridgeline; Calder has no patterns, and the
     # seeded requests from Ridgeline and Vantage went to Northlake alone.
     assert "  opener_leaks (of 2 checked): 0" in checks
+    # The story never consults after a send (decision 1), so nothing was refused.
+    assert "  consults_after_send: 0" in checks
+    # Claude says it's out after Alex approves, and checks nothing (decision 7).
+    assert "  status_checks_after_send: 0" in checks
+    # Dana's Edit: guidance from story_suggested_threads.yaml, and Ridgeline's next
+    # message, which doesn't mention it (whether it follows it is for a live run).
+    followed = checks[checks.index("  guidance_followed: 1") + 1 :]
+    assert followed[:3] == [
+        "    - Ridgeline Fabrication with Henderson Lab: sent without mentioning it; read "
+        "whether it follows it",
+        "      instruction: Let's not give the Kalrez option",
+        "      guidance: Don't propose the Kalrez seal option.",
+    ]
+    assert followed[3].startswith("      next message: ")
 
     # The chat's one request, followed to its end on every row the card listed. The
     # world's rows go with it once retired, so this reads the report.

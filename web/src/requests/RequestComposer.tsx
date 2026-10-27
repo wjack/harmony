@@ -1,79 +1,91 @@
 /**
- * The request view's one composer (LIVE_DEMO_PLAN 3.9). With nothing open on the thread
- * it adds internal notes; with an open item it also acts on it. Typed text is always
- * stored as a note first (our org and the answerer read notes), then, for a consult,
- * asks the answerer to redraft with it, or, for a held message, sends the message back
- * to the representative with it. Text that mentions a teammate is only a note: the
- * mention shares the thread with them (by the server's rule, `mentions.ts`).
+ * The request view's box (EDIT.md §8.3, composer.html), in one of two modes switched in
+ * its bottom bar. **Comment** writes to our team: no Claude reads it, and an @mention
+ * brings a teammate in. **Edit** tells our own Claude what to do differently: it
+ * rewrites a draft of ours that's waiting and follows the instruction for the rest of
+ * the conversation. The box starts in Comment and goes back to it after each Edit.
  *
- * Decline is a step of its own, because its reason may reach the counterparty: the note
- * text is set aside (Cancel, or the decline going through, restores it) and never reused
- * as a reason.
+ * Enter sends what's in the box and never approves: approving belongs to the card.
+ * An Edit's `client_key` is minted per submit and reused only after a request that got
+ * no answer, so the retry is the same write; any answer, even an error, ends it. Every
+ * failure keeps the typed text.
  *
- * The composer outlives the items it acts on, so what the member typed survives one
- * opening or resolving. A Decline step whose item went ends as Cancel does.
- *
- * While the budget stops live turns, the actions that start one (approve, decline,
- * redraft, send back) hold, and the chat composer's line says why on the top edge;
- * notes and editing the draft still work (`Decision.blocked`).
+ * Edit is off on a closed conversation (Reopen is how Claude picks it up), and Tell
+ * Claude is off while the budget stops live turns; Comment always works.
  */
-import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { CircleAlert, Loader2, Lock, MessageSquare, Sparkles } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
-import { BudgetStrip } from "../chat/BudgetStrip";
-import { Avatar, Button, cx } from "../shell/ui";
-import { problemOf, useAddNote } from "./api";
+import type { SteerView } from "../api/types";
+import { budgetLine, useBudgetState } from "../chat/failureCopy";
+import { firstName, shortOrgName } from "../shell/names";
+import { Avatar, Button, Tooltip, cx } from "../shell/ui";
+import { ClaudeButton } from "./ClaudeButton";
+import { problemOf, useAddNote, useSteer } from "./api";
 import { useAutoHeight } from "./autoHeight";
-import { approvalCaption } from "./decision";
-import { mentionAt, mentionsMember } from "./mentions";
+import { editError, type EditError } from "./failure";
+import { possessive } from "./format";
+import { mentionAt, mentionedSlugs, mentionParts } from "./mentions";
 import type { MemberView, OrgRef } from "./types";
+import type { Composer, ComposerMode } from "./useComposer";
 import type { Decision } from "./useDecision";
 
-const MAX_FIELD_PX = 220;
+const MAX_FIELD_PX = 240;
+
+// The field's text box, shared by the textarea and the backdrop that colours its mentions:
+// the two must wrap and scroll alike, or the caret drifts off the text it edits.
+const FIELD_BOX = "scrollbar-quiet block min-h-12 w-full px-4 pt-3 pb-1 text-ui-md break-words whitespace-pre-wrap";
+
+const PLACEHOLDER: Record<ComposerMode, string> = {
+  comment: "Comment for your team… Use @ to bring someone in",
+  edit: "What should Claude do differently?",
+};
 
 interface RequestComposerProps {
   threadId: string;
   us: OrgRef;
-  them: OrgRef;
   /** Our org's members, for @mentions. */
   members: readonly MemberView[];
   memberId: string | undefined;
-  /** The open item, when there is one. */
+  composer: Composer;
+  /** The open item, whose draft an Edit rewrites. */
   decision: Decision | null;
+  /** The conversation has ended: Edit is off until it's reopened. */
+  closed: boolean;
+  /** An Edit of our side's that Claude is still working on. */
+  running: SteerView | null;
 }
 
-export function RequestComposer({ threadId, us, them, members, memberId, decision }: RequestComposerProps) {
+/** A submit that got no answer, kept so the retry of the same text is the same write. */
+interface Unanswered {
+  key: string;
+  body: string;
+}
+
+export function RequestComposer({ threadId, us, members, memberId, composer, decision, closed, running }: RequestComposerProps) {
   const addNote = useAddNote(threadId);
-  const [text, setText] = useState("");
+  const steer = useSteer(threadId);
+  const budget = useBudgetState();
+  const { text } = composer;
+  const mode: ComposerMode = closed ? "comment" : composer.mode;
+  const editing = mode === "edit";
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
-  /** The note text set aside while the member writes a decline reason. */
-  const [aside, setAside] = useState<string | null>(null);
-  const root = useRef<HTMLDivElement | null>(null);
+  const [unanswered, setUnanswered] = useState<Unanswered | null>(null);
+  const [failure, setFailure] = useState<EditError | null>(null);
+  const field = useAutoHeight(text, MAX_FIELD_PX, PLACEHOLDER[mode]);
+  const busy = addNote.isPending || steer.isPending;
+  const typed = text.trim() !== "";
+  const spent = budgetLine(budget);
 
-  // A Decline step belongs to its item: once that item goes, it ends as Cancel does.
-  const item = decision?.escalation.id ?? null;
-  const [shownItem, setShownItem] = useState(item);
-  if (shownItem !== item) {
-    setShownItem(item);
-    if (aside !== null) {
-      setText(aside);
-      setCaret(aside.length);
-      setAside(null);
-    }
-  }
+  // Something above asked for the field (Try again, a reopen moved here): give it focus.
+  useEffect(() => {
+    if (composer.focusRequest === 0) return;
+    const element = field.current;
+    element?.focus();
+    element?.setSelectionRange(element.value.length, element.value.length);
+  }, [composer.focusRequest, field]);
 
-  const declining = aside !== null;
-  let placeholder = "Add an internal note… Use @ to bring in a teammate";
-  let label = "Internal note";
-  if (declining) {
-    placeholder = `The reason Claude can give ${them.name} (optional)…`;
-    label = "Reason for declining";
-  } else if (decision !== null) {
-    placeholder = "Tell Claude what to change…";
-    label = "Instruction or note";
-  }
-
-  const field = useAutoHeight(text, MAX_FIELD_PX, placeholder);
   /**
    * Where the caret goes once an inserted mention is on screen. Placed as the text
    * renders, before the next keystroke: a frame later, text typed meanwhile would land
@@ -87,29 +99,11 @@ export function RequestComposer({ threadId, us, them, members, memberId, decisio
     field.current?.setSelectionRange(at, at);
   }, [text, field]);
 
-  /**
-   * Editing can end in the draft's own field (Esc there), which then goes and takes
-   * focus with it: focus comes back to Edit, or to this field while typed text hides it.
-   */
-  const editButton = useRef<HTMLButtonElement | null>(null);
-  const editing = decision?.editing === true;
-  const wasEditing = useRef(editing);
-  useLayoutEffect(() => {
-    const lost = document.activeElement === null || document.activeElement === document.body;
-    if (wasEditing.current && !editing && lost) (editButton.current ?? field.current)?.focus();
-    wasEditing.current = editing;
-  }, [editing, field]);
-
-  const typed = text.trim() !== "";
-  const noteOnly = decision === null || mentionsMember(text, members);
-  const busy = addNote.isPending || (decision?.busy ?? false);
-  const blocked = decision?.blocked ?? null;
-  const held = decision?.escalation.kind === "outbound_review";
-
   // Esc closes the mention list where it was opened; typing or moving the caret reopens it.
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
   const place = `${String(caret)}:${text}`;
-  const mention = declining || dismissedAt === place ? null : mentionAt(text, caret);
+  const partial = mentionAt(text, caret);
+  const mention = editing || dismissedAt === place ? null : partial;
   const suggestions =
     mention === null
       ? []
@@ -126,10 +120,27 @@ export function RequestComposer({ threadId, us, them, members, memberId, decisio
   // it by `aria-controls` and `aria-activedescendant`, and a status says it opened.
   const listId = useId();
   const optionId = (index: number) => `${listId}-${String(index)}`;
+  // Edit has no mentions: an @ there is likely meant for the team.
+  const mentionInEdit = editing && (partial !== null || mentionedSlugs(text).length > 0);
+  // A textarea can't colour part of its text, so while a comment mentions a teammate its
+  // own glyphs go transparent over a copy that colours the mention (same weight, or the
+  // copy would no longer sit under the caret).
+  const parts = editing ? [] : mentionParts(text, new Set(members.map((member) => member.slug)));
+  const highlighted = parts.some((part) => part.mention);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (backdrop.current !== null && field.current !== null) backdrop.current.scrollTop = field.current.scrollTop;
+  });
 
   const write = (value: string, at = value.length) => {
-    setText(value);
+    composer.setText(value);
     setCaret(at);
+  };
+
+  const switchTo = (next: ComposerMode) => {
+    composer.setMode(next);
+    setFailure(null);
+    field.current?.focus();
   };
 
   const insert = (member: MemberView) => {
@@ -144,84 +155,52 @@ export function RequestComposer({ threadId, us, them, members, memberId, decisio
     field.current?.focus();
   };
 
-  /**
-   * Whatever in the composer last had focus. A state change can take it away (Approve
-   * and send goes with the item it approved): focus then comes back to the field rather
-   * than falling to the page, unless the member has moved on meanwhile.
-   */
-  const lastFocused = useRef<Element | null>(null);
-  useLayoutEffect(() => {
-    const last = lastFocused.current;
-    if (last === null || last.isConnected) return;
-    lastFocused.current = null;
-    if (document.activeElement === null || document.activeElement === document.body) field.current?.focus();
-  });
-
-  /**
-   * Back to the field once a pressed button has gone with the state it belonged to,
-   * unless the member has since moved on to something outside the composer.
-   */
-  const refocus = () => {
-    const active = document.activeElement;
-    if (active === null || active === document.body || root.current?.contains(active) === true) field.current?.focus();
-  };
-
-  /** Stores the text as a note, then hands it on (to redraft or send back) once stored. */
-  const note = (then?: (body: string) => void) => {
+  const comment = () => {
     const body = text.trim();
     if (body === "" || busy) return;
-    decision?.clearNotice();
     addNote.mutate(
       { body },
       {
         onSuccess: () => {
           write("");
-          refocus();
-          then?.(body);
         },
       },
     );
   };
 
-  const act = () => {
-    if (decision === null || noteOnly) {
-      note();
-    } else if (blocked !== null) {
-      // As the disabled button: nothing is stored, and the text stays for later.
-    } else if (decision.redrafting && !held) {
-      // As the disabled Redraft button: nothing is stored, and the text stays for later.
-      decision.redraft(text.trim());
-    } else if (held) {
-      note((body) => {
-        decision.revise(body);
-      });
-    } else {
-      note((body) => {
-        decision.redraft(body);
-      });
-    }
+  const tellClaude = () => {
+    const body = text.trim();
+    if (body === "" || busy || spent !== null) return;
+    const key = unanswered?.body === body ? unanswered.key : crypto.randomUUID();
+    const item = decision?.escalation.id ?? null;
+    setFailure(null);
+    steer.mutate(
+      {
+        client_key: key,
+        body,
+        escalation_id: item,
+        // The rewrite starts from the member's wording of the draft, not Claude's.
+        draft_text: decision?.edited === true ? decision.answer : null,
+      },
+      {
+        onSuccess: (started) => {
+          setUnanswered(null);
+          if (started.draft_rev !== null && started.escalation_id === item) {
+            decision?.awaitRewrite(started.draft_rev, started.steer_id);
+          }
+          write("");
+          composer.setMode("comment");
+        },
+        onError: (error) => {
+          const shown = editError(error, problemOf(error), memberId);
+          setUnanswered(shown.sameKey ? { key, body } : null);
+          setFailure(shown);
+        },
+      },
+    );
   };
 
-  const startDecline = () => {
-    decision?.clearNotice();
-    setAside(text);
-    write("");
-    field.current?.focus();
-  };
-
-  const cancelDecline = () => {
-    write(aside ?? "");
-    setAside(null);
-    refocus();
-  };
-
-  const decline = () => {
-    decision?.decline(text, () => {
-      write(aside ?? "");
-      setAside(null);
-      refocus();
-    });
-  };
+  const send = editing ? tellClaude : comment;
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (suggestions.length > 0) {
@@ -238,264 +217,275 @@ export function RequestComposer({ threadId, us, them, members, memberId, decisio
         return;
       }
       if (event.key === "Escape") {
-        // Only the list closes: not the Decline step, not editing the draft.
         event.preventDefault();
         setDismissedAt(place);
         return;
       }
     }
+    // Enter sends the box's text; it never approves, even with ⌘ and nothing typed.
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      const command = event.metaKey || event.ctrlKey;
-      if (declining) decline();
-      else if (typed) act();
-      // ⌘↵ with nothing typed approves the draft as shown, edited or not.
-      else if (command) decision?.approve();
-    } else if (event.key === "Escape") {
-      if (declining) {
-        event.preventDefault();
-        cancelDecline();
-      } else if (decision?.editing === true) {
-        decision.setEditing(false);
-      }
+      if (typed) send();
     }
   };
 
-  const error = addNote.error === null ? null : (problemOf(addNote.error)?.detail ?? addNote.error.message);
-  const notice = decision?.notice ?? null;
+  const noteError = addNote.error === null ? null : (problemOf(addNote.error)?.detail ?? addNote.error.message);
+  const runningBy = running === null ? null : running.author.id === memberId ? "your" : possessive(firstName(running.author.name));
 
-  let caption = `Only ${us.name} sees notes`;
-  if (declining) caption = `Claude may pass this reason on to ${them.name} · Esc to cancel`;
-  else if (decision !== null) caption = approvalCaption(decision.escalation, them, memberId, typed);
+  let caption: ReactNode;
+  if (failure !== null) {
+    caption = (
+      <Caption tone="danger" icon={<CircleAlert size={14} strokeWidth={1.75} />} role="alert">
+        {failure.text}
+        {failure.retry && (
+          <>
+            {" "}
+            <InlineLink onClick={tellClaude}>Try again</InlineLink>
+          </>
+        )}
+      </Caption>
+    );
+  } else if (noteError !== null && !editing) {
+    caption = (
+      <Caption tone="danger" icon={<CircleAlert size={14} strokeWidth={1.75} />} role="alert">
+        {noteError}
+      </Caption>
+    );
+  } else if (!editing) {
+    caption = (
+      <Caption tone="muted" icon={<Lock size={13} strokeWidth={1.75} />}>
+        Only {shortOrgName(us.name)} sees comments. Claude doesn't read them.
+      </Caption>
+    );
+  } else if (spent !== null) {
+    caption = (
+      <Caption tone="danger" icon={<CircleAlert size={14} strokeWidth={1.75} />}>
+        {spent}. Tell Claude works again once it's back.
+      </Caption>
+    );
+  } else if (runningBy !== null) {
+    caption = (
+      <Caption tone="info" icon={<Loader2 size={13} strokeWidth={2} className="animate-spin" />}>
+        Claude is still working on {runningBy} edit.
+      </Caption>
+    );
+  } else {
+    const waitingDraft = decision !== null;
+    caption = (
+      <Caption tone="info" icon={<Sparkles size={13} strokeWidth={1.75} />}>
+        {waitingDraft
+          ? `Claude rewrites the draft and follows this for the rest of the conversation. Only ${shortOrgName(us.name)} sees it.`
+          : `Claude follows this from its next message in this conversation. Only ${shortOrgName(us.name)} sees it.`}
+      </Caption>
+    );
+  }
 
   return (
-    <div
-      ref={root}
-      className="relative"
-      onFocus={(event) => {
-        lastFocused.current = event.target;
-      }}
-    >
-      {blocked !== null && <BudgetStrip line={blocked} />}
+    <div className="relative">
       <p role="status" className="sr-only">
         {suggestions.length > 0 &&
           `${String(suggestions.length)} ${suggestions.length === 1 ? "teammate" : "teammates"} to mention. ` +
             "Up and down to choose, Enter or Tab to insert, Escape to close."}
       </p>
       {suggestions.length > 0 && (
-        <ul
-          id={listId}
-          role="listbox"
-          aria-label="Mention a teammate"
-          className="absolute bottom-full left-3 z-10 mb-1.5 w-64 rounded-menu border border-border bg-surface p-1.5 shadow-menu"
-        >
-          {suggestions.map((member, index) => (
-            <li key={member.id} id={optionId(index)} role="option" aria-selected={index === active}>
-              <button
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  insert(member);
-                }}
-                className={cx(
-                  "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-[13px]",
-                  index === active && "bg-hover",
-                )}
-              >
-                <Avatar name={member.name} seed={us.slug} size={20} />
-                <span className="truncate">{member.name}</span>
-                <span className="ml-auto text-[12px] text-muted">@{member.slug}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="absolute bottom-full left-3 z-10 mb-1.5 w-66 rounded-menu border border-border bg-surface p-1.5 shadow-menu">
+          <ul id={listId} role="listbox" aria-label="Mention a teammate">
+            {suggestions.map((member, index) => (
+              <li key={member.id} id={optionId(index)} role="option" aria-selected={index === active}>
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    insert(member);
+                  }}
+                  className={cx(
+                    "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-ui-sm",
+                    index === active && "bg-hover",
+                  )}
+                >
+                  <Avatar name={member.name} seed={us.slug} size={20} />
+                  <span className="truncate">{member.name}</span>
+                  <span className="ml-auto text-ui-xs text-muted">@{member.slug}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1 border-t border-border px-2 pt-1.5 pb-0.5 text-ui-xs text-muted">
+            A mention shares this request with them
+          </p>
+        </div>
       )}
       <section
-        aria-label={decision === null ? "Add a note" : "Your decision"}
-        className="relative rounded-composer border border-border bg-surface shadow-composer transition-[border-color] focus-within:border-border-strong"
-      >
-        {notice !== null && (
-          <div
-            role={notice.tone === "error" ? "alert" : "status"}
-            className={cx(
-              "mx-3 mt-3 flex items-center gap-3 rounded-control px-3 py-2 text-[13px] leading-5",
-              notice.tone === "error" ? "bg-danger-soft text-danger" : "bg-info-soft text-info",
-            )}
-          >
-            <span className="flex-1">{notice.text}</span>
-            {notice.action !== undefined && (
-              <Button size="sm" variant="secondary" onClick={notice.action.run}>
-                {notice.action.label}
-              </Button>
-            )}
-          </div>
+        aria-label="Comment or Edit"
+        className={cx(
+          "rounded-composer border shadow-composer transition-colors",
+          editing
+            ? "border-info/60 bg-info-soft/40 focus-within:border-info"
+            : // Amber while typing, like the comment row it makes.
+              "border-border bg-surface focus-within:border-caution/50 focus-within:ring-3 focus-within:ring-caution/15",
         )}
-        {/* One row, the buttons after the field, until the field is too narrow (a phone):
-            then the buttons wrap under it, still at the right. */}
-        <div className="flex flex-wrap items-end gap-x-2 p-1.5">
+      >
+        {composer.note !== null && editing && (
+          <p role="status" className="px-4 pt-3 text-ui-sm text-link">
+            {composer.note}
+          </p>
+        )}
+        <div className="relative">
+          {highlighted && (
+            <div
+              ref={backdrop}
+              aria-hidden
+              className={cx(FIELD_BOX, "pointer-events-none absolute inset-0 overflow-y-auto text-ink")}
+            >
+              {parts.map((part, index) =>
+                part.mention ? (
+                  <span key={index} className="text-link">
+                    {part.text}
+                  </span>
+                ) : (
+                  part.text
+                ),
+              )}
+              {/* A textarea shows the empty line after a final newline; a div needs something on it. */}
+              {text.endsWith("\n") && " "}
+            </div>
+          )}
           <textarea
             ref={field}
-            aria-label={label}
-            aria-autocomplete="list"
+            aria-label={editing ? "Tell Claude" : "Comment"}
+            aria-autocomplete={editing ? undefined : "list"}
             aria-controls={suggestions.length > 0 ? listId : undefined}
             aria-activedescendant={suggestions.length > 0 ? optionId(active) : undefined}
             rows={1}
             value={text}
-            placeholder={placeholder}
+            placeholder={PLACEHOLDER[mode]}
             onChange={(event) => {
               write(event.target.value, event.target.selectionStart);
+              if (failure !== null && !failure.retry) setFailure(null);
             }}
             onSelect={(event) => {
               setCaret(event.currentTarget.selectionStart);
             }}
-            onKeyDown={onKeyDown}
-            className="scrollbar-quiet block min-h-10 min-w-0 flex-[1_1_240px] resize-none bg-transparent px-3 py-2 text-[15px] leading-6 text-ink outline-none placeholder:text-muted"
-          />
-          <Actions
-            decision={decision}
-            declining={declining}
-            typed={typed}
-            noteOnly={noteOnly}
-            held={held}
-            busy={busy}
-            blocked={blocked !== null}
-            onNote={() => {
-              note();
+            onScroll={(event) => {
+              if (backdrop.current !== null) backdrop.current.scrollTop = event.currentTarget.scrollTop;
             }}
-            onAct={act}
-            onDecline={startDecline}
-            onCancelDecline={cancelDecline}
-            onConfirmDecline={decline}
-            editRef={editButton}
+            onKeyDown={onKeyDown}
+            className={cx(
+              FIELD_BOX,
+              "relative resize-none bg-transparent outline-none placeholder:text-muted",
+              highlighted ? "text-transparent caret-ink" : "text-ink",
+            )}
           />
         </div>
-        {error !== null && (
-          <p role="alert" className="px-[18px] pb-2.5 text-[12.5px] leading-5 text-danger">
-            {error}
+        {mentionInEdit && (
+          <p className="flex items-center gap-1.5 px-4 pb-1 text-ui-sm text-secondary">
+            Mentions are for comments.
+            <InlineLink
+              onClick={() => {
+                switchTo("comment");
+              }}
+            >
+              Switch to Comment?
+            </InlineLink>
           </p>
         )}
+        <div className="flex items-center gap-2 px-2.5 pt-1 pb-2.5">
+          <ModeSwitch mode={mode} editOff={closed} onChange={switchTo} />
+          <span className="flex-1" />
+          {editing ? (
+            <ClaudeButton disabled={!typed || busy || spent !== null} onClick={tellClaude}>
+              Tell Claude
+            </ClaudeButton>
+          ) : (
+            <Button variant={typed ? "primary" : "secondary"} disabled={!typed || busy} onClick={comment}>
+              Add comment
+            </Button>
+          )}
+        </div>
       </section>
-      <p className="mt-2 text-center text-[12px] leading-4 text-muted">
-        {decision?.edited === true && !declining ? "Edited · " : ""}
-        {caption}
-      </p>
+      <div className="mt-2 px-1">{caption}</div>
     </div>
   );
 }
 
-interface ActionsProps {
-  decision: Decision | null;
-  declining: boolean;
-  typed: boolean;
-  noteOnly: boolean;
-  held: boolean;
-  busy: boolean;
-  /** The budget stops live turns: the buttons that start one are disabled. */
-  blocked: boolean;
-  onNote: () => void;
-  onAct: () => void;
-  onDecline: () => void;
-  onCancelDecline: () => void;
-  onConfirmDecline: () => void;
-  editRef: Ref<HTMLButtonElement>;
-}
+const CAPTION_TONE = { muted: "text-muted", info: "text-link", danger: "text-danger" } as const;
 
-/**
- * The buttons for the composer's state (the states table in 3.9), at the row's end.
- * Wider than a phone's composer, they wrap onto a second line, still at the right.
- */
-function Actions(props: ActionsProps) {
-  const buttons = actionButtons(props);
-  if (buttons === null) return null;
+function Caption({
+  tone,
+  icon,
+  role,
+  children,
+}: {
+  tone: keyof typeof CAPTION_TONE;
+  icon: ReactNode;
+  role?: "alert";
+  children: ReactNode;
+}) {
   return (
-    <div className="ml-auto flex min-h-10 max-w-full flex-wrap items-center justify-end gap-2">{buttons}</div>
+    <p role={role} className={cx("flex items-start gap-1.5 text-ui-xs", CAPTION_TONE[tone])}>
+      <span aria-hidden className="mt-px flex shrink-0">
+        {icon}
+      </span>
+      <span className="min-w-0">{children}</span>
+    </p>
   );
 }
 
-/**
- * Keyed: a state change swaps the buttons, and a button must not inherit another's
- * focus or press (Decline turning into Cancel under the pointer).
- */
-function actionButtons({
-  decision,
-  declining,
-  typed,
-  noteOnly,
-  held,
-  busy,
-  blocked,
-  onNote,
-  onAct,
-  onDecline,
-  onCancelDecline,
-  onConfirmDecline,
-  editRef,
-}: ActionsProps): ReactNode {
-  const declineButton = (
-    <Button key="decline" size="sm" variant="secondary" disabled={busy || blocked} onClick={onDecline}>
-      Decline
-    </Button>
+function InlineLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="font-medium text-link hover:underline">
+      {children}
+    </button>
   );
-  if (declining) {
-    return [
-      <Button key="cancel" size="sm" variant="ghost" disabled={busy} onClick={onCancelDecline}>
-        Cancel
-      </Button>,
-      <Button key="confirm-decline" size="sm" variant="danger" disabled={busy || blocked} onClick={onConfirmDecline}>
-        Decline
-      </Button>,
-    ];
-  }
-  if (typed) {
-    if (decision === null || noteOnly) {
-      return (
-        <Button key="note" size="sm" variant="primary" disabled={busy} onClick={onNote}>
-          Add note
-        </Button>
-      );
-    }
-    // Decline stays: it sets the typed note aside for its own reason field.
-    return [
-      declineButton,
-      <Button key="note" size="sm" variant="secondary" disabled={busy} onClick={onNote}>
-        Add note
-      </Button>,
-      <Button
-        key="act"
-        size="sm"
-        variant="primary"
-        disabled={busy || blocked || (!held && decision.redrafting)}
-        onClick={onAct}
-      >
-        {held ? "Send back to Claude" : "Redraft"}
-      </Button>,
-    ];
-  }
-  if (decision === null) return null;
-  return [
-    declineButton,
-    decision.redrafting ? null : (
-      <Button
-        key="edit"
-        ref={editRef}
-        size="sm"
-        variant="secondary"
-        disabled={busy}
+}
+
+const EDIT_OFF = "Reopen the conversation to tell Claude what to pick up";
+
+/** Comment | Edit, a small track in the box's bottom bar. Edit is off on a closed conversation. */
+function ModeSwitch({
+  mode,
+  editOff,
+  onChange,
+}: {
+  mode: ComposerMode;
+  editOff: boolean;
+  onChange: (mode: ComposerMode) => void;
+}) {
+  const segment = (value: ComposerMode, icon: ReactNode, label: string, disabled = false) => {
+    const selected = mode === value;
+    return (
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        aria-disabled={disabled || undefined}
         onClick={() => {
-          decision.setEditing(!decision.editing);
+          if (!disabled && !selected) onChange(value);
         }}
+        className={cx(
+          "inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2.5 text-ui font-medium transition-colors",
+          selected && value === "comment" && "bg-surface text-ink shadow-[0_0_0_0.5px_var(--border-strong),0_1px_2px_rgb(20_20_19/0.06)]",
+          selected && value === "edit" && "bg-surface text-link shadow-[0_0_0_0.5px_var(--info),0_1px_2px_rgb(20_20_19/0.06)]",
+          !selected && !disabled && "text-secondary hover:text-ink",
+          disabled && "cursor-default text-faint",
+        )}
       >
-        {decision.editing ? "Done" : "Edit"}
-      </Button>
-    ),
-    <Button
-      key="approve"
-      size="sm"
-      variant="primary"
-      disabled={busy || blocked || decision.redrafting}
-      onClick={decision.approve}
-    >
-      Approve and send
-    </Button>,
-  ];
+        {icon}
+        {label}
+      </button>
+    );
+  };
+  const edit = segment("edit", <Sparkles size={14} strokeWidth={1.75} aria-hidden />, "Edit", editOff);
+  return (
+    <div role="radiogroup" aria-label="Mode" className="inline-flex h-8 items-center gap-0.5 rounded-control bg-hover p-0.5">
+      {segment("comment", <MessageSquare size={14} strokeWidth={1.75} aria-hidden className="text-caution" />, "Comment")}
+      {editOff ? (
+        <Tooltip content={EDIT_OFF} side="top">
+          {edit}
+        </Tooltip>
+      ) : (
+        edit
+      )}
+    </div>
+  );
 }

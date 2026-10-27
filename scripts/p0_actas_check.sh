@@ -155,19 +155,21 @@ else
   record FAIL "3. Helen sees the routed thread" "act-as helen returned $status: $(head -c 300 "$work/body")"
 fi
 
-# --- 4. Raj sees neither, and the thread is a 404 ----------------------------------------
-status=$(act_as a raj)
-if [[ $status == 200 && $(json "d['member']['slug']") == raj ]]; then
+# --- 4. Another org's member doesn't see it, and the thread is a 404 ---------------------
+# Every demo member is an admin (FEEDBACK_R2_PLAN.md E1), so the one who can't open the
+# thread is at an org that isn't on it: Jordan, at Vantage.
+status=$(act_as a jordan)
+if [[ $status == 200 && $(json "d['member']['slug']") == jordan ]]; then
   ids=$(inbox_ids a)
   detail=$(call a GET "/threads/$history")
   body=$(json "d")
   if [[ -n $history && $ids != status-* && $ids != *"$history"* && $detail == 404 ]]; then
-    record PASS "4. Raj doesn't see it; GET /api/threads/{id} is 404" "$body"
+    record PASS "4. Jordan doesn't see it; GET /api/threads/{id} is 404" "$body"
   else
-    record FAIL "4. Raj doesn't see it; GET /api/threads/{id} is 404" "inbox '$ids', GET $detail"
+    record FAIL "4. Jordan doesn't see it; GET /api/threads/{id} is 404" "inbox '$ids', GET $detail"
   fi
 else
-  record FAIL "4. Raj doesn't see it; GET /api/threads/{id} is 404" "act-as raj returned $status"
+  record FAIL "4. Jordan doesn't see it; GET /api/threads/{id} is 404" "act-as jordan returned $status"
 fi
 
 # --- 5. act-as with a member from another world is 403 -----------------------------------
@@ -179,7 +181,7 @@ if [[ -n $foreign ]]; then
   random=$(call a POST /session/act-as '{"member_id": "00000000-0000-4000-8000-000000000000"}')
   call a GET /session >/dev/null
   still=$(json "(d['member']['slug'], d['world_id'])")
-  if [[ $status == 403 && $random == 403 && $still == "('raj', '$world')" ]]; then
+  if [[ $status == 403 && $random == 403 && $still == "('jordan', '$world')" ]]; then
     record PASS "5. act-as with another world's member is 403"
   else
     record FAIL "5. act-as with another world's member is 403" "got $status (unknown ID $random); now $still"

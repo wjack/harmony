@@ -11,7 +11,7 @@ members:
   - slug: alex
     name: Alex Chen
     title: PhD student
-    role: member
+    role: admin
     profile: >-
       Runs the Na-ion cathode synthesis and owns sample logistics. Decides on his own
       requests for external services within the lab's discretionary budget (about

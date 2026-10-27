@@ -79,11 +79,11 @@ async def test_each_model_queue_runs_its_own_activities(
         await runtime.publisher.aclose()
     by_queue = {worker.task_queue: worker for worker in workers}
     assert list(by_queue) == [MAIN_TASK_QUEUE, MODEL_TASK_QUEUE, CHAT_TASK_QUEUE]
-    assert _activity_names(by_queue[MODEL_TASK_QUEUE]) == {"rep_turn", "answer_consult"}
+    # A steer's model calls run beside the representative's and the answerer's.
+    model = {"rep_turn", "answer_consult", "write_guidance", "rewrite_held"}
+    assert _activity_names(by_queue[MODEL_TASK_QUEUE]) == model
     assert _activity_names(by_queue[CHAT_TASK_QUEUE]) == {"internal_turn"}
-    assert not {"rep_turn", "answer_consult", "internal_turn"} & _activity_names(
-        by_queue[MAIN_TASK_QUEUE]
-    )
+    assert not {*model, "internal_turn"} & _activity_names(by_queue[MAIN_TASK_QUEUE])
 
 
 async def test_a_live_worker_blocks_the_provider_through_its_guard(

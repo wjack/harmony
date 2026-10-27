@@ -158,16 +158,14 @@ def test_the_demo_scenario_is_structurally_complete() -> None:
         return [(m.slug, m.name, m.role) for m in org.members]
 
     assert roster(orgs["henderson"]) == [
-        ("alex", "Alex Chen", "member"),
+        ("alex", "Alex Chen", "admin"),
         ("maya", "Prof. Maya Henderson", "admin"),
     ]
-    assert [(m.slug, m.name, m.role) for m in orgs["northlake"].members] == [
+    assert roster(orgs["northlake"]) == [
         ("helen", "Dr. Helen Ward", "admin"),
-        ("raj", "Raj Patel", "member"),
+        ("raj", "Raj Patel", "admin"),
     ]
-    assert [(m.slug, m.role) for m in orgs["ridgeline"].members] == [("dana", "admin")]
-    assert [m.role for m in orgs["calder"].members] == ["admin"]
-    assert [m.role for m in orgs["vantage"].members] == ["member"]
+    assert [m.slug for m in orgs["ridgeline"].members] == ["dana"]
 
     for org in scenario.orgs:
         assert org.knowledge, org.slug
@@ -187,6 +185,13 @@ def test_the_demo_scenario_is_structurally_complete() -> None:
     henderson_text = " ".join(item.body.lower() for item in orgs["henderson"].knowledge)
     for word in ("seal", "gasket", "o-ring", "viton", "kalrez"):
         assert word not in henderson_text
+
+
+def test_everyone_in_the_demo_is_an_admin() -> None:
+    """The demo makes everyone an admin (FEEDBACK_R2_PLAN E1); tests of the view-only
+    paths demote someone (`tests/integration/_worlds.demote_to_member`)."""
+    for org in load_scenario("harmony-demo").orgs:
+        assert all(member.role == "admin" for member in org.members), org.slug
 
 
 def test_the_demo_scenario_seeds_the_access_fixtures() -> None:

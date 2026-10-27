@@ -177,6 +177,26 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
+  /*
+   * The type scale (`text-ui-xs` … `text-prose`): meta and timestamps, secondary lines
+   * and hints, UI text and buttons, card titles, serif messages and drafts, long prose.
+   */
+  --text-ui-xs: 12px;
+  --text-ui-xs--line-height: 16px;
+  --text-ui-sm: 13px;
+  --text-ui-sm--line-height: 18px;
+  --text-ui: 14px;
+  --text-ui--line-height: 20px;
+  --text-ui-title: 15px;
+  --text-ui-title--line-height: 22px;
+  --text-ui-md: 16px;
+  --text-ui-md--line-height: 24px;
+  --text-prose: 16px;
+  --text-prose--line-height: 1.5;
+
+  /* The side gutter (`px-gutter`). */
+  --spacing-gutter: 16px;
+
   /* 8px buttons and inputs, 12px menus and modals, 20px composer. */
   --radius-control: 8px;
   --radius-menu: 12px;

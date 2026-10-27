@@ -1,45 +1,41 @@
 /**
- * One open item's decision, shared by the card that shows it and the composer that acts
- * on it (LIVE_DEMO_PLAN 3.9): the draft rev shown and the member's edit of it, and the
- * resolve and redraft calls with what came of them.
+ * One open item's decision, shared by the card that shows it and the composer whose Edit
+ * can rewrite it (EDIT.md §8.3): the draft rev shown and the member's edit of it, the
+ * resolve calls with what came of them, and the wait for a rewrite.
  *
- * A redraft lands as a new rev. Until it does, the shown draft is marked as being
- * redrafted and can't be approved; a redraft the worker reports failed, or that never
- * lands, stops the wait and says why, aware of a spent live-model budget. A redraft or
- * send-back the server didn't take keeps its instruction for Try again: the composer
- * already stored it as a note, so retrying asks again without storing it twice.
+ * An Edit on an open item reserves the item's next rev (`SteerStarted.draft_rev`). Until
+ * that rev lands, the draft is locked under "Claude is rewriting…" and Approve waits, so
+ * nobody approves the old wording by mistake; Decline still works. The wait ends when
+ * the rev lands, when the steer reports the rewrite failed or settled, or after
+ * `REDRAFT_TIMEOUT_MS`, a fallback for a report the stream dropped. A teammate's Edit
+ * locks the draft the same way: the steer list says a rev is reserved.
  *
- * Approve, decline, redraft and send-back each hand the move to a model, whose call a
- * spent cap or a pause would refuse, ending the thread for good (or wasting the
- * redraft): while the budget isn't `ok` they hold, and `blocked` says why. Editing the
- * draft and adding notes call no model, so they still work.
+ * Approve and decline hand the move to a model, whose call a spent cap or a pause would
+ * refuse: while the budget isn't `ok` they hold, and `blocked` says why. Editing the
+ * wording calls no model, so it still works.
  *
- * The view keeps one decision for as long as the thread is open, so the composer under
- * it keeps what the member typed when an item opens, resolves or gives way to another.
  * What the member did with an item stays with that item.
  */
 import { useEffect, useState } from "react";
 
+import type { SteerView } from "../api/types";
 import { budgetLine, useBudgetState } from "../chat/failureCopy";
 import { toast } from "../shell/toasts";
-import { problemOf, useRedraftEscalation, useResolveEscalation } from "./api";
+import { problemOf, useResolveEscalation } from "./api";
 import { approveBody, declineBody, isEdited, shownAnswer, sortedDrafts, type DraftEdits } from "./draft";
-import { redraftFailure } from "./failure";
 import { representativeName } from "./format";
-import { useFailedRedrafts } from "./live";
 import type { ConsultView, EscalationDraft, EscalationView, OrgRef, ResolveEscalation } from "./types";
 
 /**
- * How long a redraft may take before the view stops waiting and lets the member retry.
- * A redraft that fails says so at once; this covers a report the stream dropped, and
- * leaves room for a live answerer's loop.
+ * How long a rewrite may take before the card stops waiting. A rewrite that fails says
+ * so at once through its steer; this covers a report the stream dropped, and leaves
+ * room for a live answerer's loop.
  */
 export const REDRAFT_TIMEOUT_MS = 180_000;
 
 export interface Notice {
   tone: "error" | "info";
   text: string;
-  action?: { label: string; run: () => void };
 }
 
 export interface Decision {
@@ -54,34 +50,26 @@ export interface Decision {
   answer: string;
   edited: boolean;
   setAnswer: (value: string) => void;
-  editing: boolean;
-  setEditing: (editing: boolean) => void;
-  redrafting: boolean;
-  /** A resolve or redraft call is in flight. */
+  undoEdits: () => void;
+  /** An Edit reserved the next rev and it hasn't landed: the draft is locked and Approve waits. */
+  rewriting: boolean;
+  /** The latest Edit's rewrite came to nothing: the draft is as it was. */
+  unchanged: boolean;
+  /** An Edit of ours reserved `rev` for this item. */
+  awaitRewrite: (rev: number, steerId: string) => void;
+  /** A resolve call is in flight. */
   busy: boolean;
-  /** Why live turns can't start now (`budgetLine`): every action that starts one holds. */
+  /** Why live turns can't start now (`budgetLine`): approving and declining hold. */
   blocked: string | null;
   notice: Notice | null;
   clearNotice: () => void;
   approve: () => void;
-  decline: (reason: string, onDone: () => void) => void;
-  /** Ask the answerer for a new draft (a consult); refused, with a notice, while one is on its way. */
-  redraft: (instruction: string) => void;
-  /** Send a held message back to the representative with what to change. */
-  revise: (instruction: string) => void;
+  decline: (reason: string | null, onDone: () => void) => void;
 }
 
 interface Waiting {
   rev: number;
-  instruction: string;
-}
-
-/** A redraft or send-back the server didn't take, kept for Try again. */
-interface Unsent {
-  action: "redraft" | "revise";
-  instruction: string;
-  /** The server was still running another redraft of the item (a teammate's, say). */
-  queued: boolean;
+  steerId: string;
 }
 
 /** What the member did with one item. */
@@ -89,26 +77,14 @@ interface ItemState {
   /** The rev paged back to; null follows the newest. */
   revIndex: number | null;
   editsByRev: Readonly<Record<number, DraftEdits>>;
-  editing: boolean;
   notice: Notice | null;
+  /** The rev our own Edit reserved, from its 202 until the steer list shows it. */
   waiting: Waiting | null;
-  /** The instruction of a redraft that never landed. */
-  timedOut: string | null;
-  unsent: Unsent | null;
+  /** A reserved rev the card stopped waiting for. */
+  timedOutRev: number | null;
 }
 
-const FRESH: ItemState = {
-  revIndex: null,
-  editsByRev: {},
-  editing: false,
-  notice: null,
-  waiting: null,
-  timedOut: null,
-  unsent: null,
-};
-
-const STILL_REDRAFTING = "Claude is still working on an earlier redraft. Try again once it lands.";
-const NOT_SENT_BACK = "Couldn't send this back to Claude. Your note is saved; nothing went out.";
+const FRESH: ItemState = { revIndex: null, editsByRev: {}, notice: null, waiting: null, timedOutRev: null };
 
 type ItemPatch = Partial<ItemState> | ((current: ItemState) => Partial<ItemState>);
 
@@ -121,32 +97,50 @@ function patched(
   return { ...items, [itemId]: { ...before, ...(typeof patch === "function" ? patch(before) : patch) } };
 }
 
+/** A steer whose rewrite has an outcome, or that ended without one. */
+function settled(steer: SteerView): boolean {
+  return steer.status !== "working" || steer.draft_outcome !== null;
+}
+
+/**
+ * The rev an Edit reserved and is still writing, if any: ours from its 202 on, anyone's
+ * from the steer list. And whether the newest reserved rev came to nothing.
+ */
+function rewriteOf(
+  steers: readonly SteerView[],
+  itemId: string,
+  newestRev: number,
+  { waiting, timedOutRev }: ItemState,
+): { pending: number | null; unchanged: boolean } {
+  const reserving = steers.filter(
+    (steer) => steer.kind === "edit" && steer.escalation_id === itemId && steer.draft_rev !== null && steer.draft_rev > newestRev,
+  );
+  const ours = waiting === null ? undefined : steers.find((steer) => steer.id === waiting.steerId);
+  const revs = reserving.filter((steer) => !settled(steer)).map((steer) => steer.draft_rev ?? 0);
+  if (waiting !== null && waiting.rev > newestRev && (ours === undefined || !settled(ours))) revs.push(waiting.rev);
+  const pending = revs.length === 0 ? null : Math.max(...revs);
+  if (pending !== null && pending !== timedOutRev) return { pending, unchanged: false };
+  const failed = reserving.some((steer) => settled(steer));
+  return { pending: null, unchanged: failed || (timedOutRev !== null && timedOutRev > newestRev) };
+}
+
 function successToast(body: ResolveEscalation, escalation: EscalationView, us: OrgRef, them: OrgRef): string {
   const consult = escalation.kind === "consult";
-  switch (body.action) {
-    case "approve":
-      return consult ? `Released to ${representativeName(us.name)}` : `Sent to ${them.name}`;
-    case "revise":
-      return "Sent back to Claude. Nothing went out.";
-    default:
-      return consult ? `Declined. Claude will let ${them.name} know.` : "Declined. The reply won't be sent.";
-  }
+  if (body.action === "approve") return consult ? `Released to ${representativeName(us.name)}` : `Sent to ${them.name}`;
+  return consult ? `Declined. Claude will let ${them.name} know.` : "Declined. The message won't be sent.";
 }
 
 export function useDecision(
   escalation: EscalationView | null,
   consult: ConsultView | null,
+  steers: readonly SteerView[],
   threadId: string,
   us: OrgRef,
   them: OrgRef,
 ): Decision | null {
   const itemId = escalation?.id ?? "";
-  const target = { threadId, escalationId: itemId };
-  const resolve = useResolveEscalation(target);
-  const redraftCall = useRedraftEscalation(target);
-  const budget = useBudgetState();
-  const blocked = budgetLine(budget);
-  const failedRevs = useFailedRedrafts(itemId);
+  const resolve = useResolveEscalation({ threadId, escalationId: itemId });
+  const blocked = budgetLine(useBudgetState());
 
   // Keyed by item, so a call that settles after its item went updates that item only.
   const [items, setItems] = useState<Readonly<Record<string, ItemState>>>({});
@@ -159,30 +153,26 @@ export function useDecision(
   const index = state.revIndex ?? drafts.length - 1;
   const rev = drafts[index] ?? null;
   const edits = state.editsByRev[rev?.draft_rev ?? 0] ?? {};
-  const { waiting, timedOut, unsent } = state;
-
-  const newestRev = drafts.at(-1)?.draft_rev ?? null;
-  const failed = waiting !== null && failedRevs.has(waiting.rev) ? waiting : null;
-  const redrafting = waiting !== null && failed === null && (newestRev === null || newestRev < waiting.rev);
-  const busy = resolve.isPending || redraftCall.isPending;
+  const { pending, unchanged } = rewriteOf(steers, itemId, drafts.at(-1)?.draft_rev ?? 0, state);
+  const rewriting = pending !== null;
+  const busy = resolve.isPending;
 
   useEffect(() => {
-    if (!redrafting) return;
+    if (pending === null) return;
     const timer = window.setTimeout(() => {
-      setItems((current) => patched(current, itemId, { waiting: null, timedOut: waiting.instruction }));
+      setItems((current) => patched(current, itemId, { timedOutRev: pending }));
     }, REDRAFT_TIMEOUT_MS);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [redrafting, waiting, itemId]);
+  }, [pending, itemId]);
 
   if (escalation === null) return null;
 
   const fail = (error: unknown) => {
     const problem = problemOf(error);
     if (problem?.code === "escalation_not_open") {
-      // `resolved_by` is set only when someone resolved it; a redraft already running
-      // or a cancelled item comes back without it.
+      // `resolved_by` is set only when someone resolved it; a cancelled item comes back without it.
       update({
         notice:
           problem.resolved_by == null
@@ -196,79 +186,16 @@ export function useDecision(
     });
   };
 
-  const clearNotice = () => {
-    update({ notice: null, timedOut: null, unsent: null });
-  };
-
-  const redraft = (instruction: string) => {
-    if (redrafting) {
-      update({ notice: { tone: "info", text: STILL_REDRAFTING } });
-      return;
-    }
-    if (busy || blocked !== null) return;
-    clearNotice();
-    redraftCall.mutate(instruction, {
-      onSuccess: (started) => {
-        update({ waiting: { rev: started.draft_rev, instruction }, revIndex: null, editing: false });
-      },
-      onError: (error) => {
-        const problem = problemOf(error);
-        if (problem?.code === "escalation_not_open" && problem.resolved_by != null) {
-          fail(error);
-          return;
-        }
-        update({ unsent: { action: "redraft", instruction, queued: problem?.code === "escalation_not_open" } });
-      },
-    });
-  };
-
   const send = (body: ResolveEscalation, onDone?: () => void) => {
-    clearNotice();
+    update({ notice: null });
     resolve.mutate(body, {
       onSuccess: () => {
         toast(successToast(body, escalation, us, them));
-        update({ editing: false });
         onDone?.();
       },
-      onError: (error) => {
-        if (body.action === "revise" && problemOf(error)?.code !== "escalation_not_open") {
-          update({ unsent: { action: "revise", instruction: body.text ?? "", queued: false } });
-          return;
-        }
-        fail(error);
-      },
+      onError: fail,
     });
   };
-
-  const revise = (instruction: string) => {
-    if (busy || blocked !== null) return;
-    send({ action: "revise", text: instruction, draft_rev: rev?.draft_rev ?? null });
-  };
-
-  // What a redraft that came to nothing says, with a retry while one could work.
-  const stopped = (how: "failed" | "timeout", instruction: string): Notice => {
-    const copy = redraftFailure(how, budget);
-    if (!copy.retry) return { tone: "error", text: copy.text };
-    const run = () => {
-      update({ waiting: null });
-      redraft(instruction);
-    };
-    return { tone: "error", text: copy.text, action: { label: "Try again", run } };
-  };
-  // What a call the server didn't take says, keeping its instruction for a retry.
-  const notTaken = ({ action, instruction, queued }: Unsent): Notice => {
-    if (action === "redraft" && !queued) return stopped("failed", instruction);
-    const run = () => {
-      if (action === "revise") revise(instruction);
-      else redraft(instruction);
-    };
-    const [tone, text] = action === "revise" ? (["error", NOT_SENT_BACK] as const) : (["info", STILL_REDRAFTING] as const);
-    return { tone, text, action: { label: "Try again", run } };
-  };
-  let shownNotice = state.notice;
-  if (failed !== null) shownNotice = stopped("failed", failed.instruction);
-  else if (timedOut !== null) shownNotice = stopped("timeout", timedOut);
-  else if (unsent !== null) shownNotice = notTaken(unsent);
 
   return {
     escalation,
@@ -277,25 +204,31 @@ export function useDecision(
     index,
     rev,
     showRev: (next) => {
-      update({ revIndex: next === drafts.length - 1 ? null : next, editing: false });
+      update({ revIndex: next === drafts.length - 1 ? null : next });
     },
     answer: shownAnswer(rev, edits),
-    edited: isEdited(edits),
+    edited: isEdited(rev, edits),
     setAnswer: (value) => {
       const key = rev?.draft_rev ?? 0;
       update((current) => ({ editsByRev: { ...current.editsByRev, [key]: { answer: value } } }));
     },
-    editing: state.editing && !redrafting,
-    setEditing: (value) => {
-      update({ editing: value && !redrafting });
+    undoEdits: () => {
+      const key = rev?.draft_rev ?? 0;
+      update((current) => ({ editsByRev: { ...current.editsByRev, [key]: {} } }));
     },
-    redrafting,
+    rewriting,
+    unchanged,
+    awaitRewrite: (reserved, steerId) => {
+      update({ waiting: { rev: reserved, steerId }, revIndex: null });
+    },
     busy,
     blocked,
-    notice: shownNotice,
-    clearNotice,
+    notice: state.notice,
+    clearNotice: () => {
+      update({ notice: null });
+    },
     approve: () => {
-      if (busy || redrafting || blocked !== null) return;
+      if (busy || rewriting || blocked !== null) return;
       const built = approveBody(escalation.kind, rev, edits);
       if (!built.ok) {
         update({ notice: { tone: "error", text: built.error } });
@@ -305,9 +238,7 @@ export function useDecision(
     },
     decline: (reason, onDone) => {
       if (busy || blocked !== null) return;
-      send(declineBody(reason, rev), onDone);
+      send(declineBody(reason ?? "", rev), onDone);
     },
-    redraft,
-    revise,
   };
 }

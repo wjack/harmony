@@ -34,7 +34,8 @@ Owner: E4.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -197,17 +198,77 @@ async def create_from_card(
 
 
 async def set_status(uow: UnitOfWork, request_id: UUID, status: RequestStatus) -> NetworkRequest:
-    """Move the request to `status`; `closed` is final."""
-    request = await uow.session.get(
-        NetworkRequest, (uow.world_id, request_id), with_for_update=True, populate_existing=True
-    )
-    if request is None:
-        raise repo.NotFoundInWorld(NetworkRequest, uow.world_id, request_id)
+    """Move the request to `status`; `closed` is final here, and only a reopened thread
+    (`reopen`) starts its next round."""
+    request = await _locked(uow, request_id)
     if request.status in (status, "closed"):
         return request
     request.status = status
     await uow.session.flush()
     await _queue(uow, request)
+    return request
+
+
+async def reopen(uow: UnitOfWork, request_id: UUID) -> NetworkRequest:
+    """A thread of the request reopened (REOPEN.md §6.2): a closed request goes live
+    in its next round. One still live (its workflow running, or another thread already
+    reopened it) stays in its round."""
+    request = await _locked(uow, request_id)
+    if request.status != "closed":
+        return request
+    request.status = "active"
+    request.round += 1
+    await uow.session.flush()
+    await _queue(uow, request)
+    return request
+
+
+@dataclass(frozen=True)
+class RoundEnd:
+    """`end_round`'s answer: whether the request is closed, in which round."""
+
+    closed: bool
+    round: int
+    conversation_id: UUID | None
+
+
+async def end_round(uow: UnitOfWork, request_id: UUID, *, from_workflow: bool) -> RoundEnd:
+    """Close the request once nothing on it is live (REOPEN.md §6.3). The request
+    workflow calls it when it has seen every first run end (`from_workflow`); a
+    reopened run calls it when it ends. Whichever finds no live thread last closes the
+    request; before the workflow is done, the workflow closes it itself."""
+    request = await _locked(uow, request_id)
+    if from_workflow and request.workflow_done_at is None:
+        request.workflow_done_at = datetime.now(UTC)
+    elif request.workflow_done_at is None:
+        return RoundEnd(closed=False, round=request.round, conversation_id=request.conversation_id)
+    if request.status != "closed":
+        live = await uow.session.scalar(
+            select(Thread.id)
+            .where(
+                Thread.world_id == uow.world_id,
+                Thread.request_id == request_id,
+                Thread.state.not_in(TERMINAL_STATES),
+            )
+            .limit(1)
+        )
+        if live is not None:
+            await uow.session.flush()
+            return RoundEnd(
+                closed=False, round=request.round, conversation_id=request.conversation_id
+            )
+        request.status = "closed"
+        await uow.session.flush()
+        await _queue(uow, request)
+    return RoundEnd(closed=True, round=request.round, conversation_id=request.conversation_id)
+
+
+async def _locked(uow: UnitOfWork, request_id: UUID) -> NetworkRequest:
+    request = await uow.session.get(
+        NetworkRequest, (uow.world_id, request_id), with_for_update=True, populate_existing=True
+    )
+    if request is None:
+        raise repo.NotFoundInWorld(NetworkRequest, uow.world_id, request_id)
     return request
 
 
@@ -474,13 +535,16 @@ async def _queue(uow: UnitOfWork, request: NetworkRequest) -> None:
 __all__ = [
     "RecipientStatus",
     "RequestStatusView",
+    "RoundEnd",
     "WaitingOn",
     "chosen_recipients",
     "create_from_card",
     "default_recipients",
+    "end_round",
     "participant",
     "readable_threads",
     "recipients_of",
+    "reopen",
     "request_status",
     "scoped",
     "set_status",

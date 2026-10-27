@@ -70,7 +70,7 @@
 .chat-prose li {
   margin: 0.25em 0;
   padding-left: 0.2em;
-  line-height: 1.65;
+  line-height: 1.6;
 }
 
 .chat-prose li > ul,
@@ -148,36 +148,6 @@
   padding: 8px 16px 8px 0;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
-}
-
-/* Compact prose inside cards: the outreach brief. */
-.chat-prose-sm {
-  font-family: var(--font-sans);
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-}
-
-.chat-prose-sm p,
-.chat-prose-sm ul,
-.chat-prose-sm ol {
-  margin: 0 0 0.5em;
-}
-
-.chat-prose-sm ul {
-  padding-left: 1.2em;
-  list-style: disc;
-}
-
-.chat-prose-sm > :last-child {
-  margin-bottom: 0;
-}
-
-/* The card's own subject (the outreach brief) reads in the body color. */
-.chat-prose-sm.chat-prose-lead {
-  font-size: 14.5px;
-  line-height: 1.5;
-  color: var(--text);
 }
 
 /* "Searching the Harmony network…" while the tool runs. */

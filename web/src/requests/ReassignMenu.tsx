@@ -1,7 +1,6 @@
 /**
  * Reassign (REVISION_UNSTRUCTURED.md §6): moves an open item, and its thread access, to
- * another teammate. It sits in the decision card's "Why it came to you", beside the
- * routing it overrides.
+ * another teammate. A small link at the end of the decision card's eyebrow line.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
@@ -15,7 +14,7 @@ import { Avatar, Spark, cx } from "../shell/ui";
 import { lostThread, problemOf, useReassignEscalation } from "./api";
 import type { EscalationView, MemberView, OrgRef } from "./types";
 
-const LINK = "font-medium text-ink underline decoration-border-strong underline-offset-[3px] hover:decoration-ink";
+const LINK = "text-ui-sm whitespace-nowrap text-link hover:underline";
 
 interface ReassignMenuProps {
   escalation: EscalationView;
@@ -37,7 +36,7 @@ export function ReassignMenu(picker: ReassignMenuProps) {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          align="start"
+          align="end"
           side="bottom"
           sideOffset={8}
           collisionPadding={12}

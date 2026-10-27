@@ -2,14 +2,10 @@
 "Deploys"), so a change that would break runs in flight on a worker fails here first.
 
 tests/fixtures/histories/ holds one file per workflow run (`tests/_histories.py`):
-- `p0_p2/`: recorded by the code at ceea81b, before the live phase, from its workflow
-  tests and its scripted story. They replay through the live phase's workflow changes:
-  failure reasons, internal turns on their own queue, cards sent without review,
-  `revise`, the note on a missing summary. One recording isn't kept: a thread whose
-  requester's first turn sent nothing, which now ends `expired` (3.13 E3) where it used
-  to hand the move to the responder, so its commands differ. Nothing was deployed, so
-  no such run is in flight anywhere (LIVE_DEMO_PLAN §4, integration step 2).
-- `live/`: recorded by the live phase's code, the same way.
+- `r2/`: recorded by the round-2 feedback build once the Edit engine (EDIT.md) removed
+  `redraft` and `revise`, from its workflow tests and its scripted story. The earlier
+  recordings (`p0_p2/`, `live/`) went with them: those runs would take the removed
+  paths, and no deployed world can resume a run that old (FEEDBACK_R2_PLAN §5).
 
 A change that fails here needs a `workflow.patched` guard for runs in flight, or, while
 nothing is deployed, the histories recorded again (HARMONY_SAVE_HISTORIES).
@@ -25,10 +21,9 @@ from temporalio.client import WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
-from harmony.temporal.workflows.payloads import ConversationCarry
 from tests._histories import HISTORIES, REPLAYED, REPLAYED_TYPES, load, workflow_type
 
-RECORDINGS = ("p0_p2", "live")
+RECORDINGS = ("r2",)
 
 
 async def _each(paths: Sequence[Path]) -> AsyncIterator[WorkflowHistory]:
@@ -51,11 +46,3 @@ async def test_every_saved_history_replays(recording: str) -> None:
             index += 1
     assert index == len(paths)
     assert not failures, "\n".join(failures)
-
-
-def test_a_carry_from_before_failure_reasons_still_loads() -> None:
-    """What lets the `p0_p2` conversations replay: their carry says only whether the
-    last turn failed."""
-    assert ConversationCarry.model_validate({"turn_failed": False}).turn_failure is None
-    failed = ConversationCarry.model_validate({"turn_failed": True, "turns": 3})
-    assert (failed.turn_failure, failed.turns) == ("model_error", 3)

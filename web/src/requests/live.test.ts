@@ -39,6 +39,11 @@ describe("affectedThreads", () => {
     expect(affectedThreads(shared)).toEqual({ inbox: true, threads: ["t3"] });
   });
 
+  it("refreshes the thread when one of our edits or Claude's guidance changes", () => {
+    expect(affectedThreads(snapshot("steer", "s1", { thread_id: "t4" }))).toEqual({ inbox: true, threads: ["t4"] });
+    expect(affectedThreads(snapshot("rep_guidance", "g1", { thread_id: "t4" }))).toEqual({ inbox: true, threads: ["t4"] });
+  });
+
   it("ignores entities the inbox doesn't show", () => {
     expect(affectedThreads(snapshot("conversation", "c1", {}))).toEqual({ inbox: false, threads: [] });
   });
@@ -51,5 +56,12 @@ describe("endsTyping", () => {
     expect(endsTyping(snapshot("thread", "t1", { state: "closed" }), "t1")).toBe(true);
     expect(endsTyping(snapshot("thread", "t1", { state: "active" }), "t1")).toBe(false);
     expect(endsTyping(snapshot("thread", "t2", { state: "closed" }), "t1")).toBe(false);
+  });
+
+  it("ends when our Claude goes to ask the team, on this thread only", () => {
+    expect(endsTyping(snapshot("consult", "c1", { thread_id: "t1" }), "t1")).toBe(true);
+    expect(endsTyping(snapshot("escalation", "e1", { thread_id: "t1" }), "t1")).toBe(true);
+    expect(endsTyping(snapshot("consult", "c2", { thread_id: "t2" }), "t1")).toBe(false);
+    expect(endsTyping(snapshot("internal_note", "n1", { thread_id: "t1" }), "t1")).toBe(false);
   });
 });

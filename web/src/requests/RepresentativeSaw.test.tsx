@@ -19,6 +19,7 @@ const SAW: RepresentativeContext = {
   parts: [{ kind: "sharing", label: "What it may pass on", text: FROZEN }],
   notices: [{ kind: "sharing", text: SHARING_NOTICE, delivered_at: "2026-11-02T10:05:00Z" }],
   released: [],
+  guidance: [],
   frozen_at: "2026-11-02T09:00:00Z",
 };
 
@@ -53,4 +54,21 @@ it("says plainly when nothing was sent since", () => {
   expect(notices.textContent).toContain("None yet.");
   // The footer no longer claims the list covers what the other side wrote.
   expect(drawer.textContent).toContain(`Besides what ${orgs.henderson.name} wrote on this thread`);
+});
+
+it("lists each version of guidance our side's edits sent it, oldest first", () => {
+  const drawer = show({
+    ...SAW,
+    guidance: [
+      { version: 2, text: "Say only whether a slot is available. Offer the general capabilities sheet.", delivered_at: "2026-11-02T11:00:00Z" },
+      { version: 1, text: "Say only whether a slot is available.", delivered_at: "2026-11-02T10:30:00Z" },
+    ],
+  });
+  const guidance = within(drawer).getByRole("region", { name: "Guidance from your side" });
+  expect(within(guidance).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent)).toEqual([
+    "Guidance, version 1",
+    "Guidance, version 2",
+  ]);
+  expect(guidance.textContent).toContain("Offer the general capabilities sheet.");
+  expect(within(show(SAW)).getByRole("region", { name: "Guidance from your side" }).textContent).toContain("None yet.");
 });

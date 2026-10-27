@@ -162,6 +162,8 @@ class Snapshotable(WorldScoped):
 
     # The snapshot's `entity_type`; unique across models (`SNAPSHOT_ENTITIES`).
     entity_type: ClassVar[str]
+    # Columns the snapshot leaves out, so their text never reaches a browser.
+    snapshot_omits: ClassVar[frozenset[str]] = frozenset()
 
     def snapshot_id(self) -> UUID:
         """The snapshot's `entity_id`: the row's id, or its org's for per-org rows."""

@@ -309,34 +309,6 @@ async def test_add_draft_appends_revs(db_sessionmaker: Sessionmaker) -> None:
         assert current.rationale == "The public calendar starts Nov 10."
 
 
-async def test_a_redraft_that_wrote_nothing_is_told_to_whoever_sees_the_item(
-    db_sessionmaker: Sessionmaker,
-) -> None:
-    sm = db_sessionmaker
-    world = await seeded_world(sm)
-    opened = await open_thread(sm, world)
-    escalation_id, _ = await open_escalation(sm, opened)
-
-    async with unit_of_work(sm, world) as uow:
-        await escalations.redraft_failed(uow, escalation_id, 2)
-        await uow.commit()
-    async with sm() as session:
-        (event,) = await session.scalars(
-            select(Event).where(Event.world_id == world, Event.type == "escalation.redraft_failed")
-        )
-    # The escalation's own scope: Northlake's members who can see the thread.
-    assert (event.scope_kind, event.org_id, event.thread_id) == (
-        "thread",
-        NORTHLAKE,
-        opened.thread_id,
-    )
-    assert event.payload == {
-        "type": "escalation.redraft_failed",
-        "escalation_id": str(escalation_id),
-        "draft_rev": 2,
-    }
-
-
 # --- Routing ----------------------------------------------------------------------------
 
 

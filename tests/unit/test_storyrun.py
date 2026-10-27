@@ -36,6 +36,7 @@ from harmony.agents.models import (
     OutreachCardItem,
     UserTextItem,
 )
+from harmony.agents.tools.rep import CONSULT_AFTER_SEND
 from harmony.api.routes.cards import ApproveCard
 from harmony.api.routes.conversations import ConversationCreated, ConversationDetail
 from harmony.api.routes.escalations import ResolveEscalation
@@ -73,11 +74,13 @@ from harmony.storyrun.beats import free_form, recast
 from harmony.storyrun.checks import (
     EmptyEndTurn,
     SentRequest,
+    consults_after_send,
     duplicate_auto_recipients,
     empty_end_turn_failed,
     ended_at,
     opener_leak,
     silent_turn_pairs,
+    status_checks_after_send,
 )
 from harmony.storyrun.decide import (
     NO_DRAFT_TEXT,
@@ -319,6 +322,7 @@ class FakeStory:
                         route=None,
                         rationale="From the records.",
                         activity=[],
+                        rewritten_by=None,
                         created_at=NOW,
                     )
                 ],
@@ -339,6 +343,9 @@ class FakeStory:
             notes=[],
             representative=None,
             close_summary=None,
+            steers=[],
+            guidance=None,
+            earlier_summaries=[],
             version=1,
         )
 
@@ -427,6 +434,7 @@ class FakeStory:
             ],
             screened=None,
             feedback=None,
+            rejected_with=None,
             request_id=self.request_id if self.card_status == "approved" else None,
             version=1,
         )
@@ -799,6 +807,7 @@ class FakeChat(FakeStory):
             ],
             screened=None,
             feedback=None,
+            rejected_with=None,
             request_id=request_id,
             version=1,
         )
@@ -906,6 +915,7 @@ def card(
         ],
         screened=None,
         feedback=None,
+        rejected_with=None,
         request_id=None,
         version=1,
     )
@@ -1012,12 +1022,19 @@ def test_a_close_shows_as_a_marker_without_its_summary() -> None:
         access_reason="routed",
         access_reasons=["routed"],
         last_activity_at=NOW,
+        run=1,
+        end_reason="closed",
+        ended_at=NOW,
+        closed_by="responder",
+        run_finished_at=NOW,
         version=1,
         side_to_move=None,
         deadline_at=None,
         created_at=NOW,
         messages=[line(1, "message", "Booked: $1,410."), line(2, "close", "")],
         access=[],
+        reopen=None,
+        runs=[],
     )
     text = "\n".join(thread_lines(thread))
     assert "Booked: $1,410." in text
@@ -1261,6 +1278,70 @@ def test_silent_turn_pairs_count_as_the_thread_does() -> None:
     assert silent_turn_pairs(turns, acted, ends) == 1
 
 
+def test_consults_after_send_count_the_refusals_and_any_close_after_one() -> None:
+    """A turn sends, consults (refused), then closes anyway: one of each. A consult
+    before the send was answered, and a close in a turn with no refusal isn't counted."""
+    refused_turn, answered_turn, closing_turn = UUID(int=51), UUID(int=52), UUID(int=53)
+
+    def calls(*names: str) -> str:
+        return json.dumps(
+            [
+                {"type": "tool_use", "id": f"{name}-{index}", "name": name, "input": {}}
+                for index, name in enumerate(names)
+            ]
+        )
+
+    def results(*answers: tuple[str, str]) -> str:
+        return json.dumps(
+            [{"type": "tool_result", "tool_use_id": id_, "content": text} for id_, text in answers]
+        )
+
+    refusal = CONSULT_AFTER_SEND.format(counterparty="Northlake")
+    rows: list[tuple[UUID | None, str, str]] = [
+        (answered_turn, "assistant", calls("consult")),
+        (answered_turn, "user", results(("consult-0", "Nov 4 is free."))),
+        (answered_turn, "assistant", calls("send_message")),
+        (answered_turn, "user", results(("send_message-0", "Sent."))),
+        (refused_turn, "assistant", calls("send_message", "consult")),
+        (refused_turn, "user", results(("send_message-0", "Sent."), ("consult-1", refusal))),
+        (refused_turn, "assistant", calls("close")),
+        (refused_turn, "user", results(("close-0", "Closed."))),
+        (closing_turn, "assistant", calls("close")),
+        (closing_turn, "user", results(("close-0", "Closed."))),
+    ]
+
+    assert consults_after_send(rows) == (1, 1)
+
+
+def test_status_checks_after_send_count_the_checks_once_a_request_went_out() -> None:
+    """Decision 7: after its card's request went out, a turn has nothing to check. A
+    check before the card, or in a turn whose card was declined, isn't counted."""
+    sent_turn, declined_turn = UUID(int=61), UUID(int=62)
+
+    def blocks(*content: dict[str, str]) -> str:
+        return json.dumps(list(content))
+
+    def use(call_id: str, name: str) -> dict[str, str]:
+        return {"type": "tool_use", "id": call_id, "name": name}
+
+    def result(call_id: str) -> dict[str, str]:
+        return {"type": "tool_result", "tool_use_id": call_id, "content": "..."}
+
+    rows: list[tuple[UUID | None, str, str]] = [
+        (sent_turn, "assistant", blocks(use("s0", "get_request_status"))),
+        (sent_turn, "user", blocks(result("s0"))),
+        (sent_turn, "assistant", blocks(use("card", "send_network_request"))),
+        (sent_turn, "user", blocks(result("card"))),
+        (sent_turn, "assistant", blocks(use("s1", "get_request_status"))),
+        (sent_turn, "user", blocks(result("s1"))),
+        (declined_turn, "assistant", blocks(use("card", "send_network_request"))),
+        (declined_turn, "user", blocks(result("card"))),
+        (declined_turn, "assistant", blocks(use("s2", "get_request_status"))),
+    ]
+
+    assert status_checks_after_send(rows, {(sent_turn, "card")}) == 1
+
+
 # --- The worker's activity log --------------------------------------------------------
 
 
@@ -1411,6 +1492,8 @@ def test_a_poller_from_an_exited_local_process_is_stale() -> None:
         (["harmony-demo", "--message", "Hi", "--as", "nobody"], "no member 'nobody'"),
         (["harmony-demo", "--approve", "some"], "--approve is story or all"),
         (["harmony-demo", "--interactive", "--approve", "all"], "drop --approve all"),
+        (["harmony-demo", "--edit", "nobody:henderson:2:Shorter."], "--edit: no org 'nobody'"),
+        (["harmony-demo", "--edit", "ridgeline:henderson:Shorter."], "isn't ORG:COUNTERPARTY:N"),
     ],
 )
 def test_setup_errors_exit_2_before_anything_starts(args: list[str], message: str) -> None:
@@ -1433,6 +1516,7 @@ def test_run_help_lists_its_options() -> None:
         "--interactive",
         "--worker",
         "--keep",
+        "--edit",
     ):
         assert option in result.output
 

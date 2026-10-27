@@ -30,12 +30,15 @@ from harmony.db.models.request import NetworkRequest, Screening
 from harmony.db.models.review import Review
 from harmony.db.models.thread import (
     InternalNote,
+    RepGuidance,
     RepNotice,
     RepSession,
     RepTranscript,
+    Steer,
     Thread,
     ThreadAccess,
     ThreadMessage,
+    ThreadRun,
 )
 from harmony.db.models.visitor import Budget, BudgetReservation, LiveControls, VisitorSession
 from harmony.db.models.world import World, WorldEventSeq, WorldWorkflow
@@ -79,6 +82,7 @@ __all__ = [
     "NetworkRequest",
     "Org",
     "OrgCommunity",
+    "RepGuidance",
     "RepNotice",
     "RepPolicy",
     "RepSession",
@@ -87,9 +91,11 @@ __all__ = [
     "Review",
     "Screening",
     "Snapshotable",
+    "Steer",
     "Thread",
     "ThreadAccess",
     "ThreadMessage",
+    "ThreadRun",
     "TrustedOrganization",
     "Versioned",
     "VersionedEntity",

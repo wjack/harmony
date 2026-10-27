@@ -93,7 +93,7 @@ export function useActAs() {
     mutationFn: (memberId: string) =>
       unwrap(api.POST("/api/session/act-as", { body: { member_id: memberId } })),
     onSuccess: (session) => {
-      void dispatcher.memberChanged(session.epoch);
+      void dispatcher.memberChanged(session.epoch, { sessionId: session.session_id, memberId: session.member.id });
     },
   });
 }

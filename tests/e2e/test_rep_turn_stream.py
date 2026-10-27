@@ -10,7 +10,7 @@ attempt at a time, as `ThreadWorkflow` would run and retry it.
 
 - Helen (Northlake admin) receives `stream.delta` text, then the committed message;
   Alex (Henderson, routed) receives only `stream.typing`, then the message; Raj
-  (Northlake, no access) receives nothing about the thread.
+  (Northlake, made a member here, no access) receives nothing about the thread.
 - An attempt that crashes after its message is committed is retried without a second
   model call for that step and without a duplicate message.
 - A model that is silent for 12 s (as Opus thinking is) still shows the turn typing:
@@ -70,6 +70,7 @@ from harmony.temporal.worker import ModelRuntime, model_runtime
 from tests.conftest import ClonedDatabase
 from tests.integration._sse_client import SseReader, StreamingASGITransport, open_stream
 from tests.integration._visitors import demo_id, visitor
+from tests.integration._worlds import demote_to_member
 
 THREAD_KEY = "rep-turn"  # the cassette's thread (tests/fixtures/cassettes/rep_turn.yaml)
 OPENING = (
@@ -95,6 +96,8 @@ class Stage:
 async def _stage(app: FastAPI, settings: Settings, sm: Sessionmaker) -> Stage:
     async with visitor(app) as first:
         world_id = UUID((await first.start())["world_id"])
+    # Everyone in the demo is an admin; as a member, Raj sees only what he's routed.
+    await demote_to_member(sm, world_id, "raj")
     thread_id, request_id = uuid4(), uuid4()
     async with unit_of_work(sm, world_id) as uow:
         session = uow.session

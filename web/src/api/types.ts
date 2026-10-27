@@ -54,3 +54,20 @@ export type StoryStep = Schemas["StoryStep"];
 /** The typed error body of every P1–P2 route (`code` says which failure it is). */
 export type ApiProblem = Schemas["ApiProblem"];
 export type ApiProblemCode = ApiProblem["code"];
+
+// --- Round 2: steers, guidance and Reopen (docs/FEEDBACK_R2_PLAN.md §1.3) ----------
+
+export type SteerView = Schemas["SteerView"];
+export type GuidanceView = Schemas["GuidanceView"];
+export type DeliveredGuidance = Schemas["DeliveredGuidance"];
+export type RewrittenBy = Schemas["RewrittenBy"];
+export type EarlierSummary = Schemas["EarlierSummary"];
+export type ReopenOffer = Schemas["ReopenOffer"];
+export type ReopenBlock = NonNullable<ReopenOffer["block"]>;
+export type ThreadRunView = Schemas["ThreadRunView"];
+export type EndReason = NonNullable<ThreadSummary["end_reason"]>;
+export type DemoWhose = Schemas["DemoWhose"];
+export type SteerStarted = Schemas["SteerStarted"];
+export type ReopenStarted = Schemas["ReopenStarted"];
+export type AddSteer = Schemas["AddSteer"];
+export type ReopenRequest = Schemas["ReopenRequest"];

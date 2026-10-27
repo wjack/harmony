@@ -76,8 +76,10 @@ export const ThreadEdge = memo(function ThreadEdge({
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               maxWidth: EDGE_LABEL_MAX_WIDTH,
             }}
+            // Two lines before it's cut, so the sender's name and some of what they said
+            // both show; the radius keeps one line a pill.
             className={cx(
-              "nodrag nopan pointer-events-auto absolute truncate rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] leading-4 font-medium whitespace-nowrap shadow-card",
+              "nodrag nopan pointer-events-auto absolute line-clamp-2 rounded-[11px] border border-border bg-surface px-2 py-0.5 text-[11px] leading-4 font-medium break-words shadow-card",
               LABEL_TONE[style.tone],
             )}
           >

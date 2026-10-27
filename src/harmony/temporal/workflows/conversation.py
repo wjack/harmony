@@ -13,14 +13,14 @@ The API never calls the model: it signal-with-starts this workflow (`member_mess
    turn woken only by `closed` opens with the placeholder user turn plus a system note;
 3. on `awaiting_card`, hold the turn until `resolve_card` (or a member message sent
    while the card was pending, which rejects it with that text as feedback) settles it,
-   then run the same turn again from `next_step` with the `CardOutcome` ("approved;
-   request R sent to ..." or "rejected: <feedback>"). A message sent before the card
-   was raised waits for the next turn, as the API told the member. A `closed` update
-   whose turn failed or was refused never reached the transcript, so it goes again
-   with the next turn (it doesn't wake one itself). A card raised in a chat that sends
-   without review (`card_auto`) is approved by the workflow itself, with no Update and
-   nobody to wait for; if the approval can't be stored, it is rejected with the reason
-   and the turn resumes with "Couldn't send: ..." (3.10);
+   then run the same turn again from `next_step` with the `CardOutcome` ("Approved
+   and sent: request R to ...", a Decline, or "rejected: <message>"). A message sent
+   before the card was raised waits for the next turn, as the API told the member. A
+   `closed` update whose turn failed or was refused never reached the transcript, so
+   it goes again with the next turn (it doesn't wake one itself). A card raised in a
+   chat that sends without review (`card_auto`) is approved by the workflow itself,
+   with no Update and nobody to wait for; if the approval can't be stored, it is
+   rejected with the reason and the turn resumes with "Couldn't send: ..." (3.10);
 4. at an idle point, continue as new with `ConversationCarry` once the run has taken
    `turns_per_run` turns or Temporal suggests it (a message signalled meanwhile is
    carried, or handled first: queued work always runs before the continue); after
@@ -110,7 +110,13 @@ class ConversationWorkflow:
         self._queued_messages: list[MemberMessage] = list(conversation.carried.queued_messages)
         self._network_updates: list[NetworkUpdate] = list(conversation.carried.network_updates)
         self._turns = conversation.carried.turns
-        self._closed_requests: set[UUID] = set(conversation.carried.closed_request_ids)
+        carried = conversation.carried
+        # The highest round of each request whose `closed` update was taken; ids carried
+        # from before rounds count as round 1.
+        self._closed_requests: dict[UUID, int] = {
+            **dict.fromkeys(carried.closed_request_ids, 1),
+            **carried.closed_request_rounds,
+        }
         # Updates a failed or refused turn took, whose note may not have been stored
         # (a turn that failed after its first call stored them). They go with the next
         # turn without waking one, so a failure that keeps happening can't loop, and
@@ -157,10 +163,11 @@ class ConversationWorkflow:
 
     @workflow.signal
     def network_update(self, update: NetworkUpdate) -> None:
-        # Delivered at least once: a retried notice must not wake Claude again.
-        if update.request_id in self._closed_requests:
+        # Delivered at least once: a retried notice, or a second caller closing the same
+        # round, must not wake Claude again.
+        if self._closed_requests.get(update.request_id, 0) >= update.round:
             return
-        self._closed_requests.add(update.request_id)
+        self._closed_requests[update.request_id] = update.round
         self._network_updates.append(update)
 
     @workflow.update
@@ -277,6 +284,7 @@ class ConversationWorkflow:
             decision="reject",
             member_id=message.member_id,
             feedback=message.text,
+            rejected_with="message",
         )
         self._resolving = True
         try:
@@ -468,7 +476,7 @@ class ConversationWorkflow:
                     queued_messages=list(self._queued_messages),
                     network_updates=list(self._network_updates),
                     turns=self._turns,
-                    closed_request_ids=sorted(self._closed_requests),
+                    closed_request_rounds=dict(sorted(self._closed_requests.items())),
                     undelivered_updates=list(self._undelivered),
                     turn_failure=self._turn_failure,
                 )

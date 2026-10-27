@@ -198,6 +198,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/threads/{thread_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen Thread
+         * @description Start another run of a finished thread from the acting member's side.
+         *
+         *     409 `member_changed` (with `member`) first, then 404, 403 `not_in_org`, 409
+         *     `thread_open` (with `reopened_by`), `reopen_in_progress`, `closing_in_progress`,
+         *     `not_reopenable` (with `block`) and `world_retired`.
+         */
+        post: operations["reopen_thread_api_threads__thread_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events": {
         parameters: {
             query?: never;
@@ -373,23 +397,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/escalations/{escalation_id}/redraft": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Redraft Escalation */
-        post: operations["redraft_escalation_api_escalations__escalation_id__redraft_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/threads/{thread_id}/workspace": {
         parameters: {
             query?: never;
@@ -416,8 +423,37 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Add Note */
+        /**
+         * Add Note
+         * @description 409 `member_changed` (with `member`) first, then 404 for a thread the member
+         *     can't see.
+         */
         post: operations["add_note_api_threads__thread_id__notes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/{thread_id}/steers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Steer
+         * @description Start a steer on this side of the thread; its outcome arrives as `steer` events.
+         *
+         *     409 `member_changed` (with `member`) first, then 422 `invalid` (a blank body), 404
+         *     (the thread, or an `escalation_id` that isn't the actor's org's item on it), 403
+         *     `not_in_org`, 422 `invalid` (the `client_key` already sent other text), 409
+         *     `steer_running` (with `by`), `thread_closed` and `world_retired`.
+         */
+        post: operations["add_steer_api_threads__thread_id__steers_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -503,6 +539,27 @@ export interface paths {
         };
         /** Get Story */
         get: operations["get_story_api_demo_story_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/whose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Whose
+         * @description Exactly one of `chat` and `thread` (422 otherwise); 404 for an id that isn't in
+         *     the acting member's world.
+         */
+        get: operations["get_whose_api_demo_whose_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -673,6 +730,30 @@ export interface components {
         AddNote: {
             /** Body */
             body: string;
+            /**
+             * As Member Id
+             * Format: uuid
+             */
+            as_member_id: string;
+        };
+        /** AddSteer */
+        AddSteer: {
+            /**
+             * Client Key
+             * Format: uuid
+             */
+            client_key: string;
+            /**
+             * As Member Id
+             * Format: uuid
+             */
+            as_member_id: string;
+            /** Body */
+            body: string;
+            /** Escalation Id */
+            escalation_id?: string | null;
+            /** Draft Text */
+            draft_text?: string | null;
         };
         /** AdminSpendView */
         AdminSpendView: {
@@ -706,8 +787,13 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "not_found" | "invalid" | "not_admin" | "card_not_pending" | "escalation_not_open" | "not_in_org" | "world_retired" | "passcode_required" | "passcode_invalid" | "too_many_attempts" | "payload_too_large";
+            code: "not_found" | "invalid" | "not_admin" | "card_not_pending" | "escalation_not_open" | "not_in_org" | "world_retired" | "passcode_required" | "passcode_invalid" | "too_many_attempts" | "payload_too_large" | "member_changed" | "steer_running" | "thread_closed" | "thread_open" | "reopen_in_progress" | "closing_in_progress" | "not_reopenable";
             resolved_by?: components["schemas"]["MemberRef"] | null;
+            by?: components["schemas"]["MemberRef"] | null;
+            member?: components["schemas"]["MemberRef"] | null;
+            reopened_by?: components["schemas"]["ReopenedBy"] | null;
+            /** Block */
+            block?: ("history" | "unfinished" | "not_asked" | "limit" | "refused" | "they_closed") | null;
         };
         /** ApproveCard */
         ApproveCard: {
@@ -937,6 +1023,21 @@ export interface components {
             send_without_confirmation: boolean | null;
         };
         /**
+         * DeliveredGuidance
+         * @description A guidance version the representative was given, and when.
+         */
+        DeliveredGuidance: {
+            /** Version */
+            version: number;
+            /** Text */
+            text: string;
+            /**
+             * Delivered At
+             * Format: date-time
+             */
+            delivered_at: string;
+        };
+        /**
          * DeliveredNotice
          * @description A notice the representative was sent: its call stored the system message.
          */
@@ -945,7 +1046,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "settings" | "mode" | "sharing" | "world_date" | "closed";
+            kind: "settings" | "mode" | "sharing" | "world_date" | "closed" | "reopened";
             /** Text */
             text: string;
             /**
@@ -953,6 +1054,16 @@ export interface components {
              * Format: date-time
              */
             delivered_at: string;
+        };
+        /** DemoPerson */
+        DemoPerson: {
+            /**
+             * Member Id
+             * Format: uuid
+             */
+            member_id: string;
+            /** Name */
+            name: string;
         };
         /** DemoStory */
         DemoStory: {
@@ -970,6 +1081,35 @@ export interface components {
             suggested_recipients: components["schemas"]["OrgRef"][];
             /** Steps */
             steps: components["schemas"]["StoryStep"][];
+        };
+        /**
+         * DemoWhose
+         * @description Names and orgs only: never a title, content or state.
+         */
+        DemoWhose: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "chat" | "thread";
+            /** Orgs */
+            orgs: components["schemas"]["DemoWhoseOrg"][];
+        };
+        /** DemoWhoseOrg */
+        DemoWhoseOrg: {
+            org: components["schemas"]["OrgRef"];
+            /** People */
+            people: components["schemas"]["DemoPerson"][];
+        };
+        /**
+         * EarlierSummary
+         * @description This side's close summary of an earlier run.
+         */
+        EarlierSummary: {
+            /** Run */
+            run: number;
+            /** Text */
+            text: string;
         };
         /**
          * ErrorBody
@@ -992,6 +1132,7 @@ export interface components {
             rationale: string;
             /** Activity */
             activity: components["schemas"]["ActivityLine"][];
+            rewritten_by: components["schemas"]["RewrittenBy"] | null;
             /**
              * Created At
              * Format: date-time
@@ -1016,7 +1157,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve" | "decline" | "take_over" | "revise";
+            action: "approve" | "decline" | "take_over";
             /** Text */
             text?: string | null;
             /** Draft Rev */
@@ -1046,7 +1187,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve" | "decline" | "take_over" | "revise";
+            action: "approve" | "decline" | "take_over";
             /** Message Id */
             message_id?: string | null;
         };
@@ -1106,6 +1247,29 @@ export interface components {
         GateUnlocked: {
             /** Next */
             next: string;
+        };
+        /**
+         * GuidanceView
+         * @description What this side's representative follows on the thread now.
+         */
+        GuidanceView: {
+            /** Version */
+            version: number;
+            /** Text */
+            text: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Steer Id
+             * Format: uuid
+             */
+            steer_id: string;
+            by: components["schemas"]["MemberRef"];
+            /** Delivered At */
+            delivered_at: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1311,7 +1475,7 @@ export interface components {
              */
             status: "open" | "resolved" | "cancelled";
             /** Action */
-            action: ("approve" | "decline" | "take_over" | "revise") | null;
+            action: ("approve" | "decline" | "take_over") | null;
             /** Answer */
             answer: string | null;
         };
@@ -1467,6 +1631,10 @@ export interface components {
             state: "active" | "awaiting_principal" | "closed" | "expired";
             /** Stop Reason */
             stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            /** End Reason */
+            end_reason: ("closed" | "quiet" | "unsent" | "turn_limit" | "deadline" | "stopped") | null;
+            /** Closed By */
+            closed_by: ("requester" | "responder") | null;
             /** Latest Line */
             latest_line: string | null;
             /** Turn Count */
@@ -1615,6 +1783,8 @@ export interface components {
             screened: components["schemas"]["ScreenedCounts"] | null;
             /** Feedback */
             feedback: string | null;
+            /** Rejected With */
+            rejected_with: ("decline" | "message") | null;
             /** Request Id */
             request_id: string | null;
             /** Version */
@@ -1671,25 +1841,10 @@ export interface components {
             /** Last Activity At */
             last_activity_at: string | null;
         };
-        /** RedraftEscalation */
-        RedraftEscalation: {
-            /** Instruction */
-            instruction: string;
-        };
-        /** RedraftStarted */
-        RedraftStarted: {
-            /**
-             * Escalation Id
-             * Format: uuid
-             */
-            escalation_id: string;
-            /** Draft Rev */
-            draft_rev: number;
-        };
         /** RejectCard */
         RejectCard: {
             /** Feedback */
-            feedback: string;
+            feedback?: string | null;
         };
         /**
          * ReleasedAnswerView
@@ -1720,6 +1875,56 @@ export interface components {
             released_at: string;
         };
         /**
+         * ReopenOffer
+         * @description Whether the acting member's side may reopen the thread now.
+         */
+        ReopenOffer: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "allowed" | "wrapping_up" | "blocked";
+            /** Block */
+            block: ("history" | "unfinished" | "not_asked" | "limit" | "refused" | "they_closed") | null;
+        };
+        /** ReopenRequest */
+        ReopenRequest: {
+            /**
+             * Client Key
+             * Format: uuid
+             */
+            client_key: string;
+            /**
+             * As Member Id
+             * Format: uuid
+             */
+            as_member_id: string;
+            /** Body */
+            body: string;
+        };
+        /** ReopenStarted */
+        ReopenStarted: {
+            /**
+             * Steer Id
+             * Format: uuid
+             */
+            steer_id: string;
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+        };
+        /**
+         * ReopenedBy
+         * @description Who reopened a thread, or is reopening it: the org, and the member only for the
+         *     viewer's own org.
+         */
+        ReopenedBy: {
+            org: components["schemas"]["OrgRef"];
+            member: components["schemas"]["MemberRef"] | null;
+        };
+        /**
          * RepresentativeContext
          * @description "What our representative saw": the parts its requests carry and the answers
          *     released to it (§2): its frozen prompt, the notices sent since (R§12), and the
@@ -1732,6 +1937,8 @@ export interface components {
             notices: components["schemas"]["DeliveredNotice"][];
             /** Released */
             released: components["schemas"]["ReleasedAnswerView"][];
+            /** Guidance */
+            guidance: components["schemas"]["DeliveredGuidance"][];
             /**
              * Frozen At
              * Format: date-time
@@ -1815,11 +2022,23 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve" | "decline" | "take_over" | "revise";
+            action: "approve" | "decline" | "take_over";
             /** Text */
             text?: string | null;
             /** Draft Rev */
             draft_rev?: number | null;
+        };
+        /**
+         * RewrittenBy
+         * @description The steer whose instruction rewrote a draft, and who gave it.
+         */
+        RewrittenBy: {
+            /**
+             * Steer Id
+             * Format: uuid
+             */
+            steer_id: string;
+            author: components["schemas"]["MemberRef"];
         };
         /** RouteAssigneeView */
         RouteAssigneeView: {
@@ -1835,6 +2054,44 @@ export interface components {
         RouteView: {
             /** Assignees */
             assignees: components["schemas"]["RouteAssigneeView"][];
+        };
+        /** RunEnded */
+        RunEnded: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "awaiting_principal" | "closed" | "expired";
+            /**
+             * End Reason
+             * @enum {string}
+             */
+            end_reason: "closed" | "quiet" | "unsent" | "turn_limit" | "deadline" | "stopped";
+            /** Closed By */
+            closed_by: ("requester" | "responder") | null;
+            /** Stop Reason */
+            stop_reason: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+        };
+        /**
+         * RunReopened
+         * @description Who started a run after the first: the org, and the member and steer only for
+         *     the viewer's own side.
+         */
+        RunReopened: {
+            org: components["schemas"]["OrgRef"];
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "requester" | "responder";
+            by: components["schemas"]["MemberRef"] | null;
+            /** Steer Id */
+            steer_id: string | null;
         };
         /**
          * ScreenedCounts
@@ -1962,6 +2219,66 @@ export interface components {
              */
             scenario?: string | null;
         };
+        /**
+         * SteerStarted
+         * @description `steer`'s result, and `POST /threads/{id}/steers`' 202 body. `escalation_id` and
+         *     `draft_rev` are set when the item is being rewritten, as that rev.
+         */
+        SteerStarted: {
+            /**
+             * Steer Id
+             * Format: uuid
+             */
+            steer_id: string;
+            /** Escalation Id */
+            escalation_id: string | null;
+            /** Draft Rev */
+            draft_rev: number | null;
+        };
+        /**
+         * SteerView
+         * @description A member's instruction to this side's Claude (an Edit, or a Reopen's text) and
+         *     what came of it.
+         */
+        SteerView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "edit" | "reopen";
+            author: components["schemas"]["MemberRef"];
+            /** Body */
+            body: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "working" | "done" | "failed";
+            /** Escalation Id */
+            escalation_id: string | null;
+            /** Draft Rev */
+            draft_rev: number | null;
+            /** Guidance Outcome */
+            guidance_outcome: ("updated" | "unchanged" | "rejected" | "failed") | null;
+            /** Guidance Version */
+            guidance_version: number | null;
+            /** Draft Outcome */
+            draft_outcome: ("rewritten" | "settled" | "failed") | null;
+            /** Failure Reason */
+            failure_reason: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused" | "added_details" | "invalid" | "thread_closed" | "unchanged" | "reopen_failed") | null;
+            /** Version */
+            version: number;
+        };
         /** StoryStep */
         StoryStep: {
             /** Id */
@@ -2052,6 +2369,16 @@ export interface components {
              * Format: date-time
              */
             last_activity_at: string;
+            /** Run */
+            run: number;
+            /** End Reason */
+            end_reason: ("closed" | "quiet" | "unsent" | "turn_limit" | "deadline" | "stopped") | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Closed By */
+            closed_by: ("requester" | "responder") | null;
+            /** Run Finished At */
+            run_finished_at: string | null;
             /** Version */
             version: number;
             /** Side To Move */
@@ -2067,6 +2394,9 @@ export interface components {
             messages: components["schemas"]["ThreadMessageView"][];
             /** Access */
             access: components["schemas"]["ThreadAccessView"][];
+            reopen: components["schemas"]["ReopenOffer"] | null;
+            /** Runs */
+            runs: components["schemas"]["ThreadRunView"][];
         };
         /** ThreadMessageView */
         ThreadMessageView: {
@@ -2099,6 +2429,18 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** ThreadRunView */
+        ThreadRunView: {
+            /** Run */
+            run: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            reopened: components["schemas"]["RunReopened"] | null;
+            ended: components["schemas"]["RunEnded"] | null;
         };
         /**
          * ThreadSummary
@@ -2138,6 +2480,16 @@ export interface components {
              * Format: date-time
              */
             last_activity_at: string;
+            /** Run */
+            run: number;
+            /** End Reason */
+            end_reason: ("closed" | "quiet" | "unsent" | "turn_limit" | "deadline" | "stopped") | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Closed By */
+            closed_by: ("requester" | "responder") | null;
+            /** Run Finished At */
+            run_finished_at: string | null;
             /** Version */
             version: number;
         };
@@ -2162,12 +2514,18 @@ export interface components {
             representative: components["schemas"]["RepresentativeContext"] | null;
             /** Close Summary */
             close_summary: string | null;
+            /** Steers */
+            steers: components["schemas"]["SteerView"][];
+            guidance: components["schemas"]["GuidanceView"] | null;
+            /** Earlier Summaries */
+            earlier_summaries: components["schemas"]["EarlierSummary"][];
             /** Version */
             version: number;
         };
         /**
          * ToolActivityItem
-         * @description "Searched the Harmony network · 14 organizations ›" (UI_REFERENCE §4).
+         * @description "Searched the Harmony network · 2 possible fits of 14", over what it searched for
+         *     (UI_REFERENCE §4).
          */
         ToolActivityItem: {
             /** Id */
@@ -2193,6 +2551,8 @@ export interface components {
              * @enum {string}
              */
             status: "running" | "done" | "error";
+            /** Outcome */
+            outcome: string | null;
             /** Turn Id */
             turn_id: string | null;
         };
@@ -2464,26 +2824,6 @@ export interface components {
         };
         JsonValue: unknown;
         /**
-         * RedraftFailed
-         * @description A redraft ("Ask Claude to redraft") ended without writing `draft_rev`: the
-         *     answerer's call failed or returned no draft. Scoped like its escalation, so the
-         *     members looking at the item stop waiting for that rev and can ask again.
-         */
-        RedraftFailed: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "escalation.redraft_failed";
-            /**
-             * Escalation Id
-             * Format: uuid
-             */
-            escalation_id: string;
-            /** Draft Rev */
-            draft_rev: number;
-        };
-        /**
          * SessionMemberChanged
          * @description Act-as switched the acting member. Session-scoped; streams on an older epoch close.
          */
@@ -2707,7 +3047,7 @@ export interface components {
             created_at: string | null;
             scope: components["schemas"]["EventScope"];
             /** Event */
-            event: components["schemas"]["WorldCreated"] | components["schemas"]["WorldRetired"] | components["schemas"]["SessionMemberChanged"] | components["schemas"]["ThreadAccessChanged"] | components["schemas"]["EntitySnapshot"] | components["schemas"]["DemoNotice"] | components["schemas"]["DemoNeedsHuman"] | components["schemas"]["RedraftFailed"] | components["schemas"]["HelloTick"] | components["schemas"]["StreamDelta"] | components["schemas"]["StreamTyping"] | components["schemas"]["StreamReset"] | components["schemas"]["StreamChatDelta"];
+            event: components["schemas"]["WorldCreated"] | components["schemas"]["WorldRetired"] | components["schemas"]["SessionMemberChanged"] | components["schemas"]["ThreadAccessChanged"] | components["schemas"]["EntitySnapshot"] | components["schemas"]["DemoNotice"] | components["schemas"]["DemoNeedsHuman"] | components["schemas"]["HelloTick"] | components["schemas"]["StreamDelta"] | components["schemas"]["StreamTyping"] | components["schemas"]["StreamReset"] | components["schemas"]["StreamChatDelta"];
         };
     };
     responses: never;
@@ -3247,6 +3587,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_thread_api_threads__thread_id__reopen_post: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReopenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReopenStarted"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
             /** @description Validation Error */
@@ -3973,79 +4386,6 @@ export interface operations {
             };
         };
     };
-    redraft_escalation_api_escalations__escalation_id__redraft_post: {
-        parameters: {
-            query?: {
-                world?: "desk" | "network";
-            };
-            header?: never;
-            path: {
-                escalation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RedraftEscalation"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RedraftStarted"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorBody"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiProblem"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiProblem"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiProblem"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_workspace_api_threads__thread_id__workspace_get: {
         parameters: {
             query?: {
@@ -4132,6 +4472,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_steer_api_threads__thread_id__steers_post: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddSteer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SteerStarted"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
             /** @description Not Found */
@@ -4584,6 +4997,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_whose_api_demo_whose_get: {
+        parameters: {
+            query?: {
+                chat?: string | null;
+                thread?: string | null;
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoWhose"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
             /** @description Validation Error */

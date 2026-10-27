@@ -66,8 +66,8 @@ threads:
         body: >-
           Hello, this is Claude for Ridgeline Fabrication. Can you image two O-ring seal
           surfaces after a month in argon? What sample prep do you need from us?
-      # Long on purpose: the request view clamps a message past 12 lines, and the web's
-      # requests spec opens this one as Raj to check "View more".
+      # Long on purpose: the request view shows every message in full, and the web's
+      # requests spec opens this one as Raj to check that it isn't cut short.
       - from: northlake
         at: -20d
         body: >-

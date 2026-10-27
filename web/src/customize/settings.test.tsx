@@ -8,9 +8,10 @@ import { createQueryClient } from "../api/queryClient";
 import type { MemberView } from "../api/types";
 import { AppProviders } from "../app/AppProviders";
 import { fetchStreamSnapshot } from "../app/snapshot";
+import { unsavedSources } from "../demo/unsaved";
 import { fixtureFetch, type FixtureRequest } from "../fixtures";
 import { customizeRoutes, THEIR_SHARING, type CustomizeFixtureOptions } from "../fixtures/customize";
-import { members, orgs } from "../fixtures/shell";
+import { members, nonAdmin, orgs } from "../fixtures/shell";
 import { RealtimeDispatcher } from "../realtime/dispatcher";
 import { EventSources } from "../realtime/testing";
 import { TooltipProvider } from "../shell/ui";
@@ -147,6 +148,24 @@ it("trusts the organization a request link names, with what to also share", asyn
   ]);
 });
 
+it("shows a viewer the pane read-only: the admins' note pinned above it, and no prompt to trust an org", async () => {
+  renderSettings(`section=sharing&org=${orgs.henderson.id}`, {}, nonAdmin(members.raj)).open();
+  const shared = await screen.findByRole("textbox", { name: "Shared with everyone" });
+
+  // Outside the scroll area, so it never scrolls away.
+  const note = screen.getByRole("note");
+  expect(note.textContent).toBe("Only admins can change these settings. Ask Dr. Helen Ward if something needs to change.");
+  const pane = document.querySelector('[aria-label="Sharing"]');
+  expect(pane?.contains(shared)).toBe(true);
+  expect(pane?.contains(note)).toBe(false);
+
+  expect(shared).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: /^Mode for Vantage Market Intelligence/ })).toHaveProperty("disabled", true);
+  // The link named Henderson Lab, but a viewer can't add them.
+  expect(screen.queryByText(/To share more with Henderson Lab/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Add / })).toBeNull();
+});
+
 it("shows a trusted row's every mode in full, labels lined up", async () => {
   renderSettings(`section=sharing&org=${orgs.henderson.id}`).open();
   fireEvent.click(await screen.findByRole("button", { name: "Add Henderson Lab" }));
@@ -235,6 +254,25 @@ it("asks before leaving with unsaved edits, and only when leaving the page", asy
   await screen.findByText("Requests");
 });
 
+it("tells a demo reset about unsaved edits until they're saved or cancelled", async () => {
+  const { open } = renderSettings("section=instructions");
+  open();
+  const box = await screen.findByRole("textbox", { name: "Instructions" });
+  expect(unsavedSources()).toEqual([]);
+
+  fireEvent.change(box, { target: { value: "Check with Raj first." } });
+  expect(unsavedSources()).toEqual(["customize"]);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(unsavedSources()).toEqual([]);
+
+  fireEvent.change(box, { target: { value: "Check with Raj first." } });
+  expect(unsavedSources()).toEqual(["customize"]);
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => {
+    expect(unsavedSources()).toEqual([]);
+  });
+});
+
 it("leaves without asking when nothing is unsaved", async () => {
   const { router, open } = renderSettings("section=instructions");
   open();
@@ -270,11 +308,13 @@ describe("sending Harmony Network Requests", () => {
   });
 
   it("is read-only for a member who isn't an admin", async () => {
-    renderSettings("section=autonomy", { patch: { send_without_confirmation: true } }, members.raj).open();
+    renderSettings("section=autonomy", { patch: { send_without_confirmation: true } }, nonAdmin(members.raj)).open();
     const modes = await screen.findByRole("radiogroup", { name: SEND });
 
     const send = within(modes).getByRole("radio", { name: /Send without review/ });
     expect(send).toHaveProperty("checked", true);
+    // The group is muted as a whole, not only its inputs.
+    expect(modes.getAttribute("aria-disabled")).toBe("true");
     for (const radio of within(modes).getAllByRole("radio")) expect(radio).toHaveProperty("disabled", true);
     expect(screen.getByRole("alert").textContent).toContain("Requests go out before anyone reads them.");
   });

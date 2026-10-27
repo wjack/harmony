@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import serverSchemas from "../../../src/harmony/events/schemas.py?raw";
 import { createFixtureApi } from "../fixtures";
 import { customizeRoutes, northlakeSettings } from "../fixtures/customize";
-import { members, orgs } from "../fixtures/shell";
+import { members, nonAdmin, orgs } from "../fixtures/shell";
 import { SETTINGS_ENTITIES } from "./api";
 import {
   afterSave,
@@ -273,7 +273,7 @@ describe("settings fixtures", () => {
   });
 
   it("shows a member their org read-only and refuses their writes", async () => {
-    const api = createFixtureApi(customizeRoutes(members.alex));
+    const api = createFixtureApi(customizeRoutes(nonAdmin(members.alex)));
     const own = { params: { path: { slug: "henderson" } } };
     const read = await api.GET("/api/orgs/{slug}/harmony", own);
     expect(read.data?.editable).toBe(false);

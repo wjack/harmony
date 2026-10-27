@@ -33,6 +33,13 @@ runs at <http://localhost:8233>, and MinIO is opt-in:
 `docker compose --profile storage up -d --build minio` (`harmony storage check` puts,
 gets and deletes a probe object through whichever store `OBJECT_STORE` selects).
 
+A Temporal dev server started by hand, outside Compose, needs the same search
+attributes: `temporal server start-dev --search-attribute WorldId=Keyword
+--search-attribute OrgId=Keyword`. Without them, starting a world or a chat
+(`POST /api/conversations`) returns 500. After building a change to a workflow, reset
+local worlds: the local build SHA is git HEAD, so a world kept across an uncommitted
+change would replay old histories on the new commands.
+
 ## Checks
 
 ```sh
@@ -49,6 +56,9 @@ make p0-exit               # the P0 exit check: PASS/FAIL per check
 Tests need `make up` (Postgres). Each test gets its own database cloned from a
 migrated template; set `HARMONY_TEST_DB_PREFIX` when several runs share a server.
 Tests marked `minio` or `compose` are opt-in: `make up-storage test-minio`.
+Stop any local dev stack on the shared Compose Postgres before the backend suite: the
+two together can exhaust its `max_connections` (100), which shows up as
+`TooManyConnectionsError` in `test_budget_concurrency` or `test_hosted_caps`.
 
 `make compose-smoke` always tears its stack down; `SMOKE_KEEP=1` leaves it running for
 debugging, and `SMOKE_ALLOW_MISSING=1` reports a check whose script doesn't exist yet as
@@ -153,3 +163,4 @@ spends money, pushes, merges, applies or redeploys waits for the user's explicit
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, and the source of truth.
 - [docs/P0_PLAN.md](docs/P0_PLAN.md): the P0 (foundations) build spec and task split.
 - [docs/LIVE_DEMO_PLAN.md](docs/LIVE_DEMO_PLAN.md): the live demo phase and the deploy runbook.
+- [docs/FEEDBACK_R2_PLAN.md](docs/FEEDBACK_R2_PLAN.md): feedback round 2 (Edit, Reopen, the cards, switching, desktop sizing), with the designs in [docs/design/](docs/design/).

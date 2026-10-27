@@ -104,3 +104,18 @@ describe("the demo bar's budget", () => {
     expect(server.count("GET /api/budget")).toBe(2);
   });
 });
+
+it("pins the budget and Reset to the bar's end, where a narrow window never pushes them off", async () => {
+  await renderWithBudget(budgets.ok);
+  const bar = demoBar();
+  const budget = await within(bar).findByRole("button", { name: "Live · $7.40 left" });
+  const reset = within(bar).getByRole("button", { name: "Reset" });
+
+  const pinned = bar.lastElementChild;
+  expect(pinned?.contains(budget)).toBe(true);
+  expect(pinned?.contains(reset)).toBe(true);
+  // It never shrinks: the labels before it drop, then who and when are cut.
+  expect(pinned?.className).toContain("shrink-0");
+  // The icon-only form keeps its name.
+  expect(within(bar).getByRole("button", { name: "Demo controls" })).toBeTruthy();
+});

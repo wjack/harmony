@@ -662,6 +662,38 @@ async def test_each_viewer_receives_only_their_scopes(
             assert [label(e) for e in received] == expected[name], name
 
 
+async def test_the_lens_never_receives_what_an_org_tells_its_own_claude(
+    client: httpx.AsyncClient, cast: Cast, db_sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """EDIT.md §7: a side's steers and guidance reach its own members, never the
+    network view, which sees every other event of that side."""
+
+    def snapshot(entity_type: str) -> tuple[DurableEvent, EventScope]:
+        event = EntitySnapshot(entity_type=entity_type, entity_id=uuid4(), version=1, data={})
+        return event, EventScope.thread(cast.northlake, cast.thread_id)
+
+    def shown(envelope: EventEnvelope) -> str:
+        event = envelope.event
+        return event.entity_type if isinstance(event, EntitySnapshot) else label(envelope)
+
+    events = [snapshot("steer"), snapshot("rep_guidance"), snapshot("internal_note")]
+    expected = {
+        "raj": ["steer", "rep_guidance", "internal_note", "end"],
+        "alex@network": ["internal_note", "end"],
+    }
+    async with AsyncExitStack() as stack:
+        readers = {
+            name: await stack.enter_async_context(
+                open_stream(client, headers=as_(name), params=LENS if "@" in name else None)
+            )
+            for name in expected
+        }
+        await emit(db_sessionmaker, cast.world_id, *events, (tick("end"), EventScope.world()))
+        for name, reader in readers.items():
+            received = await reader.envelopes_until(is_label("end"))
+            assert [shown(e) for e in received] == expected[name], name
+
+
 async def test_a_thread_event_is_delivered_even_if_its_cached_access_expires_mid_batch(
     app_settings: Settings,
     db_engine: AsyncEngine,

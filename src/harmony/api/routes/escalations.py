@@ -3,9 +3,8 @@
 - POST /api/escalations/{escalation_id}/resolve {action, text?, draft_rev?}: the
   escalation panel's actions and the chat's inline answers
 - POST /api/escalations/{escalation_id}/reassign {member_id}
-- POST /api/escalations/{escalation_id}/redraft {instruction}: "Ask Claude to redraft"
 
-Each runs a `ThreadWorkflow` Update (`resolve_escalation`, `reassign`, `redraft`) naming
+Each runs a `ThreadWorkflow` Update (`resolve_escalation`, `reassign`) naming
 the acting member and their org (validators can't read the database). Only members of
 the escalation's org who can see its thread may act (404 otherwise). A second resolver
 gets 409 `escalation_not_open` with `resolved_by`.
@@ -33,7 +32,6 @@ from harmony.api.deps import AppServices, ServicesDep
 from harmony.api.routes.problems import (
     ApiProblemError,
     from_update_failure,
-    invalid,
     member_ref,
     not_found,
     problem,
@@ -50,8 +48,6 @@ from harmony.temporal.workflows.payloads import (
     EscalationResolved,
     Reassigned,
     Reassignment,
-    Redraft,
-    RedraftStarted,
     thread_workflow_id,
 )
 
@@ -71,10 +67,6 @@ class ReassignEscalation(BaseModel):
     member_id: UUID
 
 
-class RedraftEscalation(BaseModel):
-    instruction: str = Field(min_length=1, max_length=4000)
-
-
 _ERRORS = (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT)
 
 
@@ -88,10 +80,6 @@ async def resolve_escalation(
 ) -> EscalationResolved:
     async with services.sessionmaker() as db:
         escalation = await _open_escalation(db, actor, escalation_id)
-    if body.action == "revise" and (
-        escalation.kind != "outbound_review" or not (body.text or "").strip()
-    ):
-        raise invalid("revise sends a held message back with what to change, so it needs text")
     resolution = EscalationResolution(
         escalation_id=escalation.id,
         action=body.action,
@@ -122,22 +110,6 @@ async def reassign_escalation(
         escalation_id=escalation.id, to_member_id=target.id, by_member_id=actor.member_id
     )
     return await _update(services, actor, escalation, "reassign", reassignment, Reassigned)
-
-
-@router.post(
-    "/escalations/{escalation_id}/redraft",
-    response_model=RedraftStarted,
-    responses=problems(*_ERRORS),
-)
-async def redraft_escalation(
-    escalation_id: UUID, body: RedraftEscalation, actor: ActorDep, services: ServicesDep
-) -> RedraftStarted:
-    async with services.sessionmaker() as db:
-        escalation = await _open_escalation(db, actor, escalation_id)
-    redraft = Redraft(
-        escalation_id=escalation.id, instruction=body.instruction, by_member_id=actor.member_id
-    )
-    return await _update(services, actor, escalation, "redraft", redraft, RedraftStarted)
 
 
 async def _open_escalation(db: AsyncSession, actor: Actor, escalation_id: UUID) -> Escalation:

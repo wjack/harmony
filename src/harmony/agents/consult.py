@@ -52,7 +52,6 @@ from harmony.db import repo
 from harmony.db.models import (
     Consult,
     Escalation,
-    InternalNote,
     Member,
     NetworkRequest,
     Org,
@@ -64,10 +63,11 @@ from harmony.db.models import (
 )
 from harmony.db.models.choices import Autonomy
 from harmony.db.uow import UnitOfWork
-from harmony.domain import clock, consults, escalations, routing, threads
+from harmony.domain import clock, consults, escalations, routing, steers, threads
 from harmony.llm import CallKey, ModelRequest
 from harmony.llm.requests import Tier, build_request
 from harmony.llm.wire import JsonObject, as_object, as_str, objects
+from harmony.names import first_name
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +145,8 @@ async def answer(
     consult_id: UUID,
     draft_rev: int = 1,
     instruction: str | None = None,
+    base_text: str | None = None,
+    member_name: str | None = None,
     attempt: int = 1,
     model_override: str | None = None,
     cassette_thread: str | None = None,
@@ -155,8 +157,9 @@ async def answer(
     (`keys.consult_turn_id(consult_id)`, `keys.answerer_step(draft_rev, step)`), so a
     retried activity replays its stored calls.
 
-    A redraft's prompt adds the draft it revises and `instruction`, the member's
-    request (`answer_inputs`).
+    A redraft's prompt adds the draft it revises (`base_text`, the member's unsaved
+    wording, when given) and `instruction`, what the member (`member_name`) asked for
+    (`answer_inputs`).
     `cassette_thread` and `consult_turn` (the workflow's fixed keys) default to
     `threads.cassette_key` and `consults.ordinal`.
     """
@@ -164,7 +167,14 @@ async def answer(
         raise ValueError(f"draft_rev must be >= 1, got {draft_rev}")
     async with sessionmaker() as session:
         consult = await consults.get(session, world_id=world_id, consult_id=consult_id)
-        inputs = await answer_inputs(session, consult, draft_rev=draft_rev, instruction=instruction)
+        inputs = await answer_inputs(
+            session,
+            consult,
+            draft_rev=draft_rev,
+            instruction=instruction,
+            base_text=base_text,
+            member_name=member_name,
+        )
         thread_key, turn = await _cassette(session, consult, cassette_thread, consult_turn)
     reader = RecordReader(sessionmaker, world_id=world_id, org_id=consult.org_id)
     messages: list[JsonObject] = [{"role": "user", "content": inputs.prompt}]
@@ -226,13 +236,13 @@ def parse_answer(
 ) -> DraftReady | AnswerFailed:
     """The draft in the answerer's final message. A refusal, a truncated output or one
     that doesn't validate is `AnswerFailed`."""
-    failed = _failed(message, who="the answerer")
+    failed = failed_output(message, who="the answerer")
     if failed is not None:
         return failed
     try:
-        draft = ConsultDraft.model_validate_json(_output_text(message))
+        draft = ConsultDraft.model_validate_json(output_text(message))
     except ValidationError as error:
-        return AnswerFailed(reason="invalid", detail=_first_error(error))
+        return AnswerFailed(reason="invalid", detail=first_error(error))
     draft = draft.model_copy(update={"answer": draft.answer.strip()})
     return DraftReady(draft=draft, turn_id=turn_id, step_idx=step_idx)
 
@@ -285,7 +295,7 @@ async def check_sharing(
         step_idx=draft_rev - 1,
         attempt=attempt,
     )
-    request = _single_call(
+    request = single_call(
         key,
         tier=parties.tier,
         prompt=prompt,
@@ -294,12 +304,12 @@ async def check_sharing(
         model_override=model_override,
     )
     message = (await model.call(request)).message()
-    failed = _failed(message, who="the sharing check")
+    failed = failed_output(message, who="the sharing check")
     if failed is None:
         try:
-            check = SharingCheck.model_validate_json(_output_text(message))
+            check = SharingCheck.model_validate_json(output_text(message))
         except ValidationError as error:
-            failed = AnswerFailed(reason="invalid", detail=_first_error(error))
+            failed = AnswerFailed(reason="invalid", detail=first_error(error))
         else:
             return check.model_copy(update={"reason": check.reason.strip()})
     return failed_check(failed.detail)
@@ -352,10 +362,13 @@ async def answer_inputs(
     *,
     draft_rev: int = 1,
     instruction: str | None = None,
+    base_text: str | None = None,
+    member_name: str | None = None,
 ) -> AnswerInputs:
-    """The answerer's prompt, read now: settings, policy and notes are live. A redraft
-    (`draft_rev` > 1) is a person's to release, and its prompt ends with the draft that
-    person reviewed, why it needed them and what they asked for."""
+    """The answerer's prompt, read now: settings, policy and the side's guidance are
+    live. A redraft (`draft_rev` > 1) is a person's to release, and its prompt ends with
+    the draft that person reviewed (or their wording of it), why it needed them and
+    what they asked for."""
     parties = await _parties(session, consult)
     org = parties.org
     org_name, counterparty_name = parties.names()
@@ -364,7 +377,6 @@ async def answer_inputs(
         key=lambda member: member.slug,
     )
     settings = await context.current_settings(session, org)
-    names = {member.id: member.name for member in members}
     values = {
         "org_name": org_name,
         "counterparty_name": counterparty_name,
@@ -375,7 +387,9 @@ async def answer_inputs(
         "instructions": settings.instructions.strip() or "None.",
         "member_profiles": _members_text(members),
         "routing_prompt": _routing_text(parties.policy, members),
-        "notes": await _notes_text(session, consult, names),
+        "guidance": await steers.current_guidance_quoted(
+            session, consult.world_id, consult.thread_id, consult.side, org_name=org_name
+        ),
         "request": await _request_text(session, parties, consult, members),
         "thread_quoted": await _thread_text(session, parties),
         "earlier": await _earlier_text(session, consult),
@@ -383,7 +397,9 @@ async def answer_inputs(
     }
     prompt = render("consult", values)
     if draft_rev > 1:
-        prompt += "\n\n" + await _redraft_text(session, consult, org_name, instruction)
+        prompt += "\n\n" + await _redraft_text(
+            session, consult, org_name, instruction, base_text=base_text, member_name=member_name
+        )
     return AnswerInputs(
         scenario=parties.scenario, org_slug=org.slug, tier=parties.tier, prompt=prompt
     )
@@ -501,20 +517,6 @@ def _routing_text(policy: RepPolicy | None, members: Sequence[Member]) -> str:
     return f"{guidance}\n\nDefault assignee: `{default.slug}` ({default.name})."
 
 
-async def _notes_text(session: AsyncSession, consult: Consult, names: Mapping[UUID, str]) -> str:
-    notes = await session.scalars(
-        repo.in_world(InternalNote, consult.world_id)
-        .where(InternalNote.thread_id == consult.thread_id, InternalNote.org_id == consult.org_id)
-        .order_by(InternalNote.seq)
-    )
-    lines = [
-        f"- {names.get(note.author_member_id, 'A member') if note.author_member_id else 'Claude'}: "
-        f"{note.body.strip()}"
-        for note in notes
-    ]
-    return "\n".join(lines) or "None."
-
-
 async def _earlier_text(session: AsyncSession, consult: Consult) -> str:
     """This side's settled consults on the thread, each as the representative received
     its answer, so a new answer keeps to what a teammate decided."""
@@ -536,24 +538,44 @@ async def _earlier_text(session: AsyncSession, consult: Consult) -> str:
 
 
 async def _redraft_text(
-    session: AsyncSession, consult: Consult, org_name: str, instruction: str | None
+    session: AsyncSession,
+    consult: Consult,
+    org_name: str,
+    instruction: str | None,
+    *,
+    base_text: str | None,
+    member_name: str | None,
 ) -> str:
-    """The draft the teammate reviewed (the item's current one), why the consult needed
-    them, and what they asked for."""
-    escalation = await repo.get(
-        session, Escalation, consult.world_id, escalation_id_for(consult.id)
-    )
-    reviewed = None if escalation is None else await escalations.current_draft(session, escalation)
+    """The draft the teammate reviewed: their own wording of it when they changed it
+    (`base_text`), else the item's current one. Then why the consult needed them, and
+    what they asked for."""
+    member = " ".join((member_name or "").split()) or "a teammate"
     asked = (instruction or "").strip()
+    if base_text is not None and base_text.strip():
+        heading = f"The draft as {member} edited it:"
+        draft = context.quoted("draft", base_text)
+    else:
+        escalation = await repo.get(
+            session, Escalation, consult.world_id, escalation_id_for(consult.id)
+        )
+        reviewed = (
+            None if escalation is None else await escalations.current_draft(session, escalation)
+        )
+        heading = "The draft:"
+        draft = (
+            "There was no draft: the answerer couldn't write one."
+            if reviewed is None
+            else context.quoted("draft", reviewed.answer)
+        )
     return render(
         "consult_redraft",
         {
             "org_name": org_name,
+            "member_first": first_name(member_name) or "the teammate",
             "why": release.why_needed(consult),
-            "draft": "There was no draft: the answerer couldn't write one."
-            if reviewed is None
-            else context.quoted("draft", reviewed.answer),
-            "instruction": context.quoted("instruction", asked)
+            "draft_heading": heading,
+            "draft": draft,
+            "instruction": context.quoted("instruction", asked, from_=member)
             if asked
             else "They didn't say what to change.",
         },
@@ -574,7 +596,7 @@ async def _thread_text(session: AsyncSession, parties: _Parties) -> str:
     return "\n\n".join(blocks) or "No messages yet."
 
 
-def _single_call(
+def single_call(
     key: CallKey,
     *,
     tier: Tier,
@@ -583,6 +605,7 @@ def _single_call(
     output_schema: JsonObject,
     model_override: str | None,
 ) -> ModelRequest:
+    """One no-tools call: the prompt as the only user message, structured output."""
     return build_request(
         key,
         tier=tier,
@@ -594,8 +617,9 @@ def _single_call(
     )
 
 
-def _failed(message: Mapping[str, Any], *, who: str) -> AnswerFailed | None:
-    """`AnswerFailed` for a response that didn't end with its output."""
+def failed_output(message: Mapping[str, Any], *, who: str) -> AnswerFailed | None:
+    """`AnswerFailed` for a response that didn't end with its output: a refusal, or a
+    stop before the end (truncated)."""
     stop = message.get("stop_reason")
     if stop == "refusal":
         category = as_str((as_object(message.get("stop_details")) or {}).get("category"))
@@ -605,13 +629,13 @@ def _failed(message: Mapping[str, Any], *, who: str) -> AnswerFailed | None:
     return None
 
 
-def _first_error(error: ValidationError) -> str:
+def first_error(error: ValidationError) -> str:
     first = error.errors()[0]
     where = ".".join(str(part) for part in first["loc"]) or "output"
     return f"{where}: {first['msg']}"
 
 
-def _output_text(message: Mapping[str, Any]) -> str:
+def output_text(message: Mapping[str, Any]) -> str:
     """The text blocks after the last `fallback` block (thinking blocks come first)."""
     blocks = objects(message.get("content"))
     start = 0
@@ -754,45 +778,23 @@ def result_text(action: EscalationAction, text: str) -> str:
             return _with_note("Your side declined to answer.", text)
         case "take_over":
             return _sent_instead(TAKEN_OVER, text)
-        case "revise":
-            raise ValueError("only a held message can be sent back to be revised")
 
 
-def held_result(
-    action: EscalationAction, *, text: str, drafted: str, member_name: str | None = None
-) -> str:
+def held_result(action: EscalationAction, *, text: str, drafted: str, resolved: str) -> str:
     """The `send_message` result once a person settled the held message: what crossed
-    when it isn't what the representative wrote, quoted like `result_text`. A revise
-    names who asked by first name (`member_name`, the resolver's name)."""
+    when it isn't what the representative wrote (`drafted`, rev 1), quoted like
+    `result_text`. An approval without `text` sends the rev the member approved
+    (`resolved`), which a steer may have rewritten."""
     match action:
-        case "approve" if text.strip() and text.strip() != drafted.strip():
-            return "Sent as your side edited it:\n" + context.quote_released(text)
         case "approve":
+            sent = text if text.strip() else resolved
+            if sent.strip() and sent.strip() != drafted.strip():
+                return "Sent as your side edited it:\n" + context.quote_released(sent)
             return "Sent, approved by your side."
         case "decline":
             return _with_note(HELD_DECLINED, text)
         case "take_over":
             return _sent_instead(f"Not sent: {TAKEN_OVER}", text)
-        case "revise":
-            # The member's note is an instruction to the representative, never text
-            # it may pass on, so it is quoted as a note, not as released text.
-            return (
-                f"Not sent: {_first_name(member_name) or 'a teammate'} asked you to change it. "
-                "Their note is for you only; don't pass it on:\n"
-                + context.quote_note(text)
-                + "\nRewrite the message and send it again, or consult if you need to."
-            )
-
-
-_HONORIFICS: Final = frozenset(
-    {"dr", "dr.", "prof", "prof.", "mr", "mr.", "ms", "ms.", "mrs", "mrs."}
-)
-
-
-def _first_name(name: str | None) -> str | None:
-    """'Dr. Helen Ward' -> 'Helen', as the web's `firstName` addresses people."""
-    parts = [part for part in (name or "").split() if part.lower() not in _HONORIFICS]
-    return parts[0] if parts else None
 
 
 def _with_note(said: str, note: str) -> str:
@@ -910,9 +912,13 @@ __all__ = [
     "check_sharing",
     "escalation_id_for",
     "failed_check",
+    "failed_output",
+    "first_error",
     "held_result",
+    "output_text",
     "parse_answer",
     "result_text",
     "settle",
     "settled_result",
+    "single_call",
 ]

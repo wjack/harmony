@@ -26,8 +26,11 @@ import { useMediaQuery } from "./useMediaQuery";
 
 const ICON = { size: 18, strokeWidth: 1.5 } as const;
 
-/** No room for the sidebar beside the page: it shows the rail, and opens over the page. */
-const PHONE = "(max-width: 767px)";
+/**
+ * Below 900px the page beside the full sidebar would be under about 630px: the sidebar
+ * shows the rail, and opens over the page.
+ */
+const NARROW = "(max-width: 899px)";
 
 interface SidebarProps {
   /** The acting member; null before the visitor has a session. */
@@ -46,23 +49,23 @@ interface SidebarProps {
  * Code; the member's requests and Recents, scrolling together (LIVE_DEMO_PLAN 3.9); and
  * the account footer. Collapses to a 48px icon rail, which keeps only the badge.
  *
- * On a phone it is the rail whatever the stored choice, and opening it lays it over the
+ * Below 900px it is the rail whatever the stored choice, and opening it lays it over the
  * page, for the page it was opened on: following a link, the scrim or Escape closes it.
  */
 export function Sidebar({ member, collapsed: pinned, defaultMenuOpen = false, offline = false }: SidebarProps) {
   const stored = useSidebarCollapsed();
-  const phone = useMediaQuery(PHONE) && pinned === undefined;
+  const narrow = useMediaQuery(NARROW) && pinned === undefined;
   const { pathname } = useLocation();
   const [openOn, setOpenOn] = useState<string | null>(null);
-  const over = phone && openOn === pathname;
-  const collapsed = pinned ?? (phone ? !over : stored);
+  const over = narrow && openOn === pathname;
+  const collapsed = pinned ?? (narrow ? !over : stored);
   const unavailable = useUnavailable();
   const live = member !== null;
 
   const close = () => {
     setOpenOn(null);
   };
-  const toggle = phone
+  const toggle = narrow
     ? () => {
         setOpenOn(over ? null : pathname);
       }

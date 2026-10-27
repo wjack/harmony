@@ -43,7 +43,7 @@ from harmony.auth.session import Actor, ActorDep
 from harmony.auth.views import OrgRef, org_ref
 from harmony.db import repo
 from harmony.db.models import Conversation, NetworkRequest, Org, RepSession, Thread, World
-from harmony.db.models.choices import FailureReason, Fit, ThreadState
+from harmony.db.models.choices import EndReason, FailureReason, Fit, Side, ThreadState
 from harmony.domain import requests, threads
 from harmony.domain.requests import RecipientStatus, WaitingOn
 
@@ -93,6 +93,10 @@ class NetworkEdge(_View):
     state: ThreadState
     # Why it stopped early (a cap, the pause, a model error): status, like `state`.
     stop_reason: FailureReason | None = None
+    # How the current run ended: status, like `state`.
+    end_reason: EndReason | None
+    # Which side closed it (or refused), only for the thread's parties.
+    closed_by: Side | None
     # Detailed only when the acting member can see the thread.
     latest_line: str | None
     turn_count: int | None
@@ -333,7 +337,16 @@ async def _edges(
 ) -> list[NetworkEdge]:
     lines = {row.thread_id: row.latest_line for row in recipients if row.thread_id is not None}
     summaries = await _own_summaries(db, actor, rows)
-    return [_edge(row, row.id in seen, lines, summaries) for row in rows]
+    return [
+        _edge(
+            row,
+            row.id in seen,
+            lines,
+            summaries,
+            party=actor.org_id in threads.parties(row),
+        )
+        for row in rows
+    ]
 
 
 async def _own_summaries(db: AsyncSession, actor: Actor, rows: Sequence[Thread]) -> dict[UUID, str]:
@@ -360,6 +373,8 @@ def _edge(
     detailed: bool,
     lines: Mapping[UUID, str | None],
     summaries: Mapping[UUID, str],
+    *,
+    party: bool,
 ) -> NetworkEdge:
     return NetworkEdge(
         thread_id=thread.id,
@@ -367,6 +382,8 @@ def _edge(
         to_org_id=thread.responder_org_id,
         state=thread.state,
         stop_reason=thread.stop_reason,
+        end_reason=thread.end_reason,
+        closed_by=thread.closed_by if party else None,
         latest_line=lines.get(thread.id) if detailed else None,
         turn_count=thread.turn_count if detailed else None,
         close_summary=summaries.get(thread.id) if detailed else None,

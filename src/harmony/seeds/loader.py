@@ -426,6 +426,7 @@ def _thread_rows(
     for message in thread.messages:
         sent.append(wall_clock(message.at) or (sent[-1] if sent else opened))
     last_activity = sent[-1] if sent else opened
+    ended = thread.state in _TERMINAL_STATES
 
     def stamped(**times: datetime | None) -> dict[str, datetime]:
         return {column: value for column, value in times.items() if value is not None}
@@ -444,7 +445,7 @@ def _thread_rows(
             created_by_member_id=member_id(request.created_by),
             title=request.title,
             brief=request.brief,
-            status="closed" if thread.state in _TERMINAL_STATES else "active",
+            status="closed" if ended else "active",
             **stamped(created_at=opened),
         ),
         Thread(
@@ -459,6 +460,10 @@ def _thread_rows(
             responder_settings_version=_SETTINGS_VERSION,
             turn_count=len(thread.messages),
             title=request.title,
+            # Seeded history ended as it reads; it has no `thread_runs`, so it is never
+            # reopened (REOPEN.md D5).
+            end_reason=("closed" if thread.state == "closed" else "quiet") if ended else None,
+            ended_at=(last_activity or world_created) if ended else None,
             **stamped(created_at=opened, last_activity_at=last_activity),
         ),
     ]
