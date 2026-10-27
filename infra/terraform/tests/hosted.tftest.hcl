@@ -238,3 +238,97 @@ run "each_service_carries_its_own_env" {
     error_message = "The worker must get the model key."
   }
 }
+
+# Section 6's deploy contract: both services build main's Dockerfile and deploy only
+# once CI is green, migrate before they start, and the web service runs one instance
+# (the gate's limiters are in-process) behind /api/healthz.
+run "services_deploy_main_after_checks" {
+  command = apply
+
+  module {
+    source = "./modules/render"
+  }
+
+  variables {
+    region                = "oregon"
+    environment_id        = "evm-test"
+    repo_url              = "https://github.com/wjack/harmony"
+    branch                = "main"
+    web_plan              = "starter"
+    worker_plan           = "standard"
+    postgres_disk_size_gb = 5
+    app_env               = { MODEL_MODE = "live" }
+    worker_env            = { ANTHROPIC_API_KEY = "sk-ant-test-only" }
+  }
+
+  assert {
+    condition = alltrue([
+      for docker in [
+        render_web_service.web.runtime_source.docker,
+        render_background_worker.worker.runtime_source.docker,
+      ] :
+      docker.auto_deploy_trigger == "checksPass"
+      && docker.branch == "main"
+      && docker.dockerfile_path == "./Dockerfile"
+      && contains(docker.build_filter.ignored_paths, "infra/**")
+    ])
+    error_message = "Both services must build main's Dockerfile and deploy only after CI passes."
+  }
+
+  assert {
+    condition = (
+      render_web_service.web.pre_deploy_command == "alembic upgrade head"
+      && render_background_worker.worker.pre_deploy_command == "alembic upgrade head"
+    )
+    error_message = "Both services must migrate before they start."
+  }
+
+  assert {
+    condition = (
+      render_web_service.web.health_check_path == "/api/healthz"
+      && render_web_service.web.num_instances == 1
+      && render_web_service.web.start_command == null
+    )
+    error_message = "The web service runs the image's CMD on one instance, health-checked at /api/healthz."
+  }
+
+  assert {
+    condition     = render_background_worker.worker.start_command == "harmony worker"
+    error_message = "The worker must run `harmony worker`."
+  }
+}
+
+run "minio_keeps_its_data_on_the_disk" {
+  command = apply
+
+  module {
+    source = "./modules/storage"
+  }
+
+  variables {
+    region         = "oregon"
+    environment_id = "evm-test"
+    repo_url       = "https://github.com/wjack/harmony"
+    branch         = "main"
+    plan           = "starter"
+    disk_size_gb   = 10
+    root_user      = "harmony"
+    root_password  = "test-only-password"
+    bucket         = "harmony"
+  }
+
+  assert {
+    condition     = render_private_service.minio.disk.mount_path == "/data"
+    error_message = "MinIO's disk must be mounted where the image's CMD serves from (/data)."
+  }
+
+  assert {
+    condition     = endswith(output.endpoint_url, ":9000") && startswith(output.endpoint_url, "http://")
+    error_message = "S3_ENDPOINT_URL must be http://<slug>:9000, MinIO's --address."
+  }
+
+  assert {
+    condition     = render_private_service.minio.runtime_source.docker.auto_deploy_trigger == "checksPass"
+    error_message = "MinIO must deploy only after CI passes."
+  }
+}

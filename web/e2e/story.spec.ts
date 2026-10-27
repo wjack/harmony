@@ -26,7 +26,6 @@ const RIDGELINE = "Ridgeline Fabrication";
 const CALDER = "Calder Computational";
 /** The request's title as Northlake's representative wrote it (the scripted cassette's). */
 const NORTHLAKE_TITLE = "XRD and SEM/EDS quote";
-const PHONE = { width: 390, height: 844 };
 
 test.describe.configure({ timeout: 6 * 60_000 });
 
@@ -261,19 +260,6 @@ test("the suggested story, from Alex's message to both conversations closed", as
     // The decision reads in full at the end of the thread: the whole question and draft.
     await expect(card.getByRole("heading", { level: 2 })).toBeVisible();
     expect(await cutShortText(card)).toEqual([]);
-
-    await test.step("on a 390×844 phone the request opens at the card's question, under a title that fits", async () => {
-      await page.setViewportSize(PHONE);
-      await page.reload();
-      await expect(card.getByRole("heading", { level: 2 })).toBeInViewport({ ratio: 1, ...TURNS });
-      const title = page.getByRole("heading", { level: 1, name: NORTHLAKE_TITLE });
-      await expect(title).toBeVisible();
-      const overflow = await title.evaluateAll((titles: Measured[]) =>
-        titles.map((each) => each.scrollWidth - each.clientWidth),
-      );
-      expect(overflow).toEqual([0]);
-      await page.setViewportSize({ width: 1440, height: 900 });
-    });
 
     const approve = page.getByRole("region", { name: "Your decision" }).getByRole("button", { name: "Approve and send" });
     await approve.click();

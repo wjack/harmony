@@ -31,7 +31,9 @@ jobs:
   python:
     name: python (ruff, pyright, pytest)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # pytest alone takes about 4.5 min serially on the dev Mac; private-repo runners have
+    # 2 vCPUs shared with Postgres and the Temporal test servers, so allow for 2-3x that.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17
@@ -114,6 +116,16 @@ jobs:
       - run: pnpm -C web install --frozen-lockfile
       - run: pnpm -C web exec playwright install --with-deps --only-shell chromium
       - run: make compose-smoke
+      # Playwright keeps a trace and screenshots only for a failed spec (web/playwright.config.ts);
+      # without this they die with the runner. compose_smoke.sh already prints the stack's logs.
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-traces
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   terraform:
     name: terraform (fmt, validate, test)

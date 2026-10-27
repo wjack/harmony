@@ -472,3 +472,39 @@ def test_secret_scan_ignores_a_key_being_removed(tmp_path: Path) -> None:
     result = _scan(repo)
 
     assert result.returncode == 0, result.stdout
+
+
+def test_secret_scan_of_a_range_counts_a_key_a_later_commit_removed(tmp_path: Path) -> None:
+    """Before a push (deploy runbook step 3): the key is gone from HEAD, but the push
+    still sends the commit that added it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    ident = ("-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false")
+    (repo / "README.md").write_text("base\n")
+    _git(repo, "add", ".")
+    _git(repo, *ident, "commit", "-qm", "base")
+    _git(repo, "tag", "pushed")
+    key = "sk-ant-" + "api03-" + "Ab3_x-9Z" * 12
+    (repo / "notes.md").write_text(f"{key}\nsk-ant-test-only\n")
+    _git(repo, "add", ".")
+    _git(repo, *ident, "commit", "-qm", "k")
+    (repo / "notes.md").write_text("gone\n")
+    _git(repo, "add", ".")
+    _git(repo, *ident, "commit", "-qm", "gone")
+
+    assert _scan(repo).returncode == 0  # nothing is staged
+    result = _run(SCRIPTS / "secret_scan.sh", "pushed..HEAD", env=_base_env(), cwd=repo)
+
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == [
+        "secret_scan.sh: notes.md: 1 added line(s) hold a key-shaped string"
+    ]
+    assert "sk-ant" not in result.stdout + result.stderr
+
+    clean = _run(SCRIPTS / "secret_scan.sh", "HEAD~1..HEAD", env=_base_env(), cwd=repo)
+    assert clean.returncode == 0, clean.stdout
+    assert "no key-shaped string in the commits in HEAD~1..HEAD" in clean.stdout
+
+    refused = _run(SCRIPTS / "secret_scan.sh", "--all", env=_base_env(), cwd=repo)
+    assert refused.returncode == 2

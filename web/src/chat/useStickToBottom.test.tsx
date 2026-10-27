@@ -121,3 +121,64 @@ it("still follows the bottom when an unfold leaves its top in view, or when cont
   expect(view.scrollTo).toHaveBeenCalledTimes(2);
   expect(screen.queryByText("Scrolled up")).toBeNull();
 });
+
+/** A transcript whose last item (a card) is shown from its top when `Reveal` is pressed. */
+function Revealed() {
+  const { scrollRef, contentRef, atBottom, onScroll, revealTop } = useStickToBottom([]);
+  return (
+    <div ref={scrollRef} data-testid="viewport" onScroll={onScroll}>
+      <div ref={contentRef}>
+        <section id="card" aria-label="Card">
+          A decision
+        </section>
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          const card = document.getElementById("card");
+          if (card !== null) revealTop(card);
+        }}
+      >
+        Reveal
+      </button>
+      {!atBottom && <p>Scrolled up</p>}
+    </div>
+  );
+}
+
+it("shows a card from its top at once when following the bottom would already hide it", () => {
+  render(<Revealed />);
+  // The view is at the bottom and the card starts 300px above it: its top is already hidden.
+  const view = layout(2000, { card: -300 });
+  fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
+  expect(screen.getByTestId("viewport").scrollTop).toBe(1200 - 300 - 16);
+  expect(screen.getByText("Scrolled up")).toBeTruthy();
+  view.grow(600);
+  expect(view.scrollTo).not.toHaveBeenCalled();
+});
+
+it("keeps waiting to show a card from its top while what comes before it is still arriving", () => {
+  render(<Revealed />);
+  // The card's top is in view at the bottom, so there is nothing to reveal yet.
+  const view = layout(1000, { card: 300 });
+  fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
+  expect(screen.queryByText("Scrolled up")).toBeNull();
+  // The transcript above it, or the card's own data, arrives: following the bottom
+  // would now scroll its top away, so the view stops at its top instead.
+  view.grow(600);
+  expect(view.scrollTo).not.toHaveBeenCalled();
+  expect(screen.getByTestId("viewport").scrollTop).toBe(200 + 300 - 16);
+  expect(screen.getByText("Scrolled up")).toBeTruthy();
+});
+
+it("forgets a waiting reveal once the member scrolls, and follows the bottom again", () => {
+  render(<Revealed />);
+  const view = layout(1000, { card: 300 });
+  fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
+  const viewport = screen.getByTestId("viewport");
+  fireEvent.wheel(viewport);
+  fireEvent.scroll(viewport);
+  view.grow(600);
+  expect(view.scrollTo).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("Scrolled up")).toBeNull();
+});

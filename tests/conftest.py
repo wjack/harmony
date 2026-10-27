@@ -36,6 +36,9 @@ os.environ["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:9"
 os.environ["SPEND_LEDGER_PATH"] = str(
     Path(tempfile.mkdtemp(prefix="harmony-test-")) / "spend_ledger.jsonl"
 )
+# Typer forces Rich's terminal styling whenever GITHUB_ACTIONS (or FORCE_COLOR) is set,
+# which splits option names in --help output with ANSI codes; the tests read plain text.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
 
 import asyncpg
 import pytest

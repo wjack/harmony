@@ -2,10 +2,12 @@
 
 - Locally, `TEMPORAL_ADDRESS` is the Compose dev server (`localhost:7233`, namespace
   `default`), plaintext and unauthenticated.
-- On Temporal Cloud, `TEMPORAL_ADDRESS` is the namespace endpoint
-  (`<namespace>.<account>.tmprl.cloud:7233`), `TEMPORAL_NAMESPACE` is
-  `<namespace>.<account>`, and `TEMPORAL_API_KEY` is set: the key switches on TLS and
-  bearer-token auth.
+- On Temporal Cloud, `TEMPORAL_ADDRESS` is Terraform's `endpoints.grpc_address` (for
+  an API-key namespace, the regional endpoint `<region>.<cloud>.api.temporal.io:7233`,
+  or the namespace endpoint `<namespace>.<account>.tmprl.cloud:7233`),
+  `TEMPORAL_NAMESPACE` is `<namespace>.<account>`, and `TEMPORAL_API_KEY` is set: the
+  key switches on TLS and bearer-token auth, and every call also carries the
+  `temporal-namespace` header the regional endpoint routes API-key requests by.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ async def connect_client(
         namespace=settings.temporal_namespace,
         api_key=api_key,
         tls=api_key is not None,
+        # sdk-core already adds this header to namespaced calls; setting it here also
+        # covers the connect-time calls that carry no namespace (GetSystemInfo).
+        rpc_metadata={"temporal-namespace": settings.temporal_namespace} if api_key else {},
         data_converter=pydantic_data_converter,
         identity=identity,
         lazy=lazy,

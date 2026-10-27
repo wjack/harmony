@@ -80,6 +80,8 @@ export function useStickToBottom(deps: readonly unknown[]) {
   const pointerDown = useRef(false);
   /** What the member just unfolded in the transcript, and when. */
   const unfolded = useRef<{ target: HTMLElement; at: number } | null>(null);
+  /** What `revealTop` still waits to show from its top, until it does or the member scrolls. */
+  const revealing = useRef<HTMLElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
   const toBottom = (behavior: "instant" | "smooth" = "instant") => {
@@ -87,8 +89,31 @@ export function useStickToBottom(deps: readonly unknown[]) {
     if (element !== null) element.scrollTo({ top: element.scrollHeight, behavior });
   };
 
+  /**
+   * Shows the waiting reveal's target from its top, and stops following there, once
+   * following the bottom would hide its top. True if it moved the view.
+   */
+  const reveal = (): boolean => {
+    const viewport = scrollRef.current;
+    const target = revealing.current;
+    if (viewport === null || target === null || !pinned.current) return false;
+    if (!target.isConnected) {
+      revealing.current = null;
+      return false;
+    }
+    const top =
+      target.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop - REVEAL_MARGIN_PX;
+    if (top >= viewport.scrollHeight - viewport.clientHeight) return false;
+    revealing.current = null;
+    pinned.current = false;
+    viewport.scrollTop = top;
+    lastTop.current = viewport.scrollTop;
+    setAtBottom(false);
+    return true;
+  };
+
   useLayoutEffect(() => {
-    if (pinned.current) toBottom();
+    if (pinned.current && !reveal()) toBottom();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the caller lists what changes the content
   }, deps);
 
@@ -117,7 +142,7 @@ export function useStickToBottom(deps: readonly unknown[]) {
           return;
         }
       }
-      toBottom();
+      if (!reveal()) toBottom();
     });
     viewport.addEventListener("click", unfold, { capture: true });
     observer.observe(content);
@@ -164,6 +189,8 @@ export function useStickToBottom(deps: readonly unknown[]) {
     const element = scrollRef.current;
     if (element === null) return;
     const byMember = pointerDown.current || performance.now() - gestureAt.current < GESTURE_MS;
+    // The member moved the view themselves: what was waiting to be revealed is theirs now.
+    if (byMember) revealing.current = null;
     pinned.current = staysPinned(pinned.current, lastTop.current, element, byMember);
     lastTop.current = element.scrollTop;
     setAtBottom(pinned.current);
@@ -172,17 +199,13 @@ export function useStickToBottom(deps: readonly unknown[]) {
   /**
    * While following the bottom, shows `target` from its top if the bottom would hide
    * its top, and stops following there, as if the member had scrolled up to read it.
+   * What is above or inside it may still be arriving (a reload loads the transcript, the
+   * card and the card's own data separately), so until the member scrolls, the target
+   * goes, or another is revealed, each resize checks again before following the bottom.
    */
   const revealTop = (target: HTMLElement) => {
-    const viewport = scrollRef.current;
-    if (viewport === null || !pinned.current) return;
-    const top =
-      target.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop - REVEAL_MARGIN_PX;
-    if (top >= viewport.scrollHeight - viewport.clientHeight) return;
-    pinned.current = false;
-    viewport.scrollTop = top;
-    lastTop.current = viewport.scrollTop;
-    setAtBottom(false);
+    revealing.current = target;
+    reveal();
   };
 
   return { scrollRef, contentRef, atBottom, onScroll, toBottom, revealTop };
