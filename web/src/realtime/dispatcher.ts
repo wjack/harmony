@@ -23,8 +23,10 @@
  *   switching tab's own navigation. `onMemberChanged` listeners hear of it first, so the
  *   page can leave the previous member's own item before the new member renders. The
  *   previous member's cache stays up meanwhile, so the frame keeps showing them rather
- *   than an empty shell; it is cleared in the same synchronous step that primes the new
- *   snapshot and bumps `generation`, so nothing fetched during the switch survives it.
+ *   than an empty shell, but its query observers stop at once, so the frame fetches
+ *   nothing more (it would be as the new member). The cache is cleared in the same
+ *   synchronous step that primes the new snapshot and bumps `generation`, so nothing
+ *   fetched during the switch survives it.
  *   The session and its epoch make this happen once per switch. A tab whose session is
  *   gone forgets its epoch, so a new session's first switch (epoch 1) is still news.
  * - **Locked** (the passcode gate refused a snapshot or any other request): terminal.
@@ -399,7 +401,22 @@ export class RealtimeDispatcher {
     this.#closeSource();
     this.#cancelRetry();
     this.#cacheStale = true;
+    this.#stopObservers();
     return this.#rebuild("resetting");
+  }
+
+  /**
+   * Stops the query observers of the frame on screen. Its cache stays up, so it goes on
+   * showing the previous member, but nothing in it fetches again: the server acts as
+   * someone else now, so a refetch of their own item would be a 404. That covers a
+   * refetch interval, and the useQuery effects React flushes just before it renders the
+   * bump, after the cache is cleared (a transition can leave them pending). The live UI
+   * is keyed on `generation`, so the new frame observes afresh.
+   */
+  #stopObservers(): void {
+    for (const query of this.#queryClient.getQueryCache().getAll()) {
+      for (const observer of [...query.observers]) observer.destroy();
+    }
   }
 
   async #rebuild(status: "starting" | "resetting"): Promise<void> {
