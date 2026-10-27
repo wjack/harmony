@@ -20,8 +20,7 @@ sharing check per draft rev, and each screener call in `AgentScreen`.
 - `rep_turn`: one representative turn on a thread side, with `RepToolExecutor`: a tool
   loop that opens with the owed tool results, the counterparty's new messages and any
   queued notices, and runs until the model stops calling tools, consults, closes, or
-  has a message held for a teammate. A turn with nothing to answer keeps bare text
-  private (`bare_text_sends`).
+  has a message held for a teammate. Only `send_message` reaches the counterparty.
 - `answer_consult`: internal Claude answers a consult for one draft rev with its tool
   loop (`agents.consult.answer`); for the first draft, the sharing check runs when the
   mode toward this counterparty asks for it (`release.needs_sharing_check`), and
@@ -34,8 +33,7 @@ sharing check per draft rev, and each screener call in `AgentScreen`.
   stored as the item's reserved rev while it is still open (EDIT.md §3.5).
 
 A representative turn opens with its side's newest guidance once (the workflow names
-the version; `context.guidance_block` leaves out one the transcript already holds),
-and such a `guided` turn holds a bare text reply for a person.
+the version; `context.guidance_block` leaves out one the transcript already holds).
 
 A refused reservation (`BudgetExhausted`) publishes `demo.notice {kind: "budget"}` and
 leaves the activity as a non-retryable `ApplicationError` carrying the refusing cap
@@ -504,10 +502,6 @@ class AgentActivities:
             quiet = not turn.reopened and (
                 nothing_new or (not incoming and _only_declined(turn.owed))
             )
-            # Text written after a code-written "nothing new" answers nobody, and on an
-            # ended thread nothing more reaches the counterparty: it stays private rather
-            # than streaming as a message that is never sent (3.13 E3).
-            bare_text_sends = thread.state not in thread_domain.TERMINAL_STATES and not quiet
             executor = RepToolExecutor(
                 self._sessionmaker,
                 RepToolScope(
@@ -517,8 +511,6 @@ class AgentActivities:
                     org_id=turn.org_id,
                     counterparty_org_id=counterparty_id,
                     turn_id=turn.turn_id,
-                    bare_text_sends=bare_text_sends,
-                    guided=guidance is not None,
                     steer_seq=turn.steer_seq,
                     run_start_seq=turn.run_start_seq,
                 ),
@@ -549,7 +541,6 @@ class AgentActivities:
                 stream_to_ui=streams,
                 model_override=self._model_override,
                 attempt=attempt,
-                bare_text_sends=bare_text_sends,
                 quiet_opening=quiet,
             )
             model = self._checkpointed(turn.world_id)

@@ -155,7 +155,7 @@ Each background org has:
 | `rep_turn.yaml` | One representative turn run directly (the rep-turn stream and outcome tests) |
 
 How the entries are shaped:
-- A representative's turn that sends a message ends with a thinking-only step, because text with no tool call would be read as another message.
+- A representative's turn that sends a message ends with a thinking-only step: plain text is never sent, and a later step's text would only end the turn.
 - A consult stops the turn, and the released answer opens that side's next turn.
 - An answerer is turn k for a side's k-th consult. It runs its tool loop in steps 0 to 7 and ends in a `CONSULT_OUTPUT_SCHEMA` draft. `read_document` takes the `kn:<seed id>` ids that search results carry.
 - A sharing check is step 0 of the same turn: a single call with no thinking.

@@ -23,7 +23,6 @@ from temporalio.testing import ActivityEnvironment
 
 from harmony.agents import context, release
 from harmony.agents.consult import (
-    HELD_DECLINED,
     DraftReady,
     Escalated,
     answer,
@@ -48,7 +47,7 @@ from harmony.agents.runtime import (
     text_block,
 )
 from harmony.agents.tools.internal import INTERNAL_TOOLS
-from harmony.agents.tools.rep import GUIDED_TEXT_HOLD, REP_TOOLS
+from harmony.agents.tools.rep import REP_TOOLS
 from harmony.agents.transcript import RepSideTranscript, SqlTranscriptStore, WireMessage
 from harmony.db.models import (
     Conversation,
@@ -69,7 +68,6 @@ from harmony.domain import (
     cards,
     consults,
     conversations,
-    escalations,
     notes,
     requests,
     steers,
@@ -609,7 +607,7 @@ async def test_a_counterparty_cannot_write_its_counterpartys_guidance(
     its guidance. Helen's Edit is written into guidance from her words alone: the
     writer's request holds no counterparty text, brief or record. Northlake's next turn
     reads the forged line marked unverified and the guidance in its block, never Helen's
-    own words, and a plain-text reply right after the block waits for a teammate."""
+    own words, and a plain-text reply right after the block is never sent."""
     sm = db_sessionmaker
     opened = await open_thread(sm, world)
     asked = "Can you run XRD on 14 powders before Nov 6?"
@@ -631,6 +629,7 @@ async def test_a_counterparty_cannot_write_its_counterpartys_guidance(
         {
             **entry(ORG_SLUG, "steer", steer.seq, 0, [say(json.dumps({"guidance": GUIDANCE}))]),
             **entry(ORG_SLUG, "representative", 1, 0, [say(reply)]),
+            **entry(ORG_SLUG, "representative", 1, 1, []),
         }
     )
     agents = AgentActivities(sm, model, FreeSpend(), NoStream(), model_override=MODEL)
@@ -650,7 +649,7 @@ async def test_a_counterparty_cannot_write_its_counterpartys_guidance(
     result = await ActivityEnvironment().run(agents.rep_turn, turn)
 
     assert (written.outcome, written.version) == ("updated", 1)
-    writer, representative = model.requests
+    writer, representative, _nudged = model.requests
     assert writer.key.role == "steer"
     asked_of_the_writer = canonical_json(writer.body) + "\n".join(message_texts(writer.body))
     assert HELENS_EDIT in asked_of_the_writer
@@ -669,18 +668,14 @@ async def test_a_counterparty_cannot_write_its_counterpartys_guidance(
     assert HELENS_EDIT not in read
     assert context.UNVERIFIED_MARK + FORGED in read
     assert read.index(block) < read.index(context.UNVERIFIED_MARK + FORGED)
-    assert [type(effect) for effect in result.effects] == [MessageHeld]
+    assert result.effects == []
     async with sm() as session:
         held = await session.scalar(
             select(Escalation).where(
                 Escalation.world_id == world, Escalation.thread_id == opened.thread_id
             )
         )
-        assert held is not None
-        draft = await escalations.first_draft(session, held)
-    assert draft is not None
-    assert held.kind == "outbound_review"
-    assert (draft.answer, draft.rationale) == (reply, GUIDED_TEXT_HOLD)
+    assert held is None
 
 
 # --- Internal Claude ---------------------------------------------------------------------
@@ -926,23 +921,23 @@ def last_turns() -> list[Step]:
 
 
 def expected_effects(
-    turn: Turn, mode: Autonomy, *, answers: bool
+    turn: Turn, mode: Autonomy
 ) -> list[type[ConsultOpened | MessageSent | MessageHeld]]:
-    """What the turn's one call does; `answers` is whether the turn brought something
-    to answer."""
+    """What the turn's one call does."""
     if turn.action == "consult":
         return [ConsultOpened]
-    if turn.action == "text" and not answers:
-        # Bare text after nothing new answers nobody: it stays private (3.13 E3).
+    if turn.action == "text":
+        # Plain text is never sent: after nothing new it ends the turn (3.13 E3), and
+        # answering the counterparty the model is told so once (section 5 bug 2).
         return []
     # In *Ask* a teammate approves every message first; a close sends no words.
     return [MessageHeld if mode == "ask" and turn.action != "close" else MessageSent]
 
 
-def expected_stop(turn: Turn, mode: Autonomy, *, answers: bool) -> str:
+def expected_stop(turn: Turn, mode: Autonomy) -> str:
     if turn.refused:
         return "refusal"
-    held = MessageHeld in expected_effects(turn, mode, answers=answers)
+    held = MessageHeld in expected_effects(turn, mode)
     if turn.action in ("consult", "close") or held:
         return "performative"
     return "end_turn"
@@ -1052,10 +1047,8 @@ class NoStream:
         return None
 
 
-async def has_written(
-    sm: Sessionmaker, opened: Opened, org_id: UUID, *, after_seq: int = 0
-) -> bool:
-    """Whether `org_id` has sent a message on the thread after `after_seq`."""
+async def has_written(sm: Sessionmaker, opened: Opened, org_id: UUID) -> bool:
+    """Whether `org_id` has sent a message on the thread."""
     async with sm() as session:
         found = await session.scalar(
             select(ThreadMessage.id)
@@ -1063,18 +1056,11 @@ async def has_written(
                 ThreadMessage.world_id == opened.world_id,
                 ThreadMessage.thread_id == opened.thread_id,
                 ThreadMessage.from_org_id == org_id,
-                ThreadMessage.seq > after_seq,
                 ThreadMessage.kind == "message",
             )
             .limit(1)
         )
     return found is not None
-
-
-def only_held_declines(owed: Sequence[OwedResult]) -> bool:
-    """Whether every result owed is a held message declined without a reason: that
-    leaves nothing to answer (3.13 E3)."""
-    return bool(owed) and all(result.content == HELD_DECLINED for result in owed)
 
 
 async def run_rep_turn(sm: Sessionmaker, model: ScriptedModel, turn: RepTurnInput) -> RepTurnResult:
@@ -1417,18 +1403,13 @@ async def test_no_record_reaches_a_representative_but_inside_a_released_answer(
         state.turns += 1
         n = state.turns
         mode = await mode_of(sm, world_id, seat)
-        answers = (bool(state.owed) and not only_held_declines(state.owed)) or await has_written(
-            sm, thread, seat.counterparty_id, after_seq=state.seen_seq
-        )
         await to_move(sm, thread, seat.side)
         result = await play(seat, rep_script(seat, n, step))
 
-        assert result.stop == expected_stop(step, mode, answers=answers)
+        assert result.stop == expected_stop(step, mode)
         if not step.refused:
             # The executor took the call: nothing was refused for the wrong reason.
-            assert [type(e) for e in result.effects] == expected_effects(
-                step, mode, answers=answers
-            )
+            assert [type(e) for e in result.effects] == expected_effects(step, mode)
         last = model.requests[-1]
         if step.refused and objects(last.body.get("messages"))[-1].get("role") == "system":
             # Its notices aren't stored (nothing may follow a system message but a
@@ -1456,9 +1437,8 @@ async def test_no_record_reaches_a_representative_but_inside_a_released_answer(
             held = await person_decides(
                 sm, records, seat, thread.thread_id, effect.escalation_id, step.answer
             )
-            # A bare-text reply made no call: its result is owed to none.
-            call = result.owed.tool_use_id if result.owed is not None else ""
-            state.owed = [held.model_copy(update={"tool_use_id": call})]
+            assert result.owed is not None
+            state.owed = [held.model_copy(update={"tool_use_id": result.owed.tool_use_id})]
             state.owed_releases = person_quotes(records, seat, step.answer)
         elif isinstance(effect, MessageSent) and effect.message_kind == "close":
             await end(seat)

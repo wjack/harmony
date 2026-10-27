@@ -10,12 +10,14 @@ review, the card's `auto_send_recipients`; else the suggested ones
 
 `status` is the per-recipient view the request status card and `GET /api/requests/{id}`
 show: each recipient's participant status, its thread, who it waits on, its latest
-line, why its thread stopped, and the requester side's close summary. The orgs the
-outreach card proposed but the request didn't go to follow, as `screened` with
-`sent` false (§10).
+line, how its thread ended (`end_reason`, `closed_by`, `stop_reason`), and the requester
+side's close summary. The orgs the outreach card proposed but the request didn't go to
+follow, as `screened` with `sent` false (§10).
 
 Participant status (REVISION_UNSTRUCTURED.md §9), from thread and escalation state:
-- `screened`: its thread hasn't opened yet, or it was screened and left out;
+- `screened`: no thread yet. With `sent` true the request went to it and its thread
+  waits for a free slot (`max_active_threads`); with `sent` false it was screened and
+  left out;
 - `messaged`: the thread is open and the responder hasn't written yet;
 - `replied`: the responder has written;
 - `needs_human`: an escalation on the thread is open (either side);
@@ -69,7 +71,7 @@ from harmony.db.models import (
     Thread,
     ThreadMessage,
 )
-from harmony.db.models.choices import FailureReason, Fit, ThreadState
+from harmony.db.models.choices import EndReason, FailureReason, Fit, Side, ThreadState
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards
 from harmony.domain.threads import TERMINAL_STATES, requester_title
@@ -106,6 +108,10 @@ class RecipientStatus(_View):
     latest_line: str | None
     # The requester side's own close summary, once its representative wrote one.
     close_summary: str | None
+    # How its thread's current run ended (`closed` when a representative closed it), and
+    # which side closed it; None while it runs. Status, not content, so `scoped` keeps them.
+    end_reason: EndReason | None = None
+    closed_by: Side | None = None
     # Why its thread stopped early (a cap, the pause, a model error). Status, not
     # content, so `scoped` keeps it.
     stop_reason: FailureReason | None = None
@@ -385,6 +391,8 @@ async def status(
                 ),
                 latest_line=latest.get(thread.id),
                 close_summary=summaries.get(thread.id),
+                end_reason=thread.end_reason,
+                closed_by=thread.closed_by,
                 stop_reason=thread.stop_reason,
                 last_activity_at=thread.last_activity_at,
             )

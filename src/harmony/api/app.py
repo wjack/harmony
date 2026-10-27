@@ -31,6 +31,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -60,7 +61,7 @@ from harmony.api.routes import (
     workspace,
     worlds,
 )
-from harmony.api.routes.problems import ApiProblemError, problem_handler
+from harmony.api.routes.problems import ApiProblemError, problem_handler, validation_handler
 from harmony.api.same_origin import SameOriginWrites
 from harmony.config import Settings, get_settings
 from harmony.db.engine import create_sessionmaker, engine_from_settings
@@ -290,6 +291,7 @@ def create_app(
         app.include_router(module.router, prefix=API_PREFIX)
     # P1–P2 (docs/P1_P2_CONTRACT.md); their errors are typed `ApiProblem`s.
     app.add_exception_handler(ApiProblemError, problem_handler)
+    app.add_exception_handler(RequestValidationError, validation_handler)
     for module in (*P1_P2_ROUTERS, *LIVE_ROUTERS):
         app.include_router(module.router, prefix=API_PREFIX)
 

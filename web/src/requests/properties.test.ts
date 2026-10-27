@@ -48,6 +48,25 @@ describe("propertiesOf", () => {
     });
   });
 
+  it("doesn't say who shared a thread that was also routed to the viewer", () => {
+    const live = record(THREAD.calder);
+    const { helen } = members;
+    const routed = {
+      member_id: helen.id,
+      member_slug: helen.slug,
+      member_name: helen.name,
+      reason: "routed" as const,
+      shared_by_member_id: null,
+      question: null,
+    };
+    const detail = { ...live.detail, access: [...live.detail.access, routed] };
+    expect(propertiesOf(detail, live.open, helen.id).status).toEqual({
+      label: "Claude is handling",
+      tone: "info",
+      needs: false,
+    });
+  });
+
   it("says Closed however a thread ended, with when", () => {
     const ended = record(THREAD.ridgeline);
     const properties = propertiesOf(ended.detail, ended.open, members.helen.id);

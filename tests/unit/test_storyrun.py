@@ -76,7 +76,7 @@ from harmony.storyrun.checks import (
     SentRequest,
     consults_after_send,
     duplicate_auto_recipients,
-    empty_end_turn_failed,
+    empty_end_turn_nudged,
     ended_at,
     opener_leak,
     silent_turn_pairs,
@@ -1165,7 +1165,7 @@ def _result(tool_use_id: str, content: str = "Sent.") -> dict[str, JsonValue]:
 
 
 @pytest.mark.parametrize(
-    ("call", "approved", "failed"),
+    ("call", "approved", "nudged"),
     [
         # A new turn's first call answers the member, the network or the counterparty.
         (_empty(0, _text("Find an XRD lab.")), None, True),
@@ -1198,13 +1198,13 @@ def _result(tool_use_id: str, content: str = "Sent.") -> dict[str, JsonValue]:
         (_empty(1, _result("toolu_send")), None, False),
     ],
 )
-def test_an_empty_end_turn_fails_only_on_a_runs_first_call_that_owed_an_answer(
-    call: EmptyEndTurn, approved: bool | None, failed: bool
+def test_an_empty_end_turn_is_nudged_only_on_a_runs_first_call_that_owed_an_answer(
+    call: EmptyEndTurn, approved: bool | None, nudged: bool
 ) -> None:
     """3.13 E1b, as the runtime splits it: a resumed turn's first call comes at step > 0,
     so the step alone doesn't say which call was a run's first."""
     cards = {} if approved is None else {(_TURN, _CARD_CALL): approved}
-    assert empty_end_turn_failed(call, cards) is failed
+    assert empty_end_turn_nudged(call, cards) is nudged
 
 
 def _request(chat: int, minute: int, *recipients: UUID, auto: bool = True) -> SentRequest:

@@ -4,6 +4,7 @@ import { Link } from "react-router";
 
 import type { BudgetState } from "../../app/budget";
 import { useCalendar } from "../../demo/worldClock";
+import { endLine } from "../../requests/format";
 import { useRequestStatus } from "../api";
 import { screenedLine } from "../brief";
 import { stoppedLine, useBudgetState } from "../failureCopy";
@@ -12,13 +13,26 @@ import { useRequestLive } from "../live";
 import { OrgAvatar, Pill, ToolCard } from "../parts";
 import type { RecipientStatus, RequestStatusView } from "../types";
 
-function RecipientPill({ recipient, memberId }: { recipient: RecipientStatus; memberId: string | null }) {
+function RecipientPill({
+  recipient,
+  memberId,
+  requestActive,
+  why,
+}: {
+  recipient: RecipientStatus;
+  memberId: string | null;
+  requestActive: boolean;
+  /** Why its conversation ended, once it has. */
+  why: string | null;
+}) {
   const calendar = useCalendar();
   // Listed on the card but left out of the request (3.13 E4(f)).
   if (!recipient.sent) return <Pill tone="muted">Not sent</Pill>;
   switch (recipient.participant) {
     case "screened":
-      return <Pill tone="muted">Screened</Pill>;
+      // Sent, with no conversation yet: the request opens a few at a time, so this one
+      // waits for a free slot. A request that ended without opening it never will.
+      return <Pill tone="muted">{requestActive ? "Waiting to open" : "Not opened"}</Pill>;
     case "messaged":
       return <Pill tone="info">Messaged</Pill>;
     case "replied":
@@ -43,34 +57,55 @@ function RecipientPill({ recipient, memberId }: { recipient: RecipientStatus; me
       );
     }
     case "closed":
+      // The check is only for a conversation one side's Claude closed. A system stop, a
+      // quiet end or a cap reads plain "Closed", and the row says why.
       return (
-        <Pill tone="muted" icon={<Check size={12} strokeWidth={2.4} />}>
+        <Pill
+          tone="muted"
+          title={why ?? undefined}
+          icon={recipient.end_reason === "closed" ? <Check size={12} strokeWidth={2.4} /> : undefined}
+        >
           Closed
         </Pill>
       );
   }
 }
 
-/** What to show under the name: our closing summary once it's closed, else the newest line. */
-function recipientLine(recipient: RecipientStatus): string | null {
-  return recipient.participant === "closed"
-    ? (recipient.close_summary ?? recipient.latest_line)
-    : recipient.latest_line;
+/** Why a recipient's conversation ended, from our side: "Claude closed it", "Both sides went quiet". */
+function endedLine(recipient: RecipientStatus, budget: BudgetState): string | null {
+  if (recipient.participant !== "closed") return null;
+  const ending = {
+    endReason: recipient.end_reason ?? null,
+    closedBy: recipient.closed_by ?? null,
+    stopReason: recipient.stop_reason ?? null,
+  };
+  const line = endLine(ending, "requester", recipient.org.name, budget);
+  return line === null ? null : line.charAt(0).toUpperCase() + line.slice(1);
 }
 
 function RecipientRow({
   recipient,
   memberId,
+  requestActive,
   budget,
 }: {
   recipient: RecipientStatus;
   memberId: string | null;
+  requestActive: boolean;
   budget: BudgetState;
 }) {
   const stopped = recipient.stop_reason ?? null;
-  // A stopped thread shows only its summary: our side writes one in its last turn when
-  // the other side refused; a failed or capped thread never gets that turn.
-  const line = stopped === null ? recipientLine(recipient) : recipient.close_summary;
+  const why = endedLine(recipient, budget);
+  // Under the name: a stopped thread shows only its summary (our side writes one in its
+  // last turn when the other side refused; a failed or capped thread never gets that
+  // turn), and the stop's reason below it. Any other ended thread shows our closing
+  // summary, else why it ended. A live one shows its newest line.
+  const line =
+    stopped !== null
+      ? recipient.close_summary
+      : recipient.participant === "closed"
+        ? (recipient.close_summary ?? why ?? recipient.latest_line)
+        : recipient.latest_line;
   const body = (
     <>
       <OrgAvatar org={recipient.org} size={22} />
@@ -85,7 +120,7 @@ function RecipientRow({
           </span>
         )}
       </span>
-      <RecipientPill recipient={recipient} memberId={memberId} />
+      <RecipientPill recipient={recipient} memberId={memberId} requestActive={requestActive} why={why} />
     </>
   );
   const row = "-mx-2 flex items-center gap-3 rounded-control px-2 py-2";
@@ -130,7 +165,13 @@ export function RequestStatusPanel({ view, memberId }: { view: RequestStatusView
       <p className="text-[15px] leading-6 font-medium text-ink">{view.title}</p>
       <ul className="mt-1.5">
         {view.recipients.map((recipient) => (
-          <RecipientRow key={recipient.org.id} recipient={recipient} memberId={memberId} budget={budget} />
+          <RecipientRow
+            key={recipient.org.id}
+            recipient={recipient}
+            memberId={memberId}
+            requestActive={view.status === "active"}
+            budget={budget}
+          />
         ))}
       </ul>
       {view.screened !== null && <p className="mt-1 text-[12.5px] text-muted">{screenedLine(view.screened)}</p>}

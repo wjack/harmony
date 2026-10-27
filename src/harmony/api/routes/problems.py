@@ -3,7 +3,7 @@
 Every P1–P2 route answers its own errors with an `ApiProblem` (`{detail, code, ...}`)
 by raising `ApiProblemError`; `create_app` registers `problem_handler` for it. Errors
 raised before a route runs (401 from `current_actor`, 422 validation) keep FastAPI's
-bodies.
+bodies, except that a 422 never echoes the input back (`validation_handler`).
 
 How the API maps workflow and domain errors:
 - `WorkflowUpdateFailedError` whose cause is an `ApplicationError` of type
@@ -36,6 +36,8 @@ from typing import Any, Final, Literal, cast
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -211,6 +213,17 @@ async def problem_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(exc.problem.model_dump(mode="json"), status_code=exc.status_code)
 
 
+async def validation_handler(request: Request, exc: Exception) -> JSONResponse:
+    """`create_app`'s handler for `RequestValidationError`: FastAPI's 422 body without
+    each error's `input`, so a rejected message isn't sent back whole."""
+    if not isinstance(exc, RequestValidationError):
+        raise exc
+    errors = [{key: value for key, value in e.items() if key != "input"} for e in exc.errors()]
+    return JSONResponse(
+        {"detail": jsonable_encoder(errors)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
+    )
+
+
 def problems(*codes: int, cursor: bool = False) -> dict[int | str, dict[str, Any]]:
     """`responses=` for a P1–P2 route: `ApiProblem` for each code, 401 with FastAPI's
     body, and the cursor header on 200 when `cursor`."""
@@ -248,6 +261,7 @@ __all__ = [
     "problem_handler",
     "problems",
     "temporal_of",
+    "validation_handler",
     "workflow_missing",
     "world_retired",
 ]

@@ -9,6 +9,8 @@ import { PlusMenu } from "./PlusMenu";
 import { SendModeChip, type SendModeProps } from "./SendMode";
 
 const MAX_TEXTAREA_PX = 320;
+/** The longest message the API takes (`MESSAGE_MAX_CHARS` in `api/routes/conversations.py`). */
+const MESSAGE_MAX_CHARS = 20_000;
 
 /** What a parent can do to the composer: put the cursor in it. */
 export interface ComposerHandle {
@@ -105,6 +107,7 @@ export function Composer({
           value={value}
           autoFocus={autoFocus}
           disabled={blocked !== null}
+          maxLength={MESSAGE_MAX_CHARS}
           placeholder={placeholder}
           aria-label="Write your message to Claude"
           onChange={(event) => {
@@ -116,6 +119,10 @@ export function Composer({
             variant === "home" ? "min-h-[72px]" : "min-h-[52px]",
           )}
         />
+        {value.length >= MESSAGE_MAX_CHARS && (
+          // The textarea stops at the limit (a longer paste is cut), so say why.
+          <p className="px-[22px] text-ui-xs text-muted">Messages can be up to 20,000 characters.</p>
+        )}
         <div className="flex items-center gap-1 px-4 pt-1 pb-4">
           <PlusMenu onUnavailable={onUnavailable} sendMode={sendMode} onSendModeChange={onSendModeChange} />
           <div className="flex-1" />

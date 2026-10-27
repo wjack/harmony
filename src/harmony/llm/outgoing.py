@@ -1,10 +1,10 @@
 """Which text of a turn is shown live as the model writes it (§5 Streaming, §8).
 
-A representative's turn sends the counterparty either a bare text reply or the `text`
-of its `send_message` calls. Clients stream exactly that text: text blocks as their
-deltas arrive, and the tool's `text` as its input JSON streams in
-(`eager_input_streaming`). Thinking, other tools and other input fields are never
-streamed.
+A representative's turn sends the counterparty only the `text` of its `send_message`
+calls, and clients stream exactly that, as the tool's input JSON streams in
+(`eager_input_streaming`); its text blocks are never sent (`text_blocks` false).
+Internal Claude's reply is its text blocks, streamed as their deltas arrive. Thinking,
+other tools and other input fields are never streamed.
 
 `OutgoingText.feed` takes the raw stream events in order and returns the text that
 became visible with each one. Partial tool input is decoded only up to the last
@@ -41,6 +41,8 @@ class OutgoingText:
 
     tool: str = SEND_MESSAGE
     field_name: str = TEXT_FIELD
+    # Whether text blocks are outgoing: internal Claude's are its reply.
+    text_blocks: bool = True
     _blocks: dict[int, _Block] = field(default_factory=dict[int, _Block])
 
     def feed(self, event: Mapping[str, JsonValue]) -> str:
@@ -59,7 +61,7 @@ class OutgoingText:
         delta = as_object(event.get("delta")) or {}
         match delta.get("type"):
             case "text_delta":
-                return as_str(delta.get("text")) or ""
+                return (as_str(delta.get("text")) or "") if self.text_blocks else ""
             case "input_json_delta":
                 block = self._blocks.get(index)
                 if block is None or not block.streams_input:

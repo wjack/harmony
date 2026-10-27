@@ -565,6 +565,8 @@ function northlakeAt(state: ChatState, base: CardRecipient): RecipientStatus {
   if (reached(state.stage, "closed")) {
     return recipient(base, "closed", threadId, {
       thread_state: "closed",
+      end_reason: "closed",
+      closed_by: "requester",
       latest_line: LINES.northlakeConfirmed,
       close_summary: SUMMARIES.henderson.northlake,
       last_activity_at: minutesAgo(2),
@@ -593,6 +595,7 @@ function ridgelineAt(state: ChatState, base: CardRecipient): RecipientStatus {
     // The system closed it before Ridgeline replied: no summary, only why.
     return recipient(base, "closed", threadId, {
       thread_state: "closed",
+      end_reason: "stopped",
       stop_reason: stopReason,
       latest_line: LINES.ridgelineOpening,
       last_activity_at: minutesAgo(36),
@@ -601,6 +604,8 @@ function ridgelineAt(state: ChatState, base: CardRecipient): RecipientStatus {
   if (reached(state.stage, "closed")) {
     return recipient(base, "closed", threadId, {
       thread_state: "closed",
+      end_reason: "closed",
+      closed_by: "requester",
       latest_line: LINES.ridgelineConfirmed,
       close_summary: SUMMARIES.henderson.ridgeline,
       last_activity_at: minutesAgo(3),

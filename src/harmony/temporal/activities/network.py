@@ -31,9 +31,9 @@ from temporalio.service import RPCError, RPCStatusCode
 from harmony.agents import consult as answerer
 from harmony.agents import context
 from harmony.agents.keys import chat_key
-from harmony.agents.models import CardResolution, EscalationResolution
+from harmony.agents.models import CardResolution, EscalationResolution, OutreachRecipient
 from harmony.agents.runtime import OwedResult
-from harmony.agents.tools.internal import declined_result, sent_result
+from harmony.agents.tools.internal import CardChanges, declined_result, sent_result
 from harmony.db import repo
 from harmony.db.models import (
     Card,
@@ -718,21 +718,52 @@ async def _card_applied(
     request_id = request.id if request is not None else request_id
     if request_id is None:
         raise LookupError(f"approved card {card.id} has no request")
-    names = await _org_names(
-        session,
-        card.world_id,
-        [r.org_id for r in requests.recipients_of(request)] if request else [],
-    )
+    sent = requests.recipients_of(request) if request is not None else []
+    title = threads.requester_title(request) if request is not None else None
     return CardResolutionApplied(
         resolved=CardResolved(card_id=card.id, status=card.status, request_id=request_id),
         tool_use_id=card.tool_use_id,
         content=sent_result(
             request_id=request_id,
-            orgs=names,
+            title=title or cards.payload_of(card).title or "",
+            orgs=await _org_names(session, card.world_id, [r.org_id for r in sent]),
             # The chat's owner: the member who approved it, or whose chat sent it.
             member=await _member_name(session, card.world_id, resolution.member_id),
             auto=card.auto,
+            changes=await _card_changes(session, card, resolution, sent),
         ),
+    )
+
+
+async def _card_changes(
+    session: AsyncSession,
+    card: Card,
+    resolution: CardResolution,
+    sent: Sequence[OutreachRecipient],
+) -> CardChanges:
+    """What went out differently from the card Claude proposed: the organizations listed
+    but not sent to, and the brief and asks the member rewrote."""
+    payload = cards.payload_of(card)
+    proposed = {row.org_id: row.ask for row in payload.recipients}
+    sent_ids = {row.org_id for row in sent}
+    unsent = [row.org_id for row in payload.recipients if row.org_id not in sent_ids]
+    asked = [
+        (row.org_id, row.ask)
+        for row in sent
+        if row.ask is not None
+        and row.org_id in proposed
+        and row.ask.strip() != (proposed[row.org_id] or "").strip()
+    ]
+    edits = resolution.edits
+    brief = edits.brief if edits is not None else None
+    rows = await repo.list_in_world(
+        session, Org, card.world_id, Org.id.in_([*unsent, *(org_id for org_id, _ in asked)])
+    )
+    names = {org.id: org.name for org in rows}
+    return CardChanges(
+        unsent=[names[org_id] for org_id in unsent if org_id in names],
+        brief=brief if brief is not None and brief.strip() != payload.brief.strip() else None,
+        asks=[(names[org_id], ask) for org_id, ask in asked if org_id in names],
     )
 
 

@@ -15,8 +15,9 @@ export type BudgetState = BudgetView["state"];
 
 /**
  * Spend moves without an entity to snapshot, so the budget is polled: every 30 s while
- * the tab is visible (TanStack pauses intervals in the background), and at once when a
- * call is refused (`demo.notice {kind: "budget"}`).
+ * the tab is visible (TanStack pauses intervals in the background), and at once on
+ * `demo.notice {kind: "budget"}`, which comes when a call is refused and when the
+ * operator pauses or resumes live models.
  */
 const POLL_MS = 30_000;
 

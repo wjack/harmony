@@ -141,7 +141,7 @@ def test_the_request_tool_is_a_harmony_network_request_in_either_send_mode() -> 
     # Mode-neutral (3.10): the tool bytes never depend on the chat's setting.
     assert "in a chat set to send without review it goes out at once" in description
     assert "The result says which" in description
-    assert "Send one request per call." in description
+    assert "One need is one request" in description
 
 
 def test_the_status_tool_has_nothing_to_check_right_after_a_send() -> None:

@@ -67,7 +67,7 @@ CHECKS: Final = (
     "closes_after_refused_consult:",
     "status_checks_after_send:",
     "waiting_closes:",
-    "empty_turn_failures:",
+    "empty_turn_nudges:",
     "empty_end_turns_handled:",
     "multi_send_turns:",
     "silent_turn_pairs:",

@@ -1836,6 +1836,10 @@ export interface components {
             latest_line: string | null;
             /** Close Summary */
             close_summary: string | null;
+            /** End Reason */
+            end_reason?: ("closed" | "quiet" | "unsent" | "turn_limit" | "deadline" | "stopped") | null;
+            /** Closed By */
+            closed_by?: ("requester" | "responder") | null;
             /** Stop Reason */
             stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             /** Last Activity At */

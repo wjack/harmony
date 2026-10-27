@@ -65,14 +65,12 @@ from harmony.agents.tools.internal import (
 from harmony.agents.tools.rep import (
     CLOSED,
     CONSULT_AFTER_SEND,
-    GUIDED_TEXT_HOLD,
     NOT_REPLIED,
     NOTHING_SENT,
     SENT,
     STEERED_HOLD,
     STEERED_NOT_CLOSED,
     STEERED_NOT_SENT,
-    TEXT_REPLY_ID,
     RepToolExecutor,
     RepToolScope,
 )
@@ -887,8 +885,6 @@ def rep(
     side: Side,
     *,
     turn_id: UUID | None = None,
-    bare_text_sends: bool = True,
-    guided: bool = False,
     steer_seq: int = 0,
     run_start_seq: int = 0,
 ) -> RepToolExecutor:
@@ -900,8 +896,6 @@ def rep(
         org_id=ours,
         counterparty_org_id=theirs,
         turn_id=turn_id or uuid4(),
-        bare_text_sends=bare_text_sends,
-        guided=guided,
         steer_seq=steer_seq,
         run_start_seq=run_start_seq,
     )
@@ -955,7 +949,7 @@ async def rep_session(sm: Sessionmaker, opened: Opened, side: Side) -> RepSessio
         return row
 
 
-async def test_a_turn_sends_several_messages_and_bare_text_only_before_any(
+async def test_a_turn_sends_several_messages(
     db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
 ) -> None:
     sm = db_sessionmaker
@@ -964,9 +958,9 @@ async def test_a_turn_sends_several_messages_and_bare_text_only_before_any(
 
     first = await henderson.execute(hello, step_idx=0)
     second = await henderson.execute(call("send_message", text="Details follow."), step_idx=1)
-    later_text = await henderson.text_reply("Anything else?", step_idx=2)
-    northlake = rep(sm, opened, "responder")
-    replied = await northlake.text_reply("  Hello from Northlake. ", step_idx=0)
+    replied = await rep(sm, opened, "responder").execute(
+        call("send_message", text="Hello from Northlake."), step_idx=0
+    )
     # A retried turn replays its call: same message, nothing sent twice.
     assert await henderson.execute(hello, step_idx=0) == first
 
@@ -977,11 +971,7 @@ async def test_a_turn_sends_several_messages_and_bare_text_only_before_any(
             None,
         )
         assert isinstance(sent.effect, MessageSent)
-    assert later_text is None
-    assert replied is not None
     assert isinstance(replied.effect, MessageSent)
-    turn_id = northlake._scope.turn_id  # pyright: ignore[reportPrivateUsage]
-    assert replied.effect.message_id == side_effect_id(turn_id, 0, TEXT_REPLY_ID)
     rows = await messages(sm, opened)
     assert [(m.body, m.kind, m.provenance, m.from_org_id) for m in rows] == [
         ("Hello from Henderson.", "message", "agent", HENDERSON),
@@ -992,22 +982,6 @@ async def test_a_turn_sends_several_messages_and_bare_text_only_before_any(
         thread = await session.get(Thread, (world, opened.thread_id))
         assert thread is not None
         assert (thread.turn_count, thread.side_to_move) == (2, "requester")
-
-
-async def test_bare_text_after_nothing_new_stays_with_the_representative(
-    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
-) -> None:
-    """3.13 E3: a turn that brought nothing to answer sends no bare text."""
-    sm = db_sessionmaker
-    before = await event_count(sm, world)
-
-    kept = await rep(sm, opened, "requester", bare_text_sends=False).text_reply(
-        "Awaiting Northlake's reply.", step_idx=0
-    )
-
-    assert kept is None
-    assert await messages(sm, opened) == []
-    assert await event_count(sm, world) == before
 
 
 async def test_a_close_waits_until_the_counterparty_has_written(
@@ -1299,24 +1273,6 @@ async def test_a_steer_the_turn_already_knew_of_trips_nothing(
     assert isinstance(sent.effect, MessageSent)
 
 
-async def test_a_guided_turns_bare_text_is_held_for_a_teammate(
-    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
-) -> None:
-    """Right after guidance, a bare reply is likely to acknowledge it (EDIT.md §3.7)."""
-    sm = db_sessionmaker
-    await henderson_opens(sm, opened)
-    await freeze(sm, opened, "responder")
-
-    guided = await rep(sm, opened, "responder", guided=True).text_reply(
-        "Understood, I won't name clients.", step_idx=0
-    )
-
-    assert guided is not None
-    assert isinstance(guided.effect, MessageHeld)
-    assert [m.body for m in await messages(sm, opened)] == [OPENER]
-    assert await held_reasons(sm, opened) == [GUIDED_TEXT_HOLD]
-
-
 async def test_ask_mode_never_holds_a_close(
     db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
 ) -> None:
@@ -1538,11 +1494,9 @@ async def test_nothing_is_sent_while_a_consult_is_open(
     attempts = [
         await northlake.execute(call("send_message", text="Yes, Nov 4."), step_idx=1),
         await rep(sm, opened, "responder").execute(call("close", summary="Bye."), step_idx=0),
-        await northlake.text_reply("One more thing", step_idx=2),
     ]
 
     for attempt in attempts:
-        assert attempt is not None
         assert attempt.is_error
         assert attempt.effect is None
     assert "waiting on a person" in (attempts[0].result or "")
@@ -2289,9 +2243,9 @@ async def test_get_request_status_reads_a_teammates_request_as_the_api_would(
 
     assert unseen.is_error
     assert unseen.result == f"Your organization has no request {str(maya.request_id)!r}."
-    lines = {row["org"]["id"]: row["latest_line"] for row in seen["recipients"]}
+    lines = {row["org"]["id"]: row.get("latest_messages") for row in seen["recipients"]}
     assert lines == {
         str(NORTHLAKE): None,
-        str(RIDGELINE): "Ridgeline Fabrication: Which seal material?",
+        str(RIDGELINE): ["Ridgeline Fabrication: Which seal material?"],
     }
     assert seen["conversation_id"] is None

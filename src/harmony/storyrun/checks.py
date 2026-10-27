@@ -11,10 +11,10 @@ story's beats came:
 - `status_checks_after_send`: `get_request_status` calls in an internal turn after it
   resumed on its card's request going out, where its result says there's nothing to
   check (FEEDBACK_R2_PLAN decision 7);
-- turns: `empty_turn_failures` and `empty_end_turns_handled` (`end_turn` responses of
+- turns: `empty_turn_nudges` and `empty_end_turns_handled` (`end_turn` responses of
   internal and representative turns that say nothing, thinking alone included: on the
-  first call of a run, which fail it unless its opening asks for no answer, and on
-  later ones, which end it),
+  first call of a run, which the runtime asks once more (`runtime.EMPTY_NUDGE`) unless
+  its opening asks for no answer, and on later ones, which end it),
   `multi_send_turns` (with the second and later messages), `silent_turn_pairs`;
 - messages: `meta_notes` (notes about the conversation sent as messages),
   `cross_mentions` (a requester naming another recipient of its request),
@@ -96,7 +96,13 @@ WAITING: Final = re.compile(
     r"(?i)await|waiting (for|on)|next step|pending (their|a) (reply|response|confirmation)"
     r"|will (review|follow up)"
 )
-META_NOTE: Final = re.compile(r"(?i)^\s*\[|awaiting your reply|note for |sent by claude for")
+# Notes and narration about the conversation (section 5 bug 2: "I'm waiting", "nothing
+# further to send").
+META_NOTE: Final = re.compile(
+    r"(?i)^\s*\[|awaiting your reply|note for |sent by claude for|nothing further to send"
+    r"|\bI['’]?m (?:now )?(?:waiting|not sending)\b|ending my turn"
+    r"|leav(?:e|ing) the (?:thread|conversation) open"
+)
 # What a thread's first message to a recipient must not say, by scenario and recipient
 # (section 5.2): another recipient's part of the request.
 OPENER_LEAKS: Final[Mapping[str, Mapping[str, re.Pattern[str]]]] = {
@@ -200,7 +206,7 @@ class EngineChecks:
     closes_after_refused_consult: int = 0
     status_checks_after_send: int = 0
     waiting_closes: list[str] = field(default_factory=list[str])
-    empty_turn_failures: int = 0
+    empty_turn_nudges: int = 0
     empty_end_turns_handled: int = 0
     # Per turn that sent several messages: the second and later ones.
     multi_send_turns: list[list[str]] = field(default_factory=list[list[str]])
@@ -327,8 +333,8 @@ async def _empty_end_turns(session: AsyncSession, world_id: UUID, checks: Engine
     }
     for turn_id, step_idx, request_text in bodies:
         call = _empty_end_turn(turn_id, step_idx, request_text)
-        if empty_end_turn_failed(call, sent_cards):
-            checks.empty_turn_failures += 1
+        if empty_end_turn_nudged(call, sent_cards):
+            checks.empty_turn_nudges += 1
         else:
             checks.empty_end_turns_handled += 1
 
@@ -532,9 +538,9 @@ async def _thread_ends(session: AsyncSession, world_id: UUID) -> dict[tuple[UUID
 # --- The rules ------------------------------------------------------------------------
 
 
-def empty_end_turn_failed(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, str], bool]) -> bool:
-    """Whether the runtime failed the turn on this empty `end_turn` rather than ending it
-    (3.13 E1b, `TurnContext.quiet_opening`): it was a run's first call (step 0, or the
+def empty_end_turn_nudged(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, str], bool]) -> bool:
+    """Whether the runtime asked again after this empty `end_turn` rather than ending the
+    turn (3.13 E1b, `TurnContext.quiet_opening`): it was a run's first call (step 0, or the
     step a turn resumes at, which opens on its card's result alone), and the opening
     asked for an answer. A resumed turn's opening asks for none once its card was
     approved or sent without review, unless notices came with it; a representative's
@@ -894,7 +900,7 @@ def engine_check_lines(checks: EngineChecks) -> list[str]:
         f"  closes_after_refused_consult: {checks.closes_after_refused_consult}",
         f"  status_checks_after_send: {checks.status_checks_after_send}",
         *listed("waiting_closes", checks.waiting_closes),
-        f"  empty_turn_failures: {checks.empty_turn_failures}",
+        f"  empty_turn_nudges: {checks.empty_turn_nudges}",
         f"  empty_end_turns_handled: {checks.empty_end_turns_handled}",
         f"  multi_send_turns: {len(checks.multi_send_turns)}",
         *(f"    - then: {_one_line(text)}" for later in checks.multi_send_turns for text in later),

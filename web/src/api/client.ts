@@ -53,23 +53,41 @@ function isProblemBody(body: unknown): body is ProblemBody {
   );
 }
 
+/** The `type` of each error in FastAPI's 422 body (`string_too_long`…). */
+function validationTypes(body: unknown): string[] {
+  if (typeof body !== "object" || body === null || !("detail" in body) || !Array.isArray(body.detail)) return [];
+  return body.detail.flatMap((error: unknown) =>
+    typeof error === "object" && error !== null && "type" in error && typeof error.type === "string" ? [error.type] : [],
+  );
+}
+
 /**
  * A non-2xx response, with FastAPI's `detail` when it sent one. For the P1–P2 routes,
  * `problem` is the typed body: `problem.code` says which failure it was
- * (`card_not_pending`, `escalation_not_open`…), so callers can show it inline.
+ * (`card_not_pending`, `escalation_not_open`…), so callers can show it inline. A 422
+ * from FastAPI's own validation carries its error types in `invalid` instead.
  */
 export class ApiError extends Error {
   readonly status: number;
   readonly problem: ProblemBody | null;
   /** The server's `detail` (or the status text), without the status code. */
   readonly detail: string;
+  /** Why FastAPI rejected the input (`string_too_long`…); empty for any other failure. */
+  readonly invalid: readonly string[];
 
-  constructor(status: number, message: string, problem: ProblemBody | null = null, detail: string = message) {
+  constructor(
+    status: number,
+    message: string,
+    problem: ProblemBody | null = null,
+    detail: string = message,
+    invalid: readonly string[] = [],
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.problem = problem;
     this.detail = detail;
+    this.invalid = invalid;
   }
 
   /** The problem's `code`, or null for a plain FastAPI error. */
@@ -82,7 +100,8 @@ export class ApiError extends Error {
       typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string"
         ? body.detail
         : response.statusText || "request failed";
-    return new ApiError(response.status, `${response.status} ${detail}`, isProblemBody(body) ? body : null, detail);
+    const problem = isProblemBody(body) ? body : null;
+    return new ApiError(response.status, `${response.status} ${detail}`, problem, detail, validationTypes(body));
   }
 }
 

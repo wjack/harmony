@@ -26,6 +26,7 @@ from harmony.agents.models import (
     InlineQuestionItem,
     Route,
     RouteAssignee,
+    brief_title,
 )
 from harmony.db import repo
 from harmony.db.models import (
@@ -72,6 +73,7 @@ from harmony.temporal.workflows.payloads import (
 )
 from tests.integration._e4_world import (
     ALEX,
+    BRIEF,
     CALDER,
     HELEN,
     HENDERSON,
@@ -188,13 +190,15 @@ async def test_approving_an_outreach_card_creates_its_request(
     assert applied.resolved.status == "approved"
     assert applied.resolved.request_id == request_id
     assert applied.tool_use_id.startswith("toolu_")
-    # One sentence that it's out, and nothing to check (decision 7).
+    # That it's out, under its title, and nothing to check (decision 7).
     assert applied.content == (
-        f"Approved and sent: request {request_id} to Northlake Characterization Core and "
-        "Calder Computational. Their progress shows on the request's card in this chat, and "
-        "anything that needs Alex Chen will come up here as a question; you'll be told here "
-        "when every conversation has ended. There's nothing to check now: in a sentence, "
-        "tell Alex Chen it's out and stop."
+        f'Approved and sent: the Harmony Network Request "{brief_title(BRIEF)}" went to '
+        "Northlake Characterization Core and Calder Computational. Its ID, for "
+        f"get_request_status only (never show IDs to Alex Chen): {request_id}.\n\n"
+        "Their progress shows on the request's card in this chat, and anything that needs "
+        "Alex Chen will come up here as a question; you'll be told here when every "
+        "conversation has ended. There's nothing to check now: in a sentence, tell Alex "
+        "Chen it's out and stop."
     )
     async with db_sessionmaker() as session:
         request = await repo.get_required(session, NetworkRequest, world_id, request_id)
@@ -286,12 +290,13 @@ async def test_a_card_sent_without_review_says_so_and_no_member_can_settle_it(
     assert refused.value.type == CARD_NOT_PENDING_ERROR
     applied = await activities.apply_card_resolution(resolving(auto=True))
     assert (applied.resolved.status, applied.is_error) == ("approved", False)
-    assert applied.content == (
-        f"Sent without review (this chat's setting): request {request_id} to "
-        "Northlake Characterization Core. Their progress shows on the request's card in "
-        "this chat, and anything that needs Alex Chen will come up here as a question; "
-        "you'll be told here when every conversation has ended. There's nothing to check "
-        "now: in a sentence, tell Alex Chen it's out and stop."
+    # Calder was listed but not suggested, so it wasn't sent.
+    assert applied.content.startswith(
+        "Sent without review (this chat's setting): the Harmony Network Request "
+        f'"{brief_title(BRIEF)}" went to Northlake Characterization Core. Its ID, for '
+        f"get_request_status only (never show IDs to Alex Chen): {request_id}.\n\n"
+        "Listed but not sent: Calder Computational.\n\n"
+        "Their progress shows on the request's card"
     )
 
 

@@ -32,13 +32,7 @@ applied then: a retried turn never decides again, so a mode changed in between c
 send a held message or hold a sent one. Calls run one at a time
 (`disable_parallel_tool_use`).
 
-A response with text and no tool call is a `send_message` only when it answers the
-turn's opening (the runtime passes no other to `text_reply`), the turn has sent nothing
-yet and it had something to answer (`RepToolScope.bare_text_sends`): the model answered
-in prose instead of calling the tool. Other text, after a refused `close` say, is the
-model's own and stays in its transcript. In a turn that opened with new guidance from
-its side (`RepToolScope.guided`), such a reply is held for a person whatever the mode
-(`GUIDED_TEXT_HOLD`): right after guidance it is likely to acknowledge it.
+Text outside `send_message` never reaches the counterparty (`agents.runtime`).
 
 A member's Edit (a steer, docs/design/EDIT.md §3.7) recorded after the turn started
 (`steers.max_seq` above `RepToolScope.steer_seq`) means the turn works from old
@@ -130,9 +124,10 @@ CLOSE_TOOL: Final[ToolDefinition] = {
     "name": CLOSE,
     "description": (
         "End the conversation for both sides once it's settled or clearly going "
-        "nowhere. Not for waiting: to wait for their reply, stop calling tools. "
-        "The summary is for your own organization only and is never sent to the "
-        "counterparty."
+        "nowhere. Not for waiting: to wait for their reply, stop calling tools. If you "
+        "just asked them something, or anyone still has to reply, confirm or decide, "
+        "it isn't settled. The summary is for your own organization only and is never "
+        "sent to the counterparty."
     ),
     "input_schema": {
         "type": "object",
@@ -179,8 +174,6 @@ REP_INPUTS: Final[dict[str, type[_Input]]] = {
 
 # --- Executor ---------------------------------------------------------------------------
 
-# A bare text reply is `send_message` under this pseudo tool_use_id (its side-effect id).
-TEXT_REPLY_ID: Final = "text"
 # The `send_message` result: how to wait, since a bare "Sent." reads as a cue to say more.
 SENT: Final = (
     "Sent. {counterparty} reads it exactly as written and replies after your turn ends. "
@@ -213,10 +206,6 @@ NOTHING_SENT: Final = (
 # Why a message was held, stored as its draft's reason ("Why this needs you").
 _ASK_HOLD: Final = "A teammate approves every message in Ask mode."
 STEERED_HOLD: Final = "Claude wrote this before your side's latest edit reached it."
-GUIDED_TEXT_HOLD: Final = (
-    "Claude answered in plain text just after your side's edit reached it, so a teammate "
-    "checks it first."
-)
 # A send or close after a steer was recorded mid-turn, once the turn has sent.
 STEERED_NOT_SENT: Final = (
     "Not sent: your side changed how you should handle this conversation after this turn "
@@ -241,10 +230,6 @@ class RepToolScope(_Input):
     org_id: UUID
     counterparty_org_id: UUID
     turn_id: UUID
-    # See `TurnContext.bare_text_sends`.
-    bare_text_sends: bool = True
-    # The turn opened with a guidance block: a bare text reply is held (module docstring).
-    guided: bool = False
     # The newest steer `seq` for this side when the turn started: a later one is an
     # Edit that arrived mid-turn.
     steer_seq: int = Field(default=0, ge=0)
@@ -294,27 +279,6 @@ class RepToolExecutor:
         except _Refused as refused:
             return _error(str(refused))
         return execution
-
-    async def text_reply(self, text: str, *, step_idx: int) -> ToolExecution | None:
-        """A bare text reply is a `send_message` when the turn has sent nothing else and
-        had something to answer (module docstring)."""
-        scope = self._scope
-        if not scope.bare_text_sends:
-            return None
-        effect_id = side_effect_id(scope.turn_id, step_idx, TEXT_REPLY_ID)
-        async with self._sessionmaker() as session:
-            sent = await session.scalars(
-                select(ThreadMessage.id).where(
-                    ThreadMessage.world_id == scope.world_id,
-                    ThreadMessage.thread_id == scope.thread_id,
-                    ThreadMessage.turn_id == scope.turn_id,
-                )
-            )
-            earlier = [message_id for message_id in sent if message_id != effect_id]
-        if earlier:
-            return None
-        call = ToolCall(id=TEXT_REPLY_ID, name=SEND_MESSAGE, input={"text": text.strip()})
-        return await self.execute(call, step_idx=step_idx)
 
     async def _replayed(self, session: AsyncSession, effect_id: UUID) -> ToolExecution | None:
         """What an earlier attempt of this call applied, as it returned it then; None
@@ -406,7 +370,7 @@ class RepToolExecutor:
     ) -> ToolExecution:
         match args:
             case SendMessageInput(text=text):
-                return await self._send(uow, text, effect_id, bare=tool_use_id == TEXT_REPLY_ID)
+                return await self._send(uow, text, effect_id)
             case ConsultInput(question=question):
                 return await self._consult(uow, question, effect_id, tool_use_id)
             case CloseInput(summary=summary):
@@ -416,11 +380,9 @@ class RepToolExecutor:
 
     # --- Messages -------------------------------------------------------------------
 
-    async def _send(
-        self, uow: UnitOfWork, text: str, message_id: UUID, *, bare: bool
-    ) -> ToolExecution:
-        """Send, or hold for a person: after a mid-turn Edit, a guided turn's bare text,
-        or in *Ask* (module docstring)."""
+    async def _send(self, uow: UnitOfWork, text: str, message_id: UUID) -> ToolExecution:
+        """Send, or hold for a person: after a mid-turn Edit, or in *Ask* (module
+        docstring)."""
         scope = self._scope
         session = uow.session
         if await self._steered_since_start(session):
@@ -430,8 +392,6 @@ class RepToolExecutor:
                 refusal = STEERED_NOT_SENT.format(counterparty=await self._counterparty(session))
                 raise _Refused(refusal)
             return await self._hold(uow, text, message_id, reason=STEERED_HOLD)
-        if bare and scope.guided:
-            return await self._hold(uow, text, message_id, reason=GUIDED_TEXT_HOLD)
         if await self._mode(session) == "ask":
             return await self._hold(uow, text, message_id, reason=_ASK_HOLD)
         message = await threads.append_message(
@@ -629,7 +589,6 @@ __all__ = [
     "CONSULT_AFTER_SEND",
     "CUT_OFF_CONSULT",
     "CUT_OFF_HELD",
-    "GUIDED_TEXT_HOLD",
     "NOTHING_SENT",
     "NOT_REPLIED",
     "REP_INPUTS",
@@ -639,7 +598,6 @@ __all__ = [
     "STEERED_HOLD",
     "STEERED_NOT_CLOSED",
     "STEERED_NOT_SENT",
-    "TEXT_REPLY_ID",
     "CloseInput",
     "ConsultInput",
     "RepToolExecutor",

@@ -199,8 +199,8 @@ def test_internal_claude_knows_either_send_mode_from_the_same_prompt() -> None:
     text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
     assert "Usually x approves first" in text
     assert "In a chat set to send without review it goes out at once" in text
-    assert "The result says which." in text
-    assert "Send one request per call." in text
+    assert "The result says which, and what x changed." in text
+    assert "Send one request per call: one need is one request" in text
 
 
 def test_the_representative_sends_freely_and_consults_for_facts() -> None:
@@ -238,17 +238,13 @@ def test_the_representative_consults_before_it_replies() -> None:
     assert "report" not in requester
 
 
-def test_the_representative_knows_bare_text_is_only_a_fallback() -> None:
-    """Sent only before any message, and only when the turn brought something to
-    answer (`TurnContext.bare_text_sends`)."""
+def test_the_representative_knows_plain_text_is_never_sent() -> None:
+    """Section 5 bug 2: bare text is never sent (`runtime.BARE_TEXT_NOT_SENT`)."""
     values = dict.fromkeys(placeholders("representative"), "x")
     values["counterparty_name"] = "Henderson Lab"
     text = render("representative", values)
-    assert "Plain text is only a fallback" in text
-    assert (
-        "when you answer what the turn brought with plain text alone, before calling any "
-        "tool, that text is sent to Henderson Lab as your message" in text
-    )
+    assert "Only `send_message` reaches Henderson Lab" in text
+    assert "fallback" not in text
 
 
 def test_the_answerer_proposes_a_route_for_every_draft() -> None:
@@ -280,8 +276,9 @@ def test_the_answerer_says_where_an_answer_beyond_the_description_comes_from() -
 
 
 def test_the_answerer_asks_for_a_person_only_where_r4_6_says() -> None:
-    """Commitments, and records that don't answer: what may be shared is the sharing
-    check's to judge, so a draft touching it still reaches the check."""
+    """Commitments only: what may be shared is the sharing check's to judge, so a draft
+    touching it still reaches the check, and a gap in the records goes in the answer
+    (section 5 bug 3: Haiku asked for a person on every consult)."""
     text = template_path("consult").read_text()
     [rule] = [line for line in text.splitlines() if line.startswith("- `needs_human`")]
     for trigger in (
@@ -289,7 +286,7 @@ def test_the_answerer_asks_for_a_person_only_where_r4_6_says() -> None:
         "agreeing a price outside the published list",
         "waiving a fee",
         "booking a reserve slot",
-        "the records don't answer the question",
+        "A gap in the records isn't a decision",
     ):
         assert trigger in rule
     assert not [word for word in ("priority", "client", "exception") if word in rule]

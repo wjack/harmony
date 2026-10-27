@@ -155,7 +155,7 @@ with workflow.unsafe.imports_passed_through():
 TERMINAL: frozenset[ThreadState] = frozenset(("closed", "expired"))
 SIDES: tuple[Side, Side] = ("requester", "responder")
 # Consecutive turns that sent nothing, consulted no one and didn't close, after which
-# the thread expires: with bare text kept private and no early close, two quiet sides
+# the thread expires: with plain text never sent and no early close, two quiet sides
 # would otherwise use up every turn (3.13 E3).
 SILENT_TURNS_TO_EXPIRE = 2
 # How long an Edit waits for the item it names to be tracked, when an activity still

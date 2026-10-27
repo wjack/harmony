@@ -15,10 +15,15 @@ export interface RequestStatus {
   needs: boolean;
 }
 
-/** Who shared the thread with the viewer, when that's how they can see it. */
+/**
+ * Who shared the thread with the viewer, when that's how they can see it: not when it was
+ * also routed to them, which makes it theirs whoever shared it since.
+ */
 function sharedWith(thread: ThreadDetail, memberId: string | undefined): MemberRef | null {
-  const mine = thread.access.find((row) => row.member_id === memberId && row.reason === "shared");
-  const by = thread.access.find((row) => row.member_id === mine?.shared_by_member_id);
+  const mine = thread.access.filter((row) => row.member_id === memberId);
+  if (mine.some((row) => row.reason === "routed")) return null;
+  const share = mine.find((row) => row.reason === "shared");
+  const by = thread.access.find((row) => row.member_id === share?.shared_by_member_id);
   return by === undefined ? null : { id: by.member_id, slug: by.member_slug, name: by.member_name };
 }
 
