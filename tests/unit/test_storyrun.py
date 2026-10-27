@@ -241,6 +241,7 @@ class FakeStory:
             pending_card_id=self.card if self.card_status == "pending" else None,
             queued_message_ids=[],
             turn_in_flight=False,
+            looking=False,
             turn_failure=None,
             send_mode=SendMode(override=None, org_default=False, effective=False),
             version=self.polls,
@@ -449,6 +450,8 @@ class FakeStory:
                 status="open" if e.resolution is None else "resolved",
                 action=e.resolution.action if e.resolution else None,
                 answer=e.resolution.text if e.resolution else None,
+                answered_by=None,
+                answered_at=None,
             )
             for e in self.escalations.values()
             if e.org == "henderson"
@@ -737,6 +740,7 @@ class FakeChat(FakeStory):
             pending_card_id=pending,
             queued_message_ids=[],
             turn_in_flight=len(self.raised) < 2 and pending is None,
+            looking=False,
             turn_failure=None,
             send_mode=SendMode(
                 override=self.send_without_confirmation, org_default=False, effective=self.auto

@@ -24,8 +24,20 @@ The API never calls the model: it signal-with-starts this workflow (`member_mess
 4. at an idle point, continue as new with `ConversationCarry` once the run has taken
    `turns_per_run` turns or Temporal suggests it (a message signalled meanwhile is
    carried, or handled first: queued work always runs before the continue); after
-   `CONVERSATION_IDLE` with nothing to do and no update owed, return (the next message
-   signal-with-starts it again).
+   `CONVERSATION_IDLE` with nothing to do, no update owed and no look armed, return (the
+   next message signal-with-starts it again).
+
+Update looks. A `network_news` signal (a counterparty wrote, or a conversation ended:
+`NetworkActivities.nudge_chat`) arms a look. It is due at the later of `LOOK_LULL`
+after the latest news and `LOOK_EVERY` after the last look, but never later than
+`LOOK_LATEST` after the first news it hasn't looked at, so a busy request can't put it
+off for ever. Member messages and `closed` updates run first; a turn that takes a
+`closed` update clears the armed look, since that turn reads every conversation. A look
+is an `internal_turn` with `look=True`: its own turn id, numbered by its own count
+(`looks`), never a chat turn number, so the chat's cassette turns don't move with
+wall-clock lulls. It doesn't read as a turn in flight (`looking` instead), and a failed
+or refused one sets no `turn_failure` and isn't run again. Runs from before looks
+(`workflow.patched("chat-home")` false) never arm one.
 
 An approved outreach card starts the `NetworkRequestWorkflow`: the update handler stores
 the resolution (`NetworkActivities.apply_card_resolution`), and the run loop then runs
@@ -46,6 +58,7 @@ Owner: R-temporal.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from temporalio import workflow
@@ -78,15 +91,22 @@ with workflow.unsafe.imports_passed_through():
         CARD_NOT_PENDING_ERROR,
         CONVERSATION_IDLE,
         INVALID_RESOLUTION_ERROR,
+        LOOK_EVERY,
+        LOOK_LATEST,
+        LOOK_LULL,
         CardResolved,
         ConversationCarry,
         ConversationInput,
         ConversationPending,
         ConversationResult,
         MemberMessage,
+        NetworkNews,
         NetworkUpdate,
         update_failure,
     )
+
+# Guards the update looks (`network_news`, `_look`) for runs started before them.
+CHAT_HOME_PATCH = "chat-home"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,9 +151,17 @@ class ConversationWorkflow:
         self._recheck = False
         self._resolving = False
         self._turns_this_run = 0
+        self._looks = carried.looks
+        self._news_first_at = carried.news_first_at
+        self._news_latest_at = carried.news_latest_at
+        self._looked_at = carried.looked_at
+        self._looking = False
+        # Set at the top of the run: a run from before looks never arms one.
+        self._looks_on = False
 
     @workflow.run
     async def run(self, conversation: ConversationInput) -> ConversationResult:
+        self._looks_on = workflow.patched(CHAT_HOME_PATCH)
         while True:
             if self._paused is not None:
                 await self._settle_card()
@@ -141,18 +169,25 @@ class ConversationWorkflow:
             if self._has_work():
                 await self._new_turn()
                 continue
+            due = self._look_due()
+            if due is not None and due <= workflow.now():
+                await self._look()
+                continue
             if (
                 self._turns_this_run >= conversation.turns_per_run
                 or workflow.info().is_continue_as_new_suggested()
             ):
                 await workflow.wait_condition(workflow.all_handlers_finished)
                 workflow.continue_as_new(self._carry())
-            try:
-                await workflow.wait_condition(self._has_work, timeout=CONVERSATION_IDLE)
-            except TimeoutError:
+            if not await self._wait(due):
                 await workflow.wait_condition(workflow.all_handlers_finished)
-                # A note still owed to Claude would be lost with the run.
-                if not self._has_work() and self._paused is None and not self._undelivered:
+                # A note still owed to Claude, or an armed look, would be lost with the run.
+                if (
+                    not self._has_work()
+                    and self._paused is None
+                    and not self._undelivered
+                    and self._look_due() is None
+                ):
                     return ConversationResult(turns=self._turns)
 
     @workflow.signal
@@ -169,6 +204,14 @@ class ConversationWorkflow:
             return
         self._closed_requests[update.request_id] = update.round
         self._network_updates.append(update)
+
+    @workflow.signal
+    def network_news(self, news: NetworkNews) -> None:
+        """A counterparty wrote, or a conversation ended: arm an update look."""
+        now = workflow.now()
+        if self._news_first_at is None:
+            self._news_first_at = now
+        self._news_latest_at = now
 
     @workflow.update
     async def resolve_card(self, resolution: CardResolution) -> CardResolved:
@@ -214,6 +257,7 @@ class ConversationWorkflow:
             pending_card_id=self._pending_card_id,
             turns=self._turns,
             turn_failure=self._turn_failure,
+            looking=self._looking,
         )
 
     # --- The loop ---------------------------------------------------------------------
@@ -221,10 +265,68 @@ class ConversationWorkflow:
     def _has_work(self) -> bool:
         return bool(self._queued_messages or self._network_updates)
 
+    async def _wait(self, due: datetime | None) -> bool:
+        """Wait for work until the armed look is `due`, or for `CONVERSATION_IDLE` when
+        none is armed. News that arms a look ends the wait, to wait for the look instead.
+        False when the wait timed out."""
+        try:
+            await workflow.wait_condition(
+                lambda: self._has_work() or (due is None and self._look_due() is not None),
+                timeout=CONVERSATION_IDLE if due is None else _until(due),
+            )
+        except TimeoutError:
+            return False
+        return True
+
+    def _look_due(self) -> datetime | None:
+        """When the armed look is due; None when none is armed."""
+        first, latest = self._news_first_at, self._news_latest_at
+        if not self._looks_on or first is None or latest is None:
+            return None
+        due = latest + LOOK_LULL
+        if self._looked_at is not None:
+            due = max(due, self._looked_at + LOOK_EVERY)
+        return min(due, first + LOOK_LATEST)
+
+    async def _look(self) -> None:
+        """Run an update look: Claude checks the news and speaks only if it changes the
+        member's picture. News arriving meanwhile arms the next one."""
+        conversation = self._input
+        self._news_first_at = self._news_latest_at = None
+        self._looked_at = workflow.now()
+        self._looking = True
+        try:
+            result = await workflow.execute_activity_method(
+                AgentActivities.internal_turn,
+                InternalTurnInput(
+                    world_id=conversation.world_id,
+                    conversation_id=conversation.conversation_id,
+                    org_id=conversation.org_id,
+                    owner_member_id=conversation.owner_member_id,
+                    cassette_thread=conversation.cassette_thread,
+                    turn_id=workflow.uuid4(),
+                    turn=self._looks + 1,
+                    look=True,
+                ),
+                **chat_activity_options(),
+            )
+        except ActivityError as failed:
+            # It may have stored its note: the next look takes the next number.
+            workflow.logger.warning("update look failed: %s", failed)
+            self._looks += 1
+            return
+        finally:
+            self._looking = False
+        if not result.skipped:
+            self._looks += 1
+
     async def _new_turn(self) -> None:
         messages, self._queued_messages = self._queued_messages, []
         updates = [*self._undelivered, *self._network_updates]
         self._undelivered, self._network_updates = [], []
+        if any(update.kind == "closed" for update in updates):
+            # The closing turn reads every conversation: nothing is left to look at.
+            self._news_first_at = self._news_latest_at = None
         self._turns += 1
         self._turns_this_run += 1
         await self._run_turn(
@@ -479,9 +581,18 @@ class ConversationWorkflow:
                     closed_request_rounds=dict(sorted(self._closed_requests.items())),
                     undelivered_updates=list(self._undelivered),
                     turn_failure=self._turn_failure,
+                    looks=self._looks,
+                    news_first_at=self._news_first_at,
+                    news_latest_at=self._news_latest_at,
+                    looked_at=self._looked_at,
                 )
             }
         )
+
+
+def _until(at: datetime) -> timedelta:
+    """How long until `at`; a timer needs a positive duration."""
+    return max(at - workflow.now(), timedelta(milliseconds=1))
 
 
 def _outcome_of(applied: CardResolutionApplied, paused: _Paused) -> CardOutcome:

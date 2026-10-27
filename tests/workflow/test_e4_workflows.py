@@ -67,6 +67,7 @@ from harmony.temporal.activities.network import (
     EndRoundInput,
     FinishRunInput,
     NotifyConversationInput,
+    NudgeChatInput,
     OpenThreadInput,
     ReassignInput,
     RecordReopenInput,
@@ -106,6 +107,7 @@ from harmony.temporal.workflows.payloads import (
     ConversationPending,
     EscalationResolved,
     MemberMessage,
+    NetworkNews,
     NetworkRequestInput,
     NetworkUpdate,
     Reassigned,
@@ -185,6 +187,9 @@ class Script:
         self.stored_steers: dict[UUID, int] = {}
         # A failure in place of a result fails that turn.
         self.internal: list[InternalTurnResult | ApplicationError] = []
+        # When each `internal_turn` was scheduled, and what the chat said of each look.
+        self.internal_at: list[datetime] = []
+        self.looking: list[bool] = []
         self.applied: ResolutionApplied | None = None
         # Raised by `apply_resolution` in place of a result, one per call.
         self.apply_errors: list[ApplicationError] = []
@@ -288,9 +293,13 @@ class Script:
     @activity.defn(name="internal_turn")
     async def internal_turn(self, turn: InternalTurnInput) -> InternalTurnResult:
         self.calls.append(("internal_turn", turn))
+        self.internal_at.append(activity.info().current_attempt_scheduled_time)
         chat = self.client.get_workflow_handle(
             conversation_workflow_id(turn.world_id, turn.conversation_id)
         )
+        if turn.look:
+            pending = await chat.query("pending", result_type=ConversationPending)
+            self.looking.append(pending.looking)
         message = self.signal_during.pop(turn.turn, None)
         if message is not None:
             await chat.signal("member_message", message)
@@ -444,6 +453,10 @@ class Script:
     async def finish_run(self, finish: FinishRunInput) -> None:
         self.calls.append(("finish_run", finish))
 
+    @activity.defn(name="nudge_chat")
+    async def nudge_chat(self, nudge: NudgeChatInput) -> None:
+        self.calls.append(("nudge_chat", nudge))
+
     @activity.defn(name="end_round")
     async def end_round(self, end: EndRoundInput) -> RoundEnded:
         self.calls.append(("end_round", end))
@@ -510,6 +523,7 @@ async def workers(env: WorkflowEnvironment) -> AsyncIterator[Script]:
             script.record_reopen,
             script.begin_reopen,
             script.finish_run,
+            script.nudge_chat,
             script.end_round,
         ],
     )
@@ -733,6 +747,9 @@ async def test_turns_alternate_until_a_side_closes_and_the_other_writes_its_summ
         # The request hears the end once, after the last turn.
         assert await request_saw(request) == ["closed"]
         assert script.named("end_round") == []
+        # The chat hears of the responder's messages, then of the end.
+        nudges: list[NudgeChatInput] = script.named("nudge_chat")
+        assert [n.request_id for n in nudges] == [thread.request_id] * 2
         # Last, the run stores what a reopen carries: both `close` calls are owed theirs.
         assert script.calls[-1][0] == "finish_run"
         (finished,) = script.named("finish_run")
@@ -2556,6 +2573,101 @@ async def test_a_message_during_continue_as_new_is_not_lost(
 
 def taken(script: Script) -> Callable[[], Awaitable[list[InternalTurnInput]]]:
     return lambda: script.recorded("internal_turn")
+
+
+def looks(script: Script, since: datetime) -> list[tuple[int, float]]:
+    """Each update look as (its number, seconds after `since` it was scheduled)."""
+    turns: list[InternalTurnInput] = script.named("internal_turn")
+    return [
+        (turn.turn, round((at - since).total_seconds()))
+        for turn, at in zip(turns, script.internal_at, strict=True)
+        if turn.look
+    ]
+
+
+async def test_an_update_look_waits_for_a_lull_and_comes_at_most_once_a_minute(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        news = NetworkNews(request_id=uuid4())
+        # The first look finds nothing new, so the next one keeps its number.
+        script.internal = [
+            _turn("end_turn"),
+            _turn("end_turn", skipped=True),
+            _turn("end_turn"),
+            _turn("end_turn"),
+        ]
+        handle, _ = await start_chat(env)
+        await eventually(taken(script), lambda t: len(t) == 1, "the first turn")
+        start = await env.get_current_time()
+        await handle.signal("network_news", news)
+        await env.sleep(timedelta(seconds=20))
+        await handle.signal("network_news", news)
+        await env.sleep(timedelta(seconds=40))
+        await eventually(taken(script), lambda t: len(t) == 2, "the first look")
+        # News a minute in: the lull ends at 90s, but the last look was at 50s.
+        await handle.signal("network_news", news)
+        await env.sleep(timedelta(seconds=60))
+        await eventually(taken(script), lambda t: len(t) == 3, "the second look")
+        await handle.signal("member_message", _message("Any news?"))
+        await eventually(taken(script), lambda t: len(t) == 4, "the member's turn")
+
+        assert (await handle.result()).turns == 2
+        turns: list[InternalTurnInput] = script.named("internal_turn")
+        # Looks never take a chat turn number.
+        assert [(t.look, t.turn) for t in turns] == [(False, 1), (True, 1), (True, 1), (False, 2)]
+        assert looks(script, start) == [(1, 50), (1, 110)]
+        assert script.looking == [True, True]
+        assert not (await pending(handle)).looking
+        await replays(env, handle)
+
+
+async def test_news_that_never_lets_up_gets_a_look_three_minutes_after_the_first(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        news = NetworkNews(request_id=uuid4())
+        script.internal = [_turn("end_turn"), _turn("end_turn")]
+        handle, _ = await start_chat(env)
+        await eventually(taken(script), lambda t: len(t) == 1, "the first turn")
+        start = await env.get_current_time()
+        # News every 20 seconds, the last at 160s: never a 30-second lull.
+        for _ in range(9):
+            await handle.signal("network_news", news)
+            await env.sleep(timedelta(seconds=20))
+        await eventually(taken(script), lambda t: len(t) == 2, "the look")
+
+        assert (await handle.result()).turns == 1
+        assert looks(script, start) == [(1, 180)]
+        await replays(env, handle)
+
+
+async def test_an_armed_look_outlasts_the_idle_exit_and_a_closing_turn_disarms_it(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        news = NetworkNews(request_id=uuid4())
+        script.internal = [_turn("end_turn"), _turn("end_turn"), _turn("end_turn")]
+        handle, _ = await start_chat(env)
+        await eventually(taken(script), lambda t: len(t) == 1, "the first turn")
+        # News just before the idle exit: the run stays for its look.
+        await env.sleep(CONVERSATION_IDLE - timedelta(seconds=10))
+        await handle.signal("network_news", news)
+        await env.sleep(timedelta(seconds=40))
+        await eventually(taken(script), lambda t: len(t) == 2, "the look")
+        # The closing turn reads every conversation, so the news before it arms nothing.
+        await handle.signal("network_news", news)
+        await handle.signal(
+            "network_update", NetworkUpdate(request_id=news.request_id, kind="closed")
+        )
+
+        assert (await handle.result()).turns == 2
+        turns: list[InternalTurnInput] = script.named("internal_turn")
+        assert [(t.look, t.turn) for t in turns] == [(False, 1), (True, 1), (False, 2)]
+        await replays(env, handle)
 
 
 def awaiting(card_id: UUID) -> InternalTurnResult:

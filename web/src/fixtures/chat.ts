@@ -345,8 +345,11 @@ function answerTo(state: ChatState, spec: QuestionSpec): string | null {
   return state.answers[spec.escalationId] ?? (reached(state.stage, spec.answeredBy) ? spec.answer : null);
 }
 
+/** The story's questions each have one asker: its words go to that conversation as written. */
 function question(state: ChatState, spec: QuestionSpec): InlineQuestionItem {
   const answer = answerTo(state, spec);
+  const answeredAt = answer === null ? null : minutesAgo(spec.minutes - 1);
+  const recipients = [orgs.northlake, orgs.ridgeline];
   return {
     id: `esc:${spec.escalationId}`,
     at: minutesAgo(spec.minutes),
@@ -358,6 +361,15 @@ function question(state: ChatState, spec: QuestionSpec): InlineQuestionItem {
     status: answer === null ? "open" : "resolved",
     action: answer === null ? null : "approve",
     answer,
+    askers: [],
+    recipients,
+    goes_to_org_ids: answer === null ? [] : recipients.map((org) => org.id),
+    deliveries:
+      answeredAt === null
+        ? []
+        : [{ thread_id: spec.threadId, org: spec.from, state: "as_written", at: answeredAt, reason: null }],
+    answered_by: answer === null ? null : ref(members.alex),
+    answered_at: answeredAt,
   };
 }
 
@@ -495,6 +507,7 @@ function detail(
     pending_card_id: pendingCardId,
     queued_message_ids: [],
     turn_in_flight: turnInFlight,
+    looking: false,
     turn_failure: turnInFlight ? null : (state.options.turnFailure ?? null),
     send_mode: sendModeOf(state),
     version: state.version,

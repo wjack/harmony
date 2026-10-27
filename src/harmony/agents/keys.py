@@ -18,6 +18,11 @@ Per role (org / thread / turn / step):
   index of the search in that turn.
 - `steer`: the steering org / `thread_key(...)` / the steer's `seq` on that side / 0 for
   the guidance, 1 for a held message's rewrite (a consult's rewrite is the answerer's).
+- the question matcher (`screener`): the consulting org / `match_key(thread key)` / that
+  side's consult number / 0.
+- update looks (`internal`): the chat's org / `look_key(chat key)` / the chat's n-th look
+  / the step within the look. A look never takes a chat turn number: when it runs
+  depends on wall-clock lulls, and the chat's own turns must keep their numbers.
 
 Details:
 - **Conversations.** `chat:<member slug>:<n>`, where n is the owner's n-th conversation
@@ -40,8 +45,8 @@ Details:
 - **Checkpoints.** Model calls are checkpointed on `(turn_id, step_idx)`, with
   `step_idx` equal to the cassette step. Turns use the workflow-minted turn_id; screener
   calls use `screen_turn_id(search_id, org_id)`, answerer calls `consult_turn_id`,
-  sharing checks `sharing_turn_id`, and a steer's two calls `steer_guidance_turn_id`
-  and `steer_rewrite_turn_id`.
+  sharing checks `sharing_turn_id`, the matcher `match_turn_id`, and a steer's two calls
+  `steer_guidance_turn_id` and `steer_rewrite_turn_id`.
 - **Ids in tool inputs.** Seeded rows have the same ids in every world (`seeds.ids`),
   and tools name organizations by slug, so a cassette's tool inputs are literal.
 """
@@ -53,6 +58,11 @@ from uuid import UUID, uuid5
 
 CHAT_PREFIX: Final = "chat"
 SEARCH_PREFIX: Final = "search"
+# Update looks in a chat, and the matcher that compares a consult's question with
+# earlier ones: `ScriptedModel` answers an unscripted call under either (an empty
+# `end_turn`, no match), so only a test that wants one scripts it.
+LOOK_PREFIX: Final = "look"
+MATCH_PREFIX: Final = "match"
 # The most steps one draft's answerer tool loop may take.
 ANSWERER_STEPS: Final = 8
 
@@ -81,6 +91,16 @@ def search_key(origin_key: str) -> str:
     return f"{SEARCH_PREFIX}:{origin_key}"
 
 
+def look_key(chat: str) -> str:
+    """`look:chat:alex:1`: the update looks of the chat `chat`."""
+    return f"{LOOK_PREFIX}:{chat}"
+
+
+def match_key(thread: str) -> str:
+    """`match:henderson.northlake`: the question matcher's calls for a thread's consults."""
+    return f"{MATCH_PREFIX}:{thread}"
+
+
 def screen_turn_id(search_id: UUID, org_id: UUID) -> UUID:
     """The checkpoint turn_id of one screener call; a retried search reuses it."""
     return uuid5(search_id, f"screen/{org_id}")
@@ -94,6 +114,11 @@ def consult_turn_id(consult_id: UUID) -> UUID:
 def sharing_turn_id(consult_id: UUID) -> UUID:
     """The checkpoint turn_id of a consult's sharing checks (step = draft rev - 1)."""
     return uuid5(consult_id, "sharing")
+
+
+def match_turn_id(consult_id: UUID) -> UUID:
+    """The checkpoint turn_id of a consult's question matcher (one call, step 0)."""
+    return uuid5(consult_id, "match")
 
 
 def steer_guidance_turn_id(steer_id: UUID) -> UUID:
@@ -122,10 +147,15 @@ def answerer_steps(draft_rev: int) -> range:
 
 __all__ = [
     "ANSWERER_STEPS",
+    "LOOK_PREFIX",
+    "MATCH_PREFIX",
     "answerer_step",
     "answerer_steps",
     "chat_key",
     "consult_turn_id",
+    "look_key",
+    "match_key",
+    "match_turn_id",
     "screen_turn_id",
     "search_key",
     "sharing_turn_id",

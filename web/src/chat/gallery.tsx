@@ -35,7 +35,7 @@ import { ActivityLine, AssistantMessage, StreamingSpark, UserMessage } from "./M
 import { NewChat } from "./NewChat";
 import { budgetLine } from "./failureCopy";
 import { initialDraft, partVersions, type OutreachDraft } from "./outreachDraft";
-import type { ChatItem, ChatItemOf, ChatItemType, OutreachCardItem, SendMode } from "./types";
+import type { ChatItem, ChatItemOf, ChatItemType, InlineQuestionItem, OutreachCardItem, SendMode } from "./types";
 
 const noop = () => undefined;
 const ALEX = members.alex.id;
@@ -282,16 +282,24 @@ function editedDraft(draft: OutreachDraft, card: OutreachCardItem): OutreachDraf
   };
 }
 
+/** The question cards in the chat at `stage`, as the transcript draws them. */
+function questionsAt(stage: ChatStage): InlineQuestionItem[] {
+  return toBlocks(itemsAt(stage)).flatMap((block) => (block.kind === "question" ? [block.item] : []));
+}
+
 function InlineQuestionSection() {
-  const open = itemOf(itemsAt("question"), "inline_question");
-  const [, goAhead] = itemsOf(itemsAt("go_ahead"), "inline_question");
-  const resolved = itemOf(itemsAt("go_ahead"), "inline_question");
+  const [open] = questionsAt("question");
+  const [resolved, goAhead] = questionsAt("go_ahead");
   const [busy, setBusy] = useState(false);
-  if (goAhead === undefined) throw new Error("no go-ahead question in the fixture");
+  if (open === undefined || resolved === undefined || goAhead === undefined) {
+    throw new Error("no questions in the fixture");
+  }
+  const us = "Henderson Lab";
   return (
     <Column>
       <InlineQuestionCard
         item={open}
+        us={us}
         busy={busy}
         blocked={null}
         error={null}
@@ -301,13 +309,14 @@ function InlineQuestionSection() {
       />
       <InlineQuestionCard
         item={goAhead}
+        us={us}
         busy={false}
         blocked={null}
         error="Already answered by Alex Chen."
         onAnswer={noop}
       />
-      <InlineQuestionCard item={resolved} busy={false} blocked={null} error={null} onAnswer={noop} />
-      <InlineQuestionCard item={open} busy={false} blocked="Live models are paused" error={null} onAnswer={noop} />
+      <InlineQuestionCard item={resolved} us={us} busy={false} blocked={null} error={null} onAnswer={noop} />
+      <InlineQuestionCard item={open} us={us} busy={false} blocked="Live models are paused" error={null} onAnswer={noop} />
     </Column>
   );
 }

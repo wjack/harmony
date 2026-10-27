@@ -297,7 +297,7 @@ async def escalation_texts(
     db: AsyncSession, world_id: UUID, rows: Sequence[Escalation]
 ) -> dict[UUID, EscalationText]:
     """Each escalation's question, its current draft's short question, and "why this
-    needs you" (`release.why_needed`)."""
+    needs you" (`release.why_needed`, the current draft's own reason first)."""
     consult_ids = [row.consult_id for row in rows if row.consult_id is not None]
     asked = {
         consult.id: consult
@@ -308,7 +308,11 @@ async def escalation_texts(
     current = [(row.id, row.current_draft_rev) for row in rows if row.current_draft_rev is not None]
     drafts = (
         await db.execute(
-            select(EscalationDraft.escalation_id, EscalationDraft.short_question).where(
+            select(
+                EscalationDraft.escalation_id,
+                EscalationDraft.short_question,
+                EscalationDraft.held_reason,
+            ).where(
                 EscalationDraft.world_id == world_id,
                 tuple_(EscalationDraft.escalation_id, EscalationDraft.draft_rev).in_(current),
             )
@@ -316,7 +320,11 @@ async def escalation_texts(
         if current
         else ()
     )
-    short_questions = {draft.escalation_id: draft.short_question for draft in drafts}
+    short_questions: dict[UUID, str | None] = {}
+    held_reasons: dict[UUID, str | None] = {}
+    for draft in drafts:
+        short_questions[draft.escalation_id] = draft.short_question
+        held_reasons[draft.escalation_id] = draft.held_reason
     held = [row.id for row in rows if row.consult_id is None]
     reasons: dict[UUID, str] = (
         dict(
@@ -340,7 +348,7 @@ async def escalation_texts(
             EscalationText(
                 question=consult.question,
                 short_question=short_questions.get(row.id),
-                reason=release.why_needed(consult),
+                reason=release.why_needed(consult, held_reasons.get(row.id)),
             )
             if consult is not None
             else EscalationText(

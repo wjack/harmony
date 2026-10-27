@@ -75,6 +75,7 @@ from harmony.temporal.workflows.payloads import (
     ConversationCarry,
     ConversationInput,
     EscalationResolved,
+    NetworkNews,
     NetworkRequestInput,
     NetworkUpdate,
     Reassigned,
@@ -262,6 +263,11 @@ class NotifyConversationInput(_Payload):
     world_id: UUID
     conversation_id: UUID
     update: NetworkUpdate
+
+
+class NudgeChatInput(_Payload):
+    world_id: UUID
+    request_id: UUID
 
 
 class NetworkActivities:
@@ -595,6 +601,37 @@ class NetworkActivities:
             start_signal_args=[notify.update],
         )
 
+    @activity.defn
+    async def nudge_chat(self, nudge: NudgeChatInput) -> None:
+        """Tell the request's chat there's news (`network_news`, signal-with-start): a
+        counterparty wrote, or a conversation ended. One read, no write: the chat looks
+        later, so the item list needs no refetch now."""
+        from harmony.temporal.workflows.conversation import ConversationWorkflow
+
+        await ensure_world_live(self._sessionmaker, nudge.world_id)
+        async with self._sessionmaker() as session:
+            request = await repo.get_required(
+                session, NetworkRequest, nudge.world_id, nudge.request_id
+            )
+            if request.conversation_id is None:
+                return
+            conversation = await repo.get_required(
+                session, Conversation, nudge.world_id, request.conversation_id
+            )
+            arg = await conversation_input(session, conversation)
+        await start_world_workflow(
+            self._client,
+            self._sessionmaker,
+            ConversationWorkflow.run,
+            arg,
+            world_id=nudge.world_id,
+            workflow_id=conversation_workflow_id(nudge.world_id, conversation.id),
+            org_id=conversation.org_id,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            start_signal="network_news",
+            start_signal_args=[NetworkNews(request_id=nudge.request_id)],
+        )
+
 
 # --- Shared with the API -------------------------------------------------------------
 
@@ -636,7 +673,8 @@ async def conversation_input(
     session: AsyncSession, conversation: Conversation
 ) -> ConversationInput:
     """The input a conversation's workflow (re)starts with: its cassette key and the
-    turns it has already taken, so cassette turn numbers continue after an idle exit."""
+    turns and looks it has already taken, so cassette turn numbers continue after an
+    idle exit."""
     owner = await repo.get_required(
         session, Member, conversation.world_id, conversation.owner_member_id
     )
@@ -646,7 +684,10 @@ async def conversation_input(
         org_id=conversation.org_id,
         owner_member_id=conversation.owner_member_id,
         cassette_thread=chat_key(owner.slug, await conversations.ordinal(session, conversation)),
-        carried=ConversationCarry(turns=await conversations.turns_taken(session, conversation)),
+        carried=ConversationCarry(
+            turns=await conversations.turns_taken(session, conversation),
+            looks=await conversations.looks_taken(session, conversation),
+        ),
     )
 
 
@@ -1041,6 +1082,7 @@ __all__ = [
     "FinishRunInput",
     "NetworkActivities",
     "NotifyConversationInput",
+    "NudgeChatInput",
     "OpenThreadInput",
     "ReassignInput",
     "RecordReopenInput",

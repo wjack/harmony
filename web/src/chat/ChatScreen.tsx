@@ -9,6 +9,7 @@ import { IconButton } from "../shell/ui/Button";
 import { cx } from "../shell/ui/cx";
 import { useUnavailable } from "../shell/unavailable";
 import {
+  isLooking,
   isWorking,
   useAnyRequestActive,
   useApproveCard,
@@ -100,7 +101,8 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   }
   const cardDraft = card === null ? null : (cardDrafts[card.card_id] ?? initialDraft(card));
   const working = isWorking(detail) || unsent.length > 0;
-  const streaming = useChatStream(conversationId, detail.items, working);
+  // A look may write an update, so its text streams in; it shows no spark, and a silent one shows nothing.
+  const streaming = useChatStream(conversationId, detail.items, working || isLooking(detail));
   const showSpark = working && card === null;
 
   const requestIds = detail.items.flatMap((item) => (item.type === "request_status" ? [item.request_id] : []));
@@ -208,6 +210,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
           <Transcript
             blocks={blocks}
             memberId={memberId}
+            us={session.data?.member.org.name ?? "your organization"}
             working={working}
             showSpark={showSpark}
             failure={detail.turn_failure !== null && !working ? failureLine(detail.turn_failure, budgetState) : null}
@@ -217,10 +220,10 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
             answering={resolve.isPending ? resolve.variables.escalationId : null}
             answerErrors={answerErrors}
             blocked={blocked}
-            onAnswer={(escalationId, text) => {
+            onAnswer={(escalationId, body) => {
               setAnswerErrors((current) => without(current, escalationId));
               resolve.mutate(
-                { escalationId, body: { action: "approve", text } },
+                { escalationId, body },
                 {
                   onError: (error) => {
                     setAnswerErrors((current) => ({ ...current, [escalationId]: describeFailure(error) }));

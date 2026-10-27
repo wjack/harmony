@@ -3,6 +3,7 @@
  * then one 13px muted line that names who acted, says what happened and when, with
  * anything they typed quoted below it. The parts here are shared by every such row.
  */
+import { MessageSquareText } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { useCalendar } from "../demo/worldClock";
@@ -60,5 +61,15 @@ export function LinkButton({ onClick, children }: { onClick: () => void; childre
     <button type="button" onClick={onClick} className="whitespace-nowrap text-link hover:underline">
       {children}
     </button>
+  );
+}
+
+/** "Drafted from Alex's answer to Ridgeline, Oct 26": reuse is never silent. */
+export function DraftedFrom({ line }: { line: string }) {
+  return (
+    <p className="flex min-w-0 items-center gap-1.5 text-ui-sm text-secondary">
+      <MessageSquareText size={14} strokeWidth={1.6} aria-hidden className="shrink-0" />
+      <span className="min-w-0">{line}</span>
+    </p>
   );
 }

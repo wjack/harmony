@@ -938,6 +938,8 @@ export interface components {
             released_at: string | null;
             /** Version */
             version: number;
+            /** Drafted From */
+            drafted_from?: string | null;
         };
         /**
          * ContextPart
@@ -986,6 +988,8 @@ export interface components {
             queued_message_ids: string[];
             /** Turn In Flight */
             turn_in_flight: boolean;
+            /** Looking */
+            looking: boolean;
             /** Turn Failure */
             turn_failure: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             send_mode: components["schemas"]["SendMode"];
@@ -1442,6 +1446,12 @@ export interface components {
          *     resolved one carries how it was settled (`action`) and the words that went with it
          *     (`answer`): the member's own, else the draft rev they approved as written. An item
          *     cancelled because its thread ended stays, as no longer needed.
+         *
+         *     A card groups the request's items that ask the same question and are routed to the
+         *     chat's owner. The one shown (`escalation_id`, `question`, `from_org`) is the item a
+         *     member answered, else the oldest open one; the rest are `askers`. Answered, it
+         *     lists one `deliveries` row per asker, later askers included, and who answered
+         *     (`answered_by`, `answered_at`).
          */
         InlineQuestionItem: {
             /** Id */
@@ -1478,6 +1488,29 @@ export interface components {
             action: ("approve" | "decline" | "take_over") | null;
             /** Answer */
             answer: string | null;
+            /**
+             * Askers
+             * @default []
+             */
+            askers: components["schemas"]["QuestionAsker"][];
+            /**
+             * Recipients
+             * @default []
+             */
+            recipients: components["schemas"]["OrgRef"][];
+            /**
+             * Goes To Org Ids
+             * @default []
+             */
+            goes_to_org_ids: string[];
+            /**
+             * Deliveries
+             * @default []
+             */
+            deliveries: components["schemas"]["QuestionDelivery"][];
+            answered_by: components["schemas"]["MemberRef"] | null;
+            /** Answered At */
+            answered_at: string | null;
         };
         /**
          * InternalModelView
@@ -1795,6 +1828,52 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * QuestionAsker
+         * @description Another conversation on the request whose representative asked the card's
+         *     question, routed to the chat's owner ("How each asked").
+         */
+        QuestionAsker: {
+            /**
+             * Escalation Id
+             * Format: uuid
+             */
+            escalation_id: string;
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            from_org: components["schemas"]["OrgRef"];
+            /** Question */
+            question: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "cancelled";
+        };
+        /**
+         * QuestionDelivery
+         * @description One row under an answered card: what became of the answer in one conversation.
+         */
+        QuestionDelivery: {
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            org: components["schemas"]["OrgRef"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "as_written" | "fitted" | "later" | "drafting" | "held" | "not_sent" | "ended";
+            /** At */
+            at: string | null;
+            /** Reason */
+            reason: string | null;
+        };
         /** ReassignEscalation */
         ReassignEscalation: {
             /**
@@ -2031,6 +2110,10 @@ export interface components {
             text?: string | null;
             /** Draft Rev */
             draft_rev?: number | null;
+            /** Also For */
+            also_for?: string[];
+            /** Goes To Org Ids */
+            goes_to_org_ids?: string[] | null;
         };
         /**
          * RewrittenBy

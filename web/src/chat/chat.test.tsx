@@ -321,7 +321,15 @@ it("answers a counterparty's question inline", async () => {
 
   await screen.findByText("Answered");
   expect(writes).toEqual([
-    { route: `POST /api/escalations/${SEAL_QUESTION_ID}/resolve`, body: { action: "approve", text: "Kalrez, please." } },
+    {
+      route: `POST /api/escalations/${SEAL_QUESTION_ID}/resolve`,
+      body: {
+        action: "approve",
+        text: "Kalrez, please.",
+        also_for: [],
+        goes_to_org_ids: [orgs.northlake.id, orgs.ridgeline.id],
+      },
+    },
   ]);
 });
 
@@ -374,11 +382,15 @@ it("answers go-aheads on proposed terms, and sums up once both threads close", a
   await answerAbout("Ridgeline Fabrication", "Yes, with the Kalrez seal.");
 
   expect(await screen.findByText(/inside your \$2,000 budget/)).toBeTruthy();
+  const goesTo = { also_for: [], goes_to_org_ids: [orgs.northlake.id, orgs.ridgeline.id] };
   expect(writes).toEqual([
-    { route: `POST /api/escalations/${NORTHLAKE_GO_AHEAD_ID}/resolve`, body: { action: "approve", text: "Yes, go ahead." } },
+    {
+      route: `POST /api/escalations/${NORTHLAKE_GO_AHEAD_ID}/resolve`,
+      body: { action: "approve", text: "Yes, go ahead.", ...goesTo },
+    },
     {
       route: `POST /api/escalations/${RIDGELINE_GO_AHEAD_ID}/resolve`,
-      body: { action: "approve", text: "Yes, with the Kalrez seal." },
+      body: { action: "approve", text: "Yes, with the Kalrez seal.", ...goesTo },
     },
   ]);
 });

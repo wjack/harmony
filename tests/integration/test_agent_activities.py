@@ -13,6 +13,8 @@ models built here:
 - A background org's chat streams `stream.chat_delta` like a featured one's (3.1).
 - A request's end is noted to internal Claude once, however often a failed turn's
   updates are handed on.
+- A silent update look leaves no chat item and nothing in the next turn's history, and
+  a look with no news since Claude last wrote is skipped without a model call.
 """
 
 from __future__ import annotations
@@ -33,13 +35,16 @@ from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from harmony.agents.keys import chat_key
+from harmony.agents.keys import chat_key, look_key
 from harmony.agents.models import EscalationResolution
 from harmony.agents.runtime import MessageHeld, MessageSent
+from harmony.agents.transcript import LOOK_NOTE_PREFIX
+from harmony.db import repo
 from harmony.db.models import (
     Card,
     ChatMessage,
     Consult,
+    Conversation,
     Escalation,
     Event,
     Member,
@@ -869,3 +874,83 @@ async def test_a_background_orgs_chat_streams_its_reply(db_sessionmaker: Session
     deltas = [m.event for m in publisher.messages if isinstance(m.event, StreamChatDelta)]
     assert deltas, "no stream.chat_delta for a background org"
     assert "".join(d.text for d in deltas) == reply
+
+
+# --- Update looks ---------------------------------------------------------------------
+
+
+async def _news(sm: Sessionmaker, world_id: UUID, conversation_id: UUID, body: str) -> None:
+    """A request from the chat whose Northlake conversation has a reply with `body`."""
+    thread_id = await _new_thread(sm, world_id, opening=True)
+    async with unit_of_work(sm, world_id) as uow:
+        thread = await repo.get_required(uow.session, Thread, world_id, thread_id)
+        request = await repo.get_required(uow.session, NetworkRequest, world_id, thread.request_id)
+        request.conversation_id = conversation_id
+        uow.session.add(
+            ThreadMessage(
+                world_id=world_id,
+                id=uuid4(),
+                thread_id=thread_id,
+                seq=2,
+                from_org_id=NORTHLAKE,
+                kind="message",
+                body=body,
+                provenance="agent",
+            )
+        )
+        await uow.commit()
+
+
+async def _chat_items(sm: Sessionmaker, world_id: UUID, conversation_id: UUID) -> list[object]:
+    async with sm() as session:
+        chat = await repo.get_required(session, Conversation, world_id, conversation_id)
+        return list(await conversations.chat_items(session, chat))
+
+
+async def test_a_silent_look_leaves_no_chat_item_and_nothing_in_the_next_turns_history(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    sm = db_sessionmaker
+    world_id = await seeded_world(sm)
+    conversation_id = await start_chat(sm, world_id)
+    entries = _replies("henderson", "internal", CHAT, range(1, 3), "Noted.")
+    # The look checks the request, then ends without writing (the unscripted default).
+    entries.update(
+        [
+            _entry(
+                "henderson",
+                "internal",
+                look_key(CHAT),
+                1,
+                0,
+                ToolUseBlock(type="tool_use", name="get_request_status", input={}),
+            )
+        ]
+    )
+    model = _Recording(entries)
+    agents = _agents(sm, model, _Publisher())
+    await _env().run(agents.internal_turn, _chat_turn(world_id, conversation_id, 1, text="Hi."))
+    reply = "We can do Nov 4, air-free."
+    await _news(sm, world_id, conversation_id, reply)
+    before = await _chat_items(sm, world_id, conversation_id)
+    look = _chat_turn(world_id, conversation_id, 1).model_copy(update={"look": True})
+
+    result = await _env().run(agents.internal_turn, look)
+
+    assert (result.stop, result.skipped) == ("end_turn", False)
+    opening, checked = model.bodies[-2:]
+    assert LOOK_NOTE_PREFIX in json.dumps(opening.get("messages"))
+    assert reply in json.dumps(objects(checked.get("messages"))[-1])
+    assert await _chat_items(sm, world_id, conversation_id) == before
+
+    await _env().run(
+        agents.internal_turn, _chat_turn(world_id, conversation_id, 2, text="Any news?")
+    )
+    history = json.dumps(model.bodies[-1].get("messages"))
+    assert LOOK_NOTE_PREFIX not in history
+    assert "get_request_status" not in history
+    # Nothing new since Claude last wrote: the next look ends before any model call.
+    calls = len(model.bodies)
+    again = _chat_turn(world_id, conversation_id, 1).model_copy(update={"look": True})
+    assert (await _env().run(agents.internal_turn, again)).skipped
+    assert len(model.bodies) == calls

@@ -8,8 +8,10 @@ message in *Ask* (`outbound_review`).
 first-writer-wins: `resolve` updates `WHERE status = 'open'` and raises
 `domain.errors.EscalationNotOpen` (with who resolved it) when it matched no row. Only a
 member of the escalation's org may resolve or reassign it (`NotInOrg`). Approving
-releases the answer, or sends the message, to its one thread; nothing is remembered
-for other threads (§4.5).
+releases the answer, or sends the message, to its one thread. A member's approval of a
+requester-side question can also serve other conversations on the request that ask the
+same thing: each gets its own rev drafted from it, which code may release under that
+conversation's checks (`resolve_released`: resolved with no member and no resolution).
 
 Drafts (`escalation_drafts`) carry their own `draft_rev`; a steer's rewrite (an Edit)
 appends a rev and bumps `current_draft_rev` without touching the resolution. Rev 1 is
@@ -181,11 +183,12 @@ async def add_draft(
     *,
     turn_id: UUID | None,
     draft_rev: int | None = None,
+    held_reason: str | None = None,
 ) -> EscalationDraft:
     """Append the next `draft_rev` and make it current: the answerer's draft of a
-    consult answer, or the held message of an `outbound_review` (its `answer`). With
-    `draft_rev` (the rev the answerer drafted), idempotent: an existing rev is returned
-    unchanged."""
+    consult answer, or the held message of an `outbound_review` (its `answer`), with why
+    it waits for a person when the rev says so itself (`held_reason`). With `draft_rev`
+    (the rev the answerer drafted), idempotent: an existing rev is returned unchanged."""
     session = uow.session
     escalation = await locked(uow, escalation_id)
     if draft_rev is not None:
@@ -210,6 +213,7 @@ async def add_draft(
         rationale=draft.rationale,
         short_question=draft.short_question,
         turn_id=turn_id,
+        held_reason=held_reason,
     )
     session.add(row)
     escalation.current_draft_rev = max(escalation.current_draft_rev or 0, rev)
@@ -298,6 +302,29 @@ async def resolve(uow: UnitOfWork, resolution: EscalationResolution) -> Escalati
         raise _not_open(escalation)
     uow.add_snapshot(escalation, scope_of(escalation))
     await _refresh_views(uow, escalation)
+    return escalation
+
+
+async def resolve_released(uow: UnitOfWork, escalation_id: UUID) -> Escalation:
+    """`open` → `resolved` with no member and no resolution: code released a rev drafted
+    from a member's answer to another item, so nobody approved this one. A settled
+    escalation is returned unchanged."""
+    session = uow.session
+    resolved = await session.scalar(
+        update(Escalation)
+        .where(
+            Escalation.world_id == uow.world_id,
+            Escalation.id == escalation_id,
+            Escalation.status == "open",
+        )
+        .values(status="resolved", resolved_at=datetime.now(UTC), version=Escalation.version + 1)
+        .returning(Escalation.id)
+        .execution_options(synchronize_session=False)
+    )
+    escalation = await _reloaded(session, uow.world_id, escalation_id)
+    if resolved is not None:
+        uow.add_snapshot(escalation, scope_of(escalation))
+        await _refresh_views(uow, escalation)
     return escalation
 
 
@@ -394,6 +421,20 @@ async def current_draft(session: AsyncSession, escalation: Escalation) -> Escala
         return None
     key = (escalation.world_id, escalation.id, escalation.current_draft_rev)
     return await session.get(EscalationDraft, key)
+
+
+async def settled_words(session: AsyncSession, escalation: Escalation) -> str | None:
+    """What a member let through when they settled the item: their own words, else (on
+    an approval) the draft rev they approved as written. None while it is open, or when
+    no member settled it."""
+    if escalation.resolution is None:
+        return None
+    resolution = EscalationResolution.model_validate(escalation.resolution)
+    text = (resolution.text or "").strip()
+    if text or resolution.action != "approve":
+        return text or None
+    draft = await resolved_draft(session, escalation, resolution)
+    return draft.answer if draft is not None else None
 
 
 def route_of(draft: EscalationDraft) -> Route | None:
@@ -522,8 +563,10 @@ __all__ = [
     "open",
     "reassign",
     "resolve",
+    "resolve_released",
     "resolved_draft",
     "route_of",
     "scope_of",
     "set_status",
+    "settled_words",
 ]

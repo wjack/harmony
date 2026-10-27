@@ -1,13 +1,23 @@
 """Escalation routes: resolving inbox items (§7, §10, UI_REFERENCE §6).
 
-- POST /api/escalations/{escalation_id}/resolve {action, text?, draft_rev?}: the
-  escalation panel's actions and the chat's inline answers
+- POST /api/escalations/{escalation_id}/resolve {action, text?, draft_rev?, also_for?,
+  goes_to_org_ids?}: the escalation panel's actions and the chat's inline answers
 - POST /api/escalations/{escalation_id}/reassign {member_id}
 
 Each runs a `ThreadWorkflow` Update (`resolve_escalation`, `reassign`) naming
 the acting member and their org (validators can't read the database). Only members of
 the escalation's org who can see its thread may act (404 otherwise). A second resolver
 gets 409 `escalation_not_open` with `resolved_by`.
+
+One answer, many askers (the chat's card). On a question its own side's representative
+asked about a request (requester side), an approval may also go to the card's other
+open items routed to the member (`also_for`: each gets a rev drafted from the answer,
+through the `use_answer` Update, once this one is resolved), and stores which of the
+request's organizations the answer goes to, now or later (`goes_to_org_ids`). The answer
+mustn't name another organization on the request: 422 `invalid` when it does, as for
+`also_for` or `goes_to_org_ids` on anything but the chat owner's approval, in their own
+words, of an item routed to them; an item that isn't theirs on the same card; or an
+organization the request didn't go to.
 
 An escalation is open only while its thread's workflow waits on it (a thread that ends
 cancels its open escalations), so an Update that finds no running workflow is 409
@@ -18,6 +28,7 @@ Owner: E4.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -27,11 +38,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.service import RPCError
 
+from harmony.agents import context
 from harmony.agents.models import EscalationAction, EscalationResolution
 from harmony.api.deps import AppServices, ServicesDep
 from harmony.api.routes.problems import (
     ApiProblemError,
     from_update_failure,
+    invalid,
     member_ref,
     not_found,
     problem,
@@ -42,15 +55,20 @@ from harmony.api.routes.problems import (
 from harmony.auth import access
 from harmony.auth.session import Actor, ActorDep
 from harmony.db import repo
-from harmony.db.models import Escalation, Member, Thread
+from harmony.db.models import Escalation, Member, NetworkRequest, Org, Thread
+from harmony.db.uow import unit_of_work
+from harmony.domain import consults, requests
 from harmony.temporal.activities.network import run_update
 from harmony.temporal.workflows.payloads import (
+    AnswerUsed,
     EscalationResolved,
     Reassigned,
     Reassignment,
+    UseAnswer,
     thread_workflow_id,
 )
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["escalations"])
 
 
@@ -61,6 +79,12 @@ class ResolveEscalation(BaseModel):
     action: EscalationAction
     text: str | None = Field(default=None, max_length=20_000)
     draft_rev: int | None = Field(default=None, ge=1)
+    # The card's other open items routed to the member that the answer also goes to
+    # (`approve` with `text` only).
+    also_for: list[UUID] = Field(default_factory=list[UUID], max_length=50)
+    # The request's organizations the card's answer goes to, now or later (`approve` with
+    # `text` only); None stores none, so the answer serves this item only.
+    goes_to_org_ids: list[UUID] | None = None
 
 
 class ReassignEscalation(BaseModel):
@@ -80,6 +104,8 @@ async def resolve_escalation(
 ) -> EscalationResolved:
     async with services.sessionmaker() as db:
         escalation = await _open_escalation(db, actor, escalation_id)
+        card = await _card_answer(db, actor, escalation, body)
+        also = [await _open_escalation(db, actor, item_id) for item_id in body.also_for]
     resolution = EscalationResolution(
         escalation_id=escalation.id,
         action=body.action,
@@ -88,9 +114,22 @@ async def resolve_escalation(
         member_id=actor.member_id,
         org_id=actor.org_id,
     )
-    return await _update(
+    resolved = await _update(
         services, actor, escalation, "resolve_escalation", resolution, EscalationResolved
     )
+    # Stored once the answer is given, so a refused one never changes the card.
+    if card is not None and body.goes_to_org_ids is not None:
+        async with unit_of_work(services.sessionmaker, actor.world_id) as uow:
+            await consults.set_goes_to(uow, card, body.goes_to_org_ids)
+            await uow.commit()
+    for item in also:
+        use = UseAnswer(escalation_id=item.id, from_escalation_id=escalation.id)
+        try:
+            await _update(services, actor, item, "use_answer", use, AnswerUsed)
+        except ApiProblemError as refused:
+            # It stays open for a person, and the card shows it so.
+            log.info("escalation %s didn't take the answer: %s", item.id, refused.problem.detail)
+    return resolved
 
 
 @router.post(
@@ -128,6 +167,54 @@ async def _open_escalation(db: AsyncSession, actor: Actor, escalation_id: UUID) 
     if escalation.status != "open":
         raise await _not_open(db, escalation)
     return escalation
+
+
+async def _card_answer(
+    db: AsyncSession, actor: Actor, escalation: Escalation, body: ResolveEscalation
+) -> UUID | None:
+    """The card a requester-side question belongs to, once `also_for`, `goes_to_org_ids`
+    and the answer's names are checked (module docstring); None for any other item."""
+    asked = escalation.kind == "consult" and escalation.side == "requester"
+    if not asked or escalation.consult_id is None or escalation.thread_id is None:
+        if body.also_for or body.goes_to_org_ids is not None:
+            raise invalid("only your side's own questions on a request share an answer")
+        return None
+    text = (body.text or "").strip()
+    shares = bool(body.also_for) or body.goes_to_org_ids is not None
+    if shares and (body.action != "approve" or not text):
+        raise invalid("only an answer in your own words goes to other conversations")
+    thread = await repo.get_required(db, Thread, actor.world_id, escalation.thread_id)
+    request = await repo.get_required(db, NetworkRequest, actor.world_id, thread.request_id)
+    mine = str(actor.member_id) in escalation.assignees
+    if shares and (actor.member_id != request.created_by_member_id or not mine):
+        raise invalid("only the chat's owner shares an answer, from a question routed to them")
+    consult = await consults.get(db, world_id=actor.world_id, consult_id=escalation.consult_id)
+    card = consults.card_of(consult)
+    if body.also_for:
+        askers = {
+            item.id
+            for item in await consults.card_askers(db, actor.world_id, card, actor.member_id)
+        }
+        strays = [item_id for item_id in body.also_for if item_id not in askers]
+        if escalation.id in body.also_for or strays:
+            raise invalid("also_for takes only your own open items on this card")
+    recipients = [row.org_id for row in requests.recipients_of(request)]
+    if body.goes_to_org_ids is not None and not set(body.goes_to_org_ids) <= set(recipients):
+        raise invalid("the answer can go only to organizations the request went to")
+    if body.action == "approve" and text:
+        orgs = {org.id: org.name for org in await repo.list_in_world(db, Org, actor.world_id)}
+        # Short names count ("Northlake"), unless the shown asker's or ours starts the same.
+        kept = (orgs[thread.responder_org_id], orgs[actor.org_id])
+        others = [orgs[org_id] for org_id in recipients if org_id != thread.responder_org_id]
+        named = [name for name in others if context.names(text, name, keep=kept)]
+        if named:
+            # The asker shown gets the words as written (DESIGN §2, D2).
+            leave = "Leave the name out." if len(named) == 1 else "Leave the names out."
+            raise invalid(
+                f"Your answer names {' and '.join(named)}, and "
+                f"{orgs[thread.responder_org_id]} gets your words as written. {leave}"
+            )
+    return card
 
 
 async def _not_open(db: AsyncSession, escalation: Escalation) -> ApiProblemError:

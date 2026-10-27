@@ -8,7 +8,7 @@ The representative asked its own side a question, and this is the draft answer. 
 
 {answer}
 
-Does everything the answer reveals fall within that description? Judge what it reveals, not how it's worded. Information the description doesn't cover, or that it rules out, fails the check, even when the rest of the answer is fine. A teammate decides what to do with an answer that fails.
+Does everything the answer reveals fall within that description? Judge what it reveals, not how it's worded. Information the description doesn't cover, or that it rules out, fails the check, even when the rest of the answer is fine. A teammate decides what to do with an answer that fails.{reuse}
 
 Return JSON that matches the schema:
 - `within_sharing`: true only when everything the answer reveals is within the description.

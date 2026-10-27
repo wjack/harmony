@@ -11,7 +11,9 @@ sides see). The workspace adds what only the acting member's side may see: its c
 (drafts, sharing checks, releases), its escalations with each draft and what internal
 Claude looked at, its internal notes, its own close summary, and "What our
 representative saw": the parts of the side's frozen system prompt plus every answer
-released to it (REVISION_UNSTRUCTURED.md §2). Same access rule as the thread (404,
+released to it (REVISION_UNSTRUCTURED.md §2). A consult whose draft started from a
+member's answer in another conversation says so ("Drafted from ..."), naming that
+conversation only to a viewer who can open it. Same access rule as the thread (404,
 never 403). Carries `X-Harmony-Cursor`; `consult`, `escalation`, `escalation_draft`,
 `internal_note`, `steer` and `rep_guidance` snapshots keep it live.
 
@@ -71,6 +73,7 @@ from harmony.db.models import (
     EscalationDraft,
     InternalNote,
     Member,
+    Org,
     RepGuidance,
     RepSession,
     Steer,
@@ -90,9 +93,10 @@ from harmony.db.models.choices import (
     SteerStatus,
 )
 from harmony.db.uow import unit_of_work
-from harmony.domain import consults, escalations, notes, routing, steers, threads
+from harmony.domain import clock, consults, escalations, notes, routing, steers, threads
 from harmony.domain.notes import BODY_MAX_CHARS
 from harmony.errors import WorldRetired
+from harmony.names import first_name
 from harmony.temporal.activities.network import run_update, workflow_missing
 from harmony.temporal.workflows.payloads import (
     DRAFT_TEXT_MAX_CHARS,
@@ -126,6 +130,10 @@ class ConsultView(_View):
     created_at: datetime
     released_at: datetime | None
     version: int
+    # When its draft started from a member's answer to another conversation's question:
+    # "Drafted from Alex's answer to Ridgeline Fabrication, Oct 26", or "Drafted from
+    # Alex's earlier answer" for a viewer who can't open that conversation.
+    drafted_from: str | None = None
 
 
 class RouteAssigneeView(_View):
@@ -506,10 +514,11 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
         )
     )
     by_consult = {row.id: row for row in consult_rows}
+    drafted_from = await _drafted_from(db, actor, consult_rows)
     return ThreadWorkspace(
         thread_id=thread.id,
         side=side,
-        consults=[_consult_view(row, members) for row in consult_rows],
+        consults=[_consult_view(row, members, drafted_from.get(row.id)) for row in consult_rows],
         escalations=[
             _escalation_view(
                 row,
@@ -552,7 +561,38 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
     )
 
 
-def _consult_view(row: Consult, members: Mapping[UUID, MemberRef]) -> ConsultView:
+async def _drafted_from(db: AsyncSession, actor: Actor, rows: Iterable[Consult]) -> dict[UUID, str]:
+    """The "Drafted from" line of each consult whose draft started from a member's
+    answer to another item (`ConsultView.drafted_from`). It names that conversation's
+    organization and the answer's date only to a viewer who can open it."""
+    lines: dict[UUID, str] = {}
+    for row in rows:
+        source = (
+            await repo.get(db, Escalation, actor.world_id, row.drafted_from_id)
+            if row.drafted_from_id is not None
+            else None
+        )
+        if source is None or source.resolved_by_member_id is None or source.thread_id is None:
+            continue
+        member = await repo.get_required(db, Member, actor.world_id, source.resolved_by_member_id)
+        who = first_name(member.name) or member.name
+        try:
+            thread = await access.get_visible_thread(db, actor, source.thread_id)
+        except repo.NotFoundInWorld:
+            lines[row.id] = f"Drafted from {who}'s earlier answer"
+            continue
+        side = source.side or threads.side_of(thread, source.org_id)
+        org = await repo.get_required(
+            db, Org, actor.world_id, threads.org_of(thread, threads.other(side))
+        )
+        day = await clock.today(db, actor.world_id, source.resolved_at)
+        lines[row.id] = f"Drafted from {who}'s answer to {org.name}, {context.short_date(day)}"
+    return lines
+
+
+def _consult_view(
+    row: Consult, members: Mapping[UUID, MemberRef], drafted_from: str | None
+) -> ConsultView:
     return ConsultView(
         id=row.id,
         question=row.question,
@@ -571,6 +611,7 @@ def _consult_view(row: Consult, members: Mapping[UUID, MemberRef]) -> ConsultVie
         created_at=row.created_at,
         released_at=row.released_at,
         version=row.version,
+        drafted_from=drafted_from,
     )
 
 
@@ -634,13 +675,14 @@ def _escalation_view(
     org_slugs: Sequence[str],
 ) -> EscalationView:
     held = next((draft for draft in drafts if draft.draft_rev == 1), None)
+    current = next((draft for draft in drafts if draft.draft_rev == row.current_draft_rev), None)
     return EscalationView(
         id=row.id,
         kind=row.kind,
         status=escalations.escalation_status(row.status),
         consult_id=row.consult_id,
         reason=(
-            release.why_needed(consult)
+            release.why_needed(consult, current.held_reason if current is not None else None)
             if consult is not None
             else held_reason(held.rationale if held is not None else None)
         ),

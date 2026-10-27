@@ -10,6 +10,8 @@ Templates are plain text with `{placeholders}`, drafted by the coordinator:
 | `side_responder.md` | the responder side's section of `representative.md`        |
 | `consult.md`        | the consult answerer and router (a short read-tool loop)   |
 | `consult_redraft.md`| what a redraft adds to `consult.md`: the draft it revises  |
+| `consult_reuse.md`  | what a draft from a member's earlier answer adds instead   |
+| `same_question.md`  | the matcher: does a consult ask an earlier one again       |
 | `sharing_check.md`  | the sharing check on a draft consult answer                |
 | `screener.md`       | one discovery screener call                                |
 | `steer_guidance.md` | a steer's guidance call: the guidance from a member's Edit |
@@ -44,6 +46,8 @@ PromptName = Literal[
     "side_responder",
     "consult",
     "consult_redraft",
+    "consult_reuse",
+    "same_question",
     "sharing_check",
     "screener",
     "steer_guidance",

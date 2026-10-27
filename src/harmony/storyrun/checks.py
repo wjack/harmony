@@ -65,6 +65,7 @@ from harmony.agents.tools.rep import (
     NOT_REPLIED,
     NOTHING_SENT,
 )
+from harmony.agents.transcript import LOOK_NOTE_PREFIX
 from harmony.db import repo
 from harmony.db.models import (
     AgentTurn,
@@ -545,8 +546,8 @@ def empty_end_turn_nudged(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, st
     asked for an answer. A resumed turn's opening asks for none once its card was
     approved or sent without review, unless notices came with it; a representative's
     asks for none when it is the code-written "nothing new", or only its held messages
-    declined without a reason. `sent_cards` maps each card's (turn, tool call) to whether
-    it was approved."""
+    declined without a reason; an update look's note asks for none either.
+    `sent_cards` maps each card's (turn, tool call) to whether it was approved."""
     texts = [
         as_str(block.get("text")) or "" for block in call.opening if block.get("type") == "text"
     ]
@@ -558,6 +559,8 @@ def empty_end_turn_nudged(call: EmptyEndTurn, sent_cards: Mapping[tuple[UUID, st
     if call.step_idx > 0:
         return False
     if len(texts) == 1 and _NOTHING_NEW.fullmatch(texts[0]) is not None:
+        return False
+    if len(texts) == 1 and texts[0].startswith(LOOK_NOTE_PREFIX):
         return False
     # A held bare-text reply's decline answers no call, so it comes as text.
     declined = [*texts, *(_result_text(block) for block in results)]

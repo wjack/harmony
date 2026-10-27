@@ -16,7 +16,9 @@ Across requests: consecutive requests of one conversation (a representative's
 (thread, side), or an internal chat) keep `model`, `system`, `tools`, `thinking` and
 `output_config` byte-identical, and each request's `messages` is a byte-prefix
 extension of the previous one in canonical JSON. Cache markers are compared too: the
-builders use top-level automatic caching, so a moving marker is itself a defect.
+builders use top-level automatic caching, so a moving marker is itself a defect. An
+update look branches off its chat: the chat's later history keeps only what the look
+wrote, so each look is a conversation of its own.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from uuid import UUID
 
 from pydantic import JsonValue
 
+from harmony.agents.keys import LOOK_PREFIX
 from harmony.errors import HarmonyError
 from harmony.llm import ModelRequest
 from harmony.llm.pricing import HAIKU_5_5, OPUS_5_5
@@ -194,12 +197,15 @@ def _is_text_only(content: JsonValue) -> bool:
 
 
 def conversation_key(request: ModelRequest) -> Hashable | None:
-    """Which requests must extend each other: a representative's (thread, side) or an
-    internal chat (its conversation id in `thread`). Single calls have none."""
+    """Which requests must extend each other: a representative's (thread, side), an
+    internal chat (its conversation id in `thread`) or one update look of a chat.
+    Single calls have none."""
     key = request.key
     if key.role not in ("representative", "internal") or key.thread is None:
         return None
     world: UUID = key.world_id
+    if key.thread.startswith(f"{LOOK_PREFIX}:"):
+        return (world, key.org, key.role, key.thread, key.turn)
     return (world, key.org, key.role, key.thread)
 
 

@@ -12,6 +12,11 @@ Rules every implementation keeps:
 - Temporal passes transcript references (`TranscriptRef`), never transcripts; the
   activity loads the bytes.
 
+A chat's update looks (`ConversationWorkflow`) open with a code-written note
+(`look_note`). A later turn's history keeps a finished look only as its note and what
+Claude wrote, and leaves a silent one out (`chat_history`), so the status results looks
+read don't pile up in the chat.
+
 Every message carries the turn that wrote it. A turn's messages are contiguous and form
 the transcript's tail while the turn runs (the workflow runs one turn per transcript at
 a time), and each has a **position**: its index among that turn's messages. Appending
@@ -27,6 +32,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from itertools import groupby
 from typing import Annotated, Final, Literal, Protocol
 from uuid import UUID, uuid5
 
@@ -39,10 +45,22 @@ from harmony.db.models.choices import Side, TranscriptRole
 from harmony.db.uow import UnitOfWork, unit_of_work
 from harmony.errors import HarmonyError
 from harmony.events.schemas import EventScope
-from harmony.llm.wire import JsonObject, canonical_json
+from harmony.llm.wire import JsonObject, as_str, canonical_json, objects
 
 # Namespaces the chat_messages id of a turn's message at a position.
 _CHAT_ID_PREFIX: Final = "transcript"
+
+# An update look's opening: no counterparty text, and the ids, since
+# `get_request_status` without one reads only the chat's latest request.
+LOOK_NOTE_PREFIX: Final = "Harmony: there's news on "
+LOOK_NOTE: Final = (
+    LOOK_NOTE_PREFIX + "{member}'s {requests} since you last spoke. Check get_request_status "
+    "for each. Tell {member} only what changes their picture: a price, a date, a yes or "
+    "no, a blocker, a counter-proposal. Say who said it. Otherwise end your turn without "
+    "writing."
+)
+# The note as a stored text block starts, for queries over `content_text`.
+LOOK_NOTE_BLOCK: Final = canonical_json({"type": "text", "text": LOOK_NOTE_PREFIX})[:-2]
 
 
 class _Model(BaseModel):
@@ -234,6 +252,47 @@ async def append_in(
     return seqs
 
 
+def look_note(member: str, request_ids: Sequence[UUID]) -> str:
+    """The note an update look opens with, naming the requests with news."""
+    ids = ", ".join(str(request_id) for request_id in request_ids)
+    requests = f"requests {ids}" if len(request_ids) > 1 else f"request {ids}"
+    return LOOK_NOTE.format(member=member, requests=requests)
+
+
+def is_look_note(message: WireMessage) -> bool:
+    """Whether `message` opens an update look: a user message ending on the note (after
+    any results a failed turn left owed)."""
+    if message.role != "user":
+        return False
+    blocks = objects(message.content())
+    text = as_str(blocks[-1].get("text")) if blocks and blocks[-1].get("type") == "text" else None
+    return text is not None and text.startswith(LOOK_NOTE_PREFIX)
+
+
+def chat_history(history: Sequence[WireMessage], *, turn_id: UUID) -> list[WireMessage]:
+    """A chat's stored messages as turn `turn_id` sends them: every finished update look
+    reduced to its note and the text Claude wrote, without its tool calls, results and
+    thinking, and a look that wrote nothing left out. `turn_id`'s own messages stay
+    whole, a look's included."""
+    kept: list[WireMessage] = []
+    for turn, group in groupby(history, key=lambda message: message.turn_id):
+        messages = list(group)
+        if turn == turn_id or not is_look_note(messages[0]):
+            kept += messages
+            continue
+        texts = [
+            block
+            for message in messages
+            if message.role == "assistant"
+            for block in objects(message.content())
+            if block.get("type") == "text" and (as_str(block.get("text")) or "").strip()
+        ]
+        if texts:
+            written = WireMessage.of("assistant", list[JsonValue](texts))
+            kept += [messages[0], written.model_copy(update={"turn_id": turn})]
+    return kept
+
+
 def _lock_key(ref: TranscriptRef) -> str:
     if isinstance(ref, ConversationTranscript):
         return f"transcript:{ref.world_id}:{ref.conversation_id}"
@@ -330,6 +389,9 @@ async def _touch_conversation(uow: UnitOfWork, ref: ConversationTranscript) -> N
 
 
 __all__ = [
+    "LOOK_NOTE",
+    "LOOK_NOTE_BLOCK",
+    "LOOK_NOTE_PREFIX",
     "ConversationTranscript",
     "RepSideTranscript",
     "SqlTranscriptStore",
@@ -338,5 +400,8 @@ __all__ = [
     "TranscriptStore",
     "WireMessage",
     "append_in",
+    "chat_history",
+    "is_look_note",
     "load_in",
+    "look_note",
 ]

@@ -1,7 +1,8 @@
 """The release decision by mode (REVISION_UNSTRUCTURED.md §4.4, §11): *Ask* releases
 nothing, *Auto* only a draft the answerer would release that passes the sharing check,
-*Skip* any draft the answerer would release; a trusted organization's mode and sharing
-description apply to that counterparty only."""
+*Skip* any draft the answerer would release; a draft from a member's earlier answer is
+checked in every mode; a trusted organization's mode and sharing description apply to
+that counterparty only."""
 
 from __future__ import annotations
 
@@ -90,12 +91,30 @@ def test_auto_needs_the_verdict() -> None:
         release.decide("auto", draft(), None)
 
 
-@given(mode=st.sampled_from(MODES), needs_human=st.booleans())
-def test_only_auto_runs_the_check_and_only_on_a_releasable_draft(
-    mode: Autonomy, needs_human: bool
+@given(mode=st.sampled_from(MODES), needs_human=st.booleans(), reused=st.booleans())
+def test_auto_or_a_reused_answer_runs_the_check_and_only_on_a_releasable_draft(
+    mode: Autonomy, needs_human: bool, reused: bool
 ) -> None:
-    expected = mode == "auto" and not needs_human
-    assert release.needs_sharing_check(mode, draft(needs_human=needs_human)) is expected
+    """A draft from a member's earlier answer goes to a counterparty it wasn't written
+    for, so it is checked in every mode, Skip included."""
+    expected = (mode == "auto" or reused) and not needs_human
+    proposed = draft(needs_human=needs_human)
+    assert release.needs_sharing_check(mode, proposed, reused=reused) is expected
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_reused_answer_that_fails_the_check_goes_to_a_person_in_every_mode(
+    mode: Autonomy,
+) -> None:
+    failed = SharingCheck(within_sharing=False, reason="It names another organization.")
+    held = release.decide(mode, draft(), failed, reused=True)
+    assert held == NeedsHuman(reason="sharing_check", detail="It names another organization.")
+    with pytest.raises(ValueError, match="sharing check"):
+        release.decide(mode, draft(), None, reused=True)
+    passed = release.decide(
+        mode, draft(), SharingCheck(within_sharing=True, reason=""), reused=True
+    )
+    assert isinstance(passed, NeedsHuman if mode == "ask" else Release)
 
 
 def test_the_answerers_reason_is_what_the_reviewer_reads() -> None:

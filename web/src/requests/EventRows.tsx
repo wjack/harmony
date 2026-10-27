@@ -10,7 +10,8 @@ import type { ReopenOffer } from "../api/types";
 import type { BudgetState } from "../app/budget";
 import { firstName } from "../shell/names";
 import { cx } from "../shell/ui";
-import { EventRow, LinkButton, Said, When, Who } from "./EventRow";
+import { draftedFrom } from "./decision";
+import { DraftedFrom, EventRow, LinkButton, Said, When, Who } from "./EventRow";
 import { steerOutcome } from "./failure";
 import { onlyUs } from "./format";
 import type { ReleaseEntry, ResolutionEntry, SteerEntry } from "./timeline";
@@ -135,6 +136,7 @@ export function ResolutionRow({ entry, us, them }: { entry: ResolutionEntry; us:
 export function ReleaseRow({ entry, us }: { entry: ReleaseEntry; us: OrgRef }) {
   const who = entry.by === null ? "Claude" : firstName(entry.by.name);
   const sentence = entry.by === null ? "answered without a teammate" : "approved the answer";
+  const drafted = draftedFrom(entry.consult);
   return (
     <EventRow
       icon={<CircleCheck {...ICON} />}
@@ -144,7 +146,9 @@ export function ReleaseRow({ entry, us }: { entry: ReleaseEntry; us: OrgRef }) {
           <Who>{who}</Who> {sentence} · {onlyUs(us)} · <When at={entry.at} />
         </>
       }
-    />
+    >
+      {drafted !== null && <DraftedFrom line={drafted} />}
+    </EventRow>
   );
 }
 

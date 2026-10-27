@@ -19,9 +19,21 @@
    (`consults.release`, by `auto`) or opens the consult's escalation with the draft and
    routes it by the answerer's proposal (`routing.apply_route`). A redraft only adds a
    draft rev to the open escalation: a person decides it.
+4. One answer, many askers. `match_question` asks Claude (`same_question.md`, one call
+   under the `screener` role) whether a requester-side question asks one of the
+   request's cards again. A draft can start from a member's answer to another item on
+   its card (`Reuse`): the first draft of a later asker, or a rev the `use_answer`
+   Update reserves. Its prompt keeps the first draft's review text and adds
+   `consult_reuse.md` in place of a redraft's: the member's answer and its date, with
+   other organizations' names replaced, never the question it answered. The sharing
+   check runs on it in every mode, and `settle` may release it by `auto` even on an
+   open escalation, which then closes with no member (`escalations.resolve_released`):
+   it was never a member's approval of this rev. Held, the rev carries its own
+   `held_reason`.
 
-Every request is built by `llm.requests.build_request`, roles `answerer` and
-`sharing_check`; cassette keys and checkpoints are in `agents.keys`.
+Every request is built by `llm.requests.build_request`, roles `answerer`,
+`sharing_check` and `screener` (the matcher); cassette keys and checkpoints are in
+`agents.keys`.
 
 Owner: R-agents (the model classes and output schemas are the contract's).
 """
@@ -31,6 +43,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Annotated, Any, Final, Literal
 from uuid import UUID, uuid5
 
@@ -74,6 +87,9 @@ log = logging.getLogger(__name__)
 # Adaptive thinking shares this with the JSON.
 ANSWER_MAX_TOKENS: Final = 16_000
 SHARING_CHECK_MAX_TOKENS: Final = 4_000
+MATCH_MAX_TOKENS: Final = 4_000
+# The most cards one matcher call compares a question with (the newest).
+MATCH_MAX_EARLIER: Final = 10
 # The `consult` result when a member answered the counterparty themselves.
 TAKEN_OVER: Final = "A member of your side wrote to the counterparty directly."
 # The `send_message` result when a member declined the held message and gave no reason.
@@ -134,6 +150,20 @@ class AnswerFailed(_Model):
 ConsultAnswer = Annotated[DraftReady | AnswerFailed, Field(discriminator="kind")]
 
 
+class Reuse(_Model):
+    """A member's answer to another item on the consult's card, which a draft starts
+    from: the item it settled, the words, who wrote them and on which world date."""
+
+    escalation_id: UUID
+    answer: str
+    member_name: str
+    answered_on: date
+
+
+class _Match(_Model):
+    same_as: int | None
+
+
 # --- The answerer --------------------------------------------------------------------
 
 
@@ -147,6 +177,7 @@ async def answer(
     instruction: str | None = None,
     base_text: str | None = None,
     member_name: str | None = None,
+    reuse: Reuse | None = None,
     attempt: int = 1,
     model_override: str | None = None,
     cassette_thread: str | None = None,
@@ -159,7 +190,8 @@ async def answer(
 
     A redraft's prompt adds the draft it revises (`base_text`, the member's unsaved
     wording, when given) and `instruction`, what the member (`member_name`) asked for
-    (`answer_inputs`).
+    (`answer_inputs`); a draft from a member's earlier answer (`reuse`), at any rev,
+    adds that answer instead.
     `cassette_thread` and `consult_turn` (the workflow's fixed keys) default to
     `threads.cassette_key` and `consults.ordinal`.
     """
@@ -174,6 +206,7 @@ async def answer(
             instruction=instruction,
             base_text=base_text,
             member_name=member_name,
+            reuse=reuse,
         )
         thread_key, turn = await _cassette(session, consult, cassette_thread, consult_turn)
     reader = RecordReader(sessionmaker, world_id=world_id, org_id=consult.org_id)
@@ -258,15 +291,17 @@ async def check_sharing(
     consult_id: UUID,
     draft: ConsultDraft,
     draft_rev: int = 1,
+    reused: bool = False,
     attempt: int = 1,
     model_override: str | None = None,
     cassette_thread: str | None = None,
     consult_turn: int | None = None,
 ) -> SharingCheck:
     """Whether everything `draft` reveals is within what the org shares with this
-    counterparty. Checkpointed on (`keys.sharing_turn_id(consult_id)`, `draft_rev - 1`).
-    A refusal or an invalid verdict counts as a failed check, with the reason saying
-    so."""
+    counterparty, and, for a draft from a member's earlier answer (`reused`), that it
+    neither names nor hints at another organization. Checkpointed on
+    (`keys.sharing_turn_id(consult_id)`, `draft_rev - 1`). A refusal or an invalid
+    verdict counts as a failed check, with the reason saying so."""
     if draft_rev < 1:
         raise ValueError(f"draft_rev must be >= 1, got {draft_rev}")
     async with sessionmaker() as session:
@@ -282,6 +317,7 @@ async def check_sharing(
             "sharing": _sharing_text(parties),
             "question": context.quoted("question", consult.question),
             "answer": context.quoted("answer", draft.answer),
+            "reuse": REUSED_CHECK if reused else "",
         },
     )
     key = CallKey(
@@ -313,6 +349,14 @@ async def check_sharing(
         else:
             return check.model_copy(update={"reason": check.reason.strip()})
     return failed_check(failed.detail)
+
+
+# What the sharing check adds for a draft from a member's earlier answer.
+REUSED_CHECK: Final = (
+    " This answer was drafted from what a teammate told another conversation, so it also "
+    "fails if it names or hints at another organization, or says that anyone else asked "
+    "or was told."
+)
 
 
 def failed_check(detail: str) -> SharingCheck:
@@ -364,11 +408,14 @@ async def answer_inputs(
     instruction: str | None = None,
     base_text: str | None = None,
     member_name: str | None = None,
+    reuse: Reuse | None = None,
 ) -> AnswerInputs:
     """The answerer's prompt, read now: settings, policy and the side's guidance are
     live. A redraft (`draft_rev` > 1) is a person's to release, and its prompt ends with
     the draft that person reviewed (or their wording of it), why it needed them and
-    what they asked for."""
+    what they asked for. A draft from a member's earlier answer (`reuse`) is released
+    as a first draft is, at any rev: its prompt keeps the first draft's review text and
+    ends with that answer instead (`_reuse_text`)."""
     parties = await _parties(session, consult)
     org = parties.org
     org_name, counterparty_name = parties.names()
@@ -383,7 +430,7 @@ async def answer_inputs(
         # The prompt is rendered for each consult, so the date never stales a cache.
         "today": context.world_date_notice(await clock.today(session, consult.world_id)),
         "sharing": _sharing_text(parties),
-        "review": _REDRAFT_REVIEW if draft_rev > 1 else _REVIEW[parties.mode()],
+        "review": _REDRAFT_REVIEW if draft_rev > 1 and reuse is None else _REVIEW[parties.mode()],
         "instructions": settings.instructions.strip() or "None.",
         "member_profiles": _members_text(members),
         "routing_prompt": _routing_text(parties.policy, members),
@@ -396,7 +443,9 @@ async def answer_inputs(
         "question": context.quoted("question", consult.question),
     }
     prompt = render("consult", values)
-    if draft_rev > 1:
+    if reuse is not None:
+        prompt += "\n\n" + await _reuse_text(session, parties, reuse)
+    elif draft_rev > 1:
         prompt += "\n\n" + await _redraft_text(
             session, consult, org_name, instruction, base_text=base_text, member_name=member_name
         )
@@ -551,16 +600,14 @@ async def _redraft_text(
     what they asked for."""
     member = " ".join((member_name or "").split()) or "a teammate"
     asked = (instruction or "").strip()
+    escalation = await repo.get(
+        session, Escalation, consult.world_id, escalation_id_for(consult.id)
+    )
+    reviewed = None if escalation is None else await escalations.current_draft(session, escalation)
     if base_text is not None and base_text.strip():
         heading = f"The draft as {member} edited it:"
         draft = context.quoted("draft", base_text)
     else:
-        escalation = await repo.get(
-            session, Escalation, consult.world_id, escalation_id_for(consult.id)
-        )
-        reviewed = (
-            None if escalation is None else await escalations.current_draft(session, escalation)
-        )
         heading = "The draft:"
         draft = (
             "There was no draft: the answerer couldn't write one."
@@ -572,7 +619,7 @@ async def _redraft_text(
         {
             "org_name": org_name,
             "member_first": first_name(member_name) or "the teammate",
-            "why": release.why_needed(consult),
+            "why": release.why_needed(consult, reviewed.held_reason if reviewed else None),
             "draft_heading": heading,
             "draft": draft,
             "instruction": context.quoted("instruction", asked, from_=member)
@@ -580,6 +627,140 @@ async def _redraft_text(
             else "They didn't say what to change.",
         },
     )
+
+
+async def _reuse_text(session: AsyncSession, parties: _Parties, reuse: Reuse) -> str:
+    """The member's answer as this draft may start from it (`consult_reuse.md`): dated,
+    with every other organization's name replaced, and without the question it
+    answered."""
+    org_name, counterparty_name = parties.names()
+    orgs = await repo.list_in_world(session, Org, parties.org.world_id)
+    others = [org.name for org in orgs if org.id not in (parties.org.id, parties.counterparty.id)]
+    answer = context.without_org_names(
+        reuse.answer, others, keep=(parties.org.name, parties.counterparty.name)
+    )
+    member = " ".join(reuse.member_name.split()) or "A teammate"
+    return render(
+        "consult_reuse",
+        {
+            "member": member,
+            "org_name": org_name,
+            "counterparty_name": counterparty_name,
+            "date": context.long_date(reuse.answered_on),
+            "answer": context.quoted("answer", answer, from_=member),
+        },
+    )
+
+
+async def reuse_of(session: AsyncSession, world_id: UUID, escalation_id: UUID) -> Reuse | None:
+    """The answer a member approved on the item `escalation_id`, as a draft may start
+    from it; None unless a member approved it with words to reuse."""
+    escalation = await repo.get(session, Escalation, world_id, escalation_id)
+    if escalation is None or escalation.resolved_by_member_id is None:
+        return None
+    if consults.member_answer([escalation], escalation.resolved_by_member_id) is None:
+        return None
+    words = await escalations.settled_words(session, escalation)
+    if not words:
+        return None
+    member = await repo.get_required(session, Member, world_id, escalation.resolved_by_member_id)
+    return Reuse(
+        escalation_id=escalation.id,
+        answer=words,
+        member_name=member.name,
+        answered_on=await clock.today(session, world_id, escalation.resolved_at),
+    )
+
+
+async def card_reuse(session: AsyncSession, consult: Consult) -> Reuse | None:
+    """The answer a consult that asks a card again starts from: the card's answer, when
+    a member gave one and it goes to this consult's counterparty."""
+    if consult.same_as_id is None:
+        return None
+    card = await consults.get(session, world_id=consult.world_id, consult_id=consult.same_as_id)
+    answer = await consults.card_answer(session, consult.world_id, card.id)
+    if answer is None:
+        return None
+    parties = await _parties(session, consult)
+    if str(parties.counterparty.id) not in card.goes_to_org_ids:
+        return None
+    return await reuse_of(session, consult.world_id, answer.id)
+
+
+async def match_question(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    model: CheckpointedModel,
+    *,
+    world_id: UUID,
+    consult_id: UUID,
+    attempt: int = 1,
+    model_override: str | None = None,
+    cassette_thread: str | None = None,
+    consult_turn: int | None = None,
+) -> UUID | None:
+    """The card whose question this consult asks again, by Claude's judgment, or None:
+    one call (`same_question.md`, role `screener`) that sees this question and up to
+    `MATCH_MAX_EARLIER` cards' questions, each quoted with the organization its
+    conversation is with, and returns a number. No call when no card could be joined
+    (`consults.cards_to_join`). Checkpointed on (`keys.match_turn_id(consult_id)`, 0).
+    A refusal or an unreadable answer is no match."""
+    async with sessionmaker() as session:
+        consult = await consults.get(session, world_id=world_id, consult_id=consult_id)
+        parties = await _parties(session, consult)
+        cards = await consults.cards_to_join(session, consult, parties.counterparty.id)
+        cards = cards[-MATCH_MAX_EARLIER:]
+        if not cards:
+            return None
+        asked_of = {card.id: await _counterparty_name(session, card) for card in cards}
+        thread_key, turn = await _cassette(session, consult, cassette_thread, consult_turn)
+    org_name, counterparty_name = parties.names()
+    earlier = "\n\n".join(
+        context.quoted("question", card.question, n=str(n), org=asked_of[card.id])
+        for n, card in enumerate(cards, start=1)
+    )
+    prompt = render(
+        "same_question",
+        {
+            "org_name": org_name,
+            "question": context.quoted("question", consult.question, org=counterparty_name),
+            "earlier": earlier,
+        },
+    )
+    key = CallKey(
+        world_id=world_id,
+        scenario=parties.scenario,
+        org=parties.org.slug,
+        role="screener",
+        thread=keys.match_key(thread_key),
+        turn=turn,
+        turn_id=keys.match_turn_id(consult_id),
+        step_idx=0,
+        attempt=attempt,
+    )
+    request = single_call(
+        key,
+        tier=parties.tier,
+        prompt=prompt,
+        max_tokens=MATCH_MAX_TOKENS,
+        output_schema=MATCH_OUTPUT_SCHEMA,
+        model_override=model_override,
+    )
+    message = (await model.call(request)).message()
+    if failed_output(message, who="the matcher") is not None:
+        return None
+    try:
+        same_as = _Match.model_validate_json(output_text(message)).same_as
+    except ValidationError:
+        return None
+    if same_as is None or not 1 <= same_as <= len(cards):
+        return None
+    return cards[same_as - 1].id
+
+
+async def _counterparty_name(session: AsyncSession, consult: Consult) -> str:
+    thread = await repo.get_required(session, Thread, consult.world_id, consult.thread_id)
+    org_id = threads.org_of(thread, threads.other(consult.side))
+    return " ".join((await repo.get_required(session, Org, consult.world_id, org_id)).name.split())
 
 
 async def _thread_text(session: AsyncSession, parties: _Parties) -> str:
@@ -686,11 +867,14 @@ async def settle(
     outcome: DraftReady | AnswerFailed,
     draft_rev: int = 1,
     sharing: SharingCheck | None = None,
+    reused_from: UUID | None = None,
 ) -> Answered | Escalated:
     """Release the answer or hand it to a person (module docstring). `sharing` is the
-    check's verdict when the caller ran it. Idempotent: a settled consult returns what
-    it settled to, and a retry or redraft of an escalated one only adds its draft rev
-    (while the escalation is open). IDs derive from the consult."""
+    check's verdict when the caller ran it; `reused_from`, the item whose member answer
+    the draft started from. Idempotent: a settled consult returns what it settled to,
+    and a retry or redraft of an escalated one only adds its draft rev (while the
+    escalation is open), unless the rev was drafted from a member's earlier answer
+    (`_settle_reused`). IDs derive from the consult."""
     session = uow.session
     consult = await consults.get(session, world_id=uow.world_id, consult_id=consult_id)
     settled = settled_result(consult)
@@ -698,18 +882,27 @@ async def settle(
         return Answered(consult_id=consult_id, result_text=settled)
     escalation = await repo.get(session, Escalation, uow.world_id, escalation_id_for(consult_id))
     if escalation is not None:
+        if (
+            reused_from is not None
+            and isinstance(outcome, DraftReady)
+            and escalation.status == "open"
+        ):
+            return await _settle_reused(
+                uow, consult, escalation, outcome, draft_rev, sharing, reused_from
+            )
         added = False
         if isinstance(outcome, DraftReady) and escalation.status == "open":
             await escalations.add_draft(
                 uow, escalation.id, outcome.draft, turn_id=outcome.turn_id, draft_rev=draft_rev
             )
             added = True
+        current = await escalations.current_draft(session, escalation)
         return Escalated(
             consult_id=consult_id,
             escalation_id=escalation.id,
             draft_rev=draft_rev if added else None,
             assignee_ids=escalations.assignee_ids(escalation),
-            reason=release.why_needed(consult),
+            reason=release.why_needed(consult, current.held_reason if current else None),
         )
     if isinstance(outcome, AnswerFailed):
         log.info("consult %s has no draft: %s: %s", consult_id, outcome.reason, outcome.detail)
@@ -719,23 +912,72 @@ async def settle(
         return await _escalate(uow, consult, None, draft_rev)
 
     draft = outcome.draft
+    reused = reused_from is not None
     consult = await consults.record_draft(uow, consult_id, draft, answer_turn_id=outcome.turn_id)
+    if reused_from is not None:
+        consult = await consults.record_drafted_from(uow, consult_id, reused_from)
     mode = (await _parties(session, consult)).mode()
     check: SharingCheck | None = None
-    if release.needs_sharing_check(mode, draft):
+    if release.needs_sharing_check(mode, draft, reused=reused):
         check = sharing or SharingCheck(within_sharing=False, reason=UNCHECKED)
         consult = await consults.record_sharing_check(uow, consult_id, check)
-    match release.decide(mode, draft, check):
+    match release.decide(mode, draft, check, reused=reused):
         case release.Release(answer=text):
             released = result_text("approve", text)
             await consults.release(uow, consult_id, text=released, released_by="auto")
             return Answered(consult_id=consult_id, result_text=released)
-        case release.NeedsHuman():
-            return await _escalate(uow, consult, outcome, draft_rev)
+        case release.NeedsHuman(detail=detail):
+            return await _escalate(
+                uow, consult, outcome, draft_rev, held_reason=detail if reused else None
+            )
+
+
+async def _settle_reused(
+    uow: UnitOfWork,
+    consult: Consult,
+    escalation: Escalation,
+    outcome: DraftReady,
+    draft_rev: int,
+    sharing: SharingCheck | None,
+    reused_from: UUID,
+) -> Answered | Escalated:
+    """A rev of an open item drafted from a member's answer to another item on its card
+    (`use_answer`): decided under the mode and the sharing check toward this
+    counterparty, as a first draft is. Released, it goes out by `auto` and the item
+    closes with no member; held, the rev carries why (`held_reason`)."""
+    draft = outcome.draft
+    consult = await consults.record_drafted_from(uow, consult.id, reused_from)
+    mode = (await _parties(uow.session, consult)).mode()
+    check: SharingCheck | None = None
+    if release.needs_sharing_check(mode, draft, reused=True):
+        check = sharing or SharingCheck(within_sharing=False, reason=UNCHECKED)
+    decision = release.decide(mode, draft, check, reused=True)
+    held = decision.detail if isinstance(decision, release.NeedsHuman) else None
+    await escalations.add_draft(
+        uow, escalation.id, draft, turn_id=outcome.turn_id, draft_rev=draft_rev, held_reason=held
+    )
+    if held is None:
+        released = result_text("approve", draft.answer)
+        await consults.release(uow, consult.id, text=released, released_by="auto")
+        await escalations.resolve_released(uow, escalation.id)
+        return Answered(consult_id=consult.id, result_text=released)
+    log.info("consult %s rev %d needs a person: %s", consult.id, draft_rev, held)
+    return Escalated(
+        consult_id=consult.id,
+        escalation_id=escalation.id,
+        draft_rev=draft_rev,
+        assignee_ids=escalations.assignee_ids(escalation),
+        reason=held,
+    )
 
 
 async def _escalate(
-    uow: UnitOfWork, consult: Consult, outcome: DraftReady | None, draft_rev: int
+    uow: UnitOfWork,
+    consult: Consult,
+    outcome: DraftReady | None,
+    draft_rev: int,
+    *,
+    held_reason: str | None = None,
 ) -> Escalated:
     """Open the consult's escalation with the draft, if any, and route it by the
     answerer's proposal (the default assignee without one)."""
@@ -752,11 +994,16 @@ async def _escalate(
     draft = outcome.draft if outcome is not None else None
     if outcome is not None:
         await escalations.add_draft(
-            uow, escalation.id, outcome.draft, turn_id=outcome.turn_id, draft_rev=draft_rev
+            uow,
+            escalation.id,
+            outcome.draft,
+            turn_id=outcome.turn_id,
+            draft_rev=draft_rev,
+            held_reason=held_reason,
         )
     consult = await consults.mark_needs_human(uow, consult.id)
     routed = await routing.apply_route(uow, escalation, draft.route if draft else None)
-    reason = release.why_needed(consult)
+    reason = release.why_needed(consult, held_reason)
     log.info("consult %s needs a person: %s", consult.id, reason)
     return Escalated(
         consult_id=consult.id,
@@ -877,6 +1124,14 @@ CONSULT_OUTPUT_SCHEMA: Final[JsonObject] = {
     "additionalProperties": False,
 }
 
+# The matcher's structured output, validated as `_Match`.
+MATCH_OUTPUT_SCHEMA: Final[JsonObject] = {
+    "type": "object",
+    "properties": {"same_as": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
+    "required": ["same_as"],
+    "additionalProperties": False,
+}
+
 # The sharing check's structured output, validated as `SharingCheck`.
 SHARING_CHECK_OUTPUT_SCHEMA: Final[JsonObject] = {
     "type": "object",
@@ -893,6 +1148,10 @@ __all__ = [
     "ANSWER_MAX_TOKENS",
     "CONSULT_OUTPUT_SCHEMA",
     "HELD_DECLINED",
+    "MATCH_MAX_EARLIER",
+    "MATCH_MAX_TOKENS",
+    "MATCH_OUTPUT_SCHEMA",
+    "REUSED_CHECK",
     "SHARING_CHECK_MAX_TOKENS",
     "SHARING_CHECK_OUTPUT_SCHEMA",
     "TAKEN_OVER",
@@ -905,19 +1164,23 @@ __all__ = [
     "ConsultSettled",
     "DraftReady",
     "Escalated",
+    "Reuse",
     "SharingCheck",
     "answer",
     "answer_inputs",
     "answer_request",
+    "card_reuse",
     "check_sharing",
     "escalation_id_for",
     "failed_check",
     "failed_output",
     "first_error",
     "held_result",
+    "match_question",
     "output_text",
     "parse_answer",
     "result_text",
+    "reuse_of",
     "settle",
     "settled_result",
     "single_call",

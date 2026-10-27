@@ -196,9 +196,9 @@ async def test_approving_an_outreach_card_creates_its_request(
         "Northlake Characterization Core and Calder Computational. Its ID, for "
         f"get_request_status only (never show IDs to Alex Chen): {request_id}.\n\n"
         "Their progress shows on the request's card in this chat, and anything that needs "
-        "Alex Chen will come up here as a question; you'll be told here when every "
-        "conversation has ended. There's nothing to check now: in a sentence, tell Alex "
-        "Chen it's out and stop."
+        "Alex Chen will come up here as a question; you'll be told here when there's news "
+        "and when every conversation has ended. There's nothing to check now: in a "
+        "sentence, tell Alex Chen it's out and stop."
     )
     async with db_sessionmaker() as session:
         request = await repo.get_required(session, NetworkRequest, world_id, request_id)

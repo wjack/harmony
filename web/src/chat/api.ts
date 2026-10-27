@@ -21,6 +21,14 @@ export function isWorking(detail: ConversationDetail | undefined): boolean {
   return detail !== undefined && (detail.turn_in_flight || detail.queued_message_ids.length > 0);
 }
 
+/**
+ * Claude in the chat is looking at news from the request's conversations. It may write
+ * an update or nothing, so the chat listens and rechecks but shows no spark.
+ */
+export function isLooking(detail: ConversationDetail | undefined): boolean {
+  return detail?.looking === true;
+}
+
 export function useConversation(conversationId: string) {
   const api = useApi();
   return useQuery({
@@ -31,7 +39,8 @@ export function useConversation(conversationId: string) {
           params: { path: { conversation_id: conversationId } },
         }),
       ),
-    refetchInterval: (query) => (isWorking(query.state.data) ? IN_FLIGHT_RECHECK_MS : false),
+    refetchInterval: (query) =>
+      isWorking(query.state.data) || isLooking(query.state.data) ? IN_FLIGHT_RECHECK_MS : false,
   });
 }
 
@@ -165,7 +174,10 @@ export function useRejectCard(conversationId: string) {
   });
 }
 
-/** Answer a question routed to the member inline: the same resolution the Requests inbox sends. */
+/**
+ * Answer a question routed to the member inline: the same resolution the Requests inbox
+ * sends, plus the card's other ticked askers (`also_for`) and its ticked list.
+ */
 export function useResolveQuestion(conversationId: string) {
   const api = useApi();
   const queryClient = useQueryClient();

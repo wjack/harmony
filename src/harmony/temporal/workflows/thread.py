@@ -62,6 +62,17 @@ activity is `finish_run`, which stores its carry and lets Reopen on. Run 1 signa
 request as above; a later run closes the request itself when nothing on it is live
 (`end_round`), and tells the chat.
 
+The request's chat hears of the responder's news (`nudge_chat`, an update look in
+`ConversationWorkflow`): when a responder message crosses, a person's or the
+representative's, and when a run ends. Runs from before this
+(`workflow.patched("chat-home")` false) never nudge.
+
+One answer, many askers: the Update `use_answer` drafts an open consult item's next rev
+from a member's answer to another item on its card. It reserves the rev as a steer's
+rewrite does, and returns; `answer_consult` then writes it with that answer. Released
+under this conversation's checks, the item is settled as by a resolution; held, the rev
+waits for a person like any other. Runs from before this refuse it.
+
 Rep turn ids are `ids.turn_id_for(world, thread, org, side turn)`, as P0's turns are.
 
 Owner: R-temporal.
@@ -114,6 +125,7 @@ with workflow.unsafe.imports_passed_through():
         FinishRunInput,
         NetworkActivities,
         NotifyConversationInput,
+        NudgeChatInput,
         ReassignInput,
         RecordReopenInput,
         RecordSteerInput,
@@ -136,6 +148,7 @@ with workflow.unsafe.imports_passed_through():
         STEER_CONFLICT_ERROR,
         STEER_RUNNING_ERROR,
         THREAD_CLOSED_ERROR,
+        AnswerUsed,
         EscalationResolved,
         NetworkUpdate,
         Reassigned,
@@ -148,6 +161,7 @@ with workflow.unsafe.imports_passed_through():
         ThreadInput,
         ThreadProgress,
         ThreadResult,
+        UseAnswer,
         request_workflow_id,
         update_failure,
     )
@@ -161,6 +175,8 @@ SILENT_TURNS_TO_EXPIRE = 2
 # How long an Edit waits for the item it names to be tracked, when an activity still
 # running may be opening it. An id this run never tracks isn't waited on for longer.
 STEER_OPENING_WAIT = timedelta(seconds=30)
+# Guards the chat nudges (`_nudge_chat`) and `use_answer` for runs started before them.
+CHAT_HOME_PATCH = "chat-home"
 
 
 @dataclass(slots=True)
@@ -325,6 +341,9 @@ class ThreadWorkflow:
         await workflow.wait_condition(
             lambda: not self._tasks and not self._steers and workflow.all_handlers_finished()
         )
+        # Before the request hears the run ended, so a closing request's `closed` turn
+        # comes after the nudge and clears the look it armed.
+        await self._nudge_chat()
         if thread.run == 1:
             await self._signal_request()
         else:
@@ -464,6 +483,31 @@ class ThreadWorkflow:
         while a steer runs for that side."""
         self._check_steer(steer)
 
+    @workflow.update
+    async def use_answer(self, use: UseAnswer) -> AnswerUsed:
+        """Draft the item's next rev from a member's answer to another item on its card
+        (module docstring). Returns once the rev is reserved; an item still being
+        opened is waited for."""
+        await self._ready(use.escalation_id)
+        item = self._check_use(use)
+        if not workflow.patched(CHAT_HOME_PATCH):
+            raise ApplicationError(
+                "this conversation can't take another item's answer",
+                type=INVALID_RESOLUTION_ERROR,
+            )
+        rev = self._reserve(item)
+        assert rev is not None
+        item.redraft_task = self._spawn(self._use(item, rev, use.from_escalation_id))
+        return AnswerUsed(escalation_id=item.escalation_id, draft_rev=rev)
+
+    @use_answer.validator
+    def validate_use_answer(self, use: UseAnswer) -> None:
+        """Reject with `ESCALATION_NOT_OPEN_ERROR` unless the item is open on this thread
+        and not being resolved, and with `INVALID_RESOLUTION_ERROR` unless it is a
+        consult that no rewrite is writing. Accepts an item still being opened."""
+        if not self._pending(use.escalation_id):
+            self._check_use(use)
+
     @workflow.query
     def state(self) -> ThreadProgress:
         return ThreadProgress(
@@ -542,6 +586,18 @@ class ThreadWorkflow:
                 {"by_member_id": str(running.member_id)},
                 type=STEER_RUNNING_ERROR,
             )
+
+    def _check_use(self, use: UseAnswer) -> _Open:
+        item = self._open_item(use.escalation_id)
+        if item.kind != "consult" or item.consult_id is None:
+            raise ApplicationError(
+                "only a question can take an answer", type=INVALID_RESOLUTION_ERROR
+            )
+        if item.redrafting:
+            raise ApplicationError(
+                "Claude is still rewriting this item", type=INVALID_RESOLUTION_ERROR
+            )
+        return item
 
     def _steer_target(self, steer: SteerRequest) -> _Open | None:
         """The steer's item, when it can be rewritten now: tracked, open, the steer's
@@ -645,6 +701,8 @@ class ThreadWorkflow:
             # The row handed the move over with the first message (`append_message`).
             self._side_to_move = other(side)
             self._crossed = True
+            if side == "responder":
+                await self._nudge_chat()
         if any(isinstance(e, MessageSent) and e.message_kind == "close" for e in effects):
             # `CLOSED`, owed should the thread be reopened.
             self._owe(side, result.owed)
@@ -722,7 +780,7 @@ class ThreadWorkflow:
             return side
         self._owe(side, applied.owed, tool_use_id=tool_use_id)
         # `take_over`: the member wrote to the counterparty, who answers next.
-        return self._sent_on(side) if applied.sent else side
+        return await self._sent_on(side) if applied.sent else side
 
     async def _held(self, side: Side, held: MessageHeld, owed: OwedResult | None) -> Side:
         """*Ask*: the representative's message waits for a person. The call's result is
@@ -740,12 +798,29 @@ class ThreadWorkflow:
             self._owe(side, _cut_off(tool_use_id, CUT_OFF_HELD, is_error=True))
             return side
         self._owe(side, applied.owed, tool_use_id=tool_use_id)
-        return self._sent_on(side) if applied.sent else side
+        return await self._sent_on(side) if applied.sent else side
 
-    def _sent_on(self, side: Side) -> Side:
+    async def _sent_on(self, side: Side) -> Side:
         """A person let a message of `side`'s through: the other side answers next."""
         self._crossed = True
+        if side == "responder":
+            await self._nudge_chat()
         return other(side)
+
+    async def _nudge_chat(self) -> None:
+        """Tell the request's chat there's news from the responder. Best effort: a
+        missed nudge only means the chat hears at the end instead."""
+        if not workflow.patched(CHAT_HOME_PATCH):
+            return
+        thread = self._input
+        try:
+            await workflow.execute_activity_method(
+                NetworkActivities.nudge_chat,
+                NudgeChatInput(world_id=thread.world_id, request_id=thread.request_id),
+                **main_activity_options(),
+            )
+        except ActivityError as failed:
+            workflow.logger.warning("couldn't nudge the chat of %s: %s", thread.request_id, failed)
 
     def _track(
         self,
@@ -908,6 +983,51 @@ class ThreadWorkflow:
         finally:
             item.redrafting = False
             item.redraft_task = None
+        return None
+
+    async def _use(self, item: _Open, rev: int, from_escalation_id: UUID) -> SteerFailure | None:
+        """Write rev `rev` of the item from the member's answer to `from_escalation_id`.
+        Released, the item is settled, and the side moves on with the answer as after a
+        resolution; held, the rev waits for a person. A failed draft leaves the item as
+        it was, open."""
+        thread = self._input
+        assert item.consult_id is not None
+        try:
+            decision = await workflow.execute_activity_method(
+                AgentActivities.answer_consult,
+                AnswerConsultInput(
+                    world_id=thread.world_id,
+                    consult_id=item.consult_id,
+                    thread_id=thread.thread_id,
+                    side=item.side,
+                    org_id=item.org_id,
+                    cassette_thread=thread.cassette_thread,
+                    consult_turn=item.consult_turn,
+                    draft_rev=rev,
+                    reuse_from=from_escalation_id,
+                ),
+                **model_activity_options(),
+            )
+        except ActivityError as failed:
+            if not self._stopped(item):
+                workflow.logger.warning(
+                    "answer %d of %s failed: %s", rev, item.escalation_id, failed
+                )
+            return None
+        finally:
+            item.redrafting = False
+            item.redraft_task = None
+        if isinstance(decision, ConsultEscalated):
+            item.add_rev(decision.draft_rev)
+        elif not self._stopped(item):
+            self._settle(
+                item,
+                ResolutionApplied(
+                    resolved=EscalationResolved(escalation_id=item.escalation_id, action="approve"),
+                    owed=decision.owed,
+                    side=item.side,
+                ),
+            )
         return None
 
     def _stopped(self, item: _Open) -> bool:

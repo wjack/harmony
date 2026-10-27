@@ -41,7 +41,7 @@ import functools
 import json
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import date, datetime
 from typing import Final, Literal
 from uuid import UUID
@@ -170,6 +170,11 @@ _MONTHS: Final = (
     "November",
     "December",
 )
+# What a member's answer says in place of an organization the conversation it is reused
+# in may not hear of (`without_org_names`).
+ANOTHER_ORG: Final = "another organization"
+# Capitalised first words too common to stand for an organization on their own.
+_COMMON_FIRST_WORDS: Final = frozenset({"A", "An", "The"})
 
 
 class _Model(BaseModel):
@@ -766,6 +771,65 @@ def long_date(day: date) -> str:
     return f"{_WEEKDAYS[day.weekday()]}, {_MONTHS[day.month - 1]} {day.day}, {day.year}"
 
 
+def short_date(day: date) -> str:
+    """`Oct 26`, the same in every locale."""
+    return f"{_MONTHS[day.month - 1][:3]} {day.day}"
+
+
+# --- Organization names -----------------------------------------------------------------
+
+
+def names(text: str, name: str, *, keep: Iterable[str] | None = None) -> bool:
+    """Whether `text` names the org `name`: in full, in any case, on word boundaries,
+    with any whitespace between its words. With `keep`, also by the first word of a
+    longer name as written, as `without_org_names` replaces it ("Northlake")."""
+    if keep is None:
+        pattern = _full_name(name)
+        return pattern is not None and pattern.search(text) is not None
+    return any(pattern.search(text) for pattern in _name_patterns(name, _first_words(keep)))
+
+
+def without_org_names(text: str, others: Iterable[str], *, keep: Iterable[str] = ()) -> str:
+    """`text` with every name in `others` replaced by `ANOTHER_ORG`: in full, and by the
+    first word of a longer name as written ("Ridgeline" for Ridgeline Fabrication),
+    unless a name in `keep` starts with the same word. What a member wrote for one
+    conversation, before another sees it."""
+    kept = _first_words(keep)
+    for name in sorted(set(others), key=len, reverse=True):
+        for pattern in _name_patterns(name, kept):
+            text = pattern.sub(ANOTHER_ORG, text)
+    return text
+
+
+def _full_name(name: str) -> re.Pattern[str] | None:
+    words = name.split()
+    if not words:
+        return None
+    joined = r"\s+".join(re.escape(word) for word in words)
+    return re.compile(rf"(?<!\w){joined}(?!\w)", re.IGNORECASE)
+
+
+def _name_patterns(name: str, kept_first_words: Collection[str]) -> list[re.Pattern[str]]:
+    full = _full_name(name)
+    if full is None:
+        return []
+    patterns = [full]
+    words = name.split()
+    first = words[0]
+    if (
+        len(words) > 1
+        and first[:1].isupper()
+        and first not in _COMMON_FIRST_WORDS
+        and first not in kept_first_words
+    ):
+        patterns.append(re.compile(rf"(?<!\w){re.escape(first)}(?!\w)"))
+    return patterns
+
+
+def _first_words(org_names: Iterable[str]) -> set[str]:
+    return {name.split()[0] for name in org_names if name.split()}
+
+
 def counterparty_descriptor(kind: str, communities: Sequence[str]) -> str:
     """The identity statement's parenthetical, from network-held facts only (the org's
     kind and its verified communities), never from the counterparty's own text."""
@@ -1072,6 +1136,7 @@ async def _undelivered(
 
 
 __all__ = [
+    "ANOTHER_ORG",
     "COUNTERPARTY_CLOSE",
     "COUNTERPARTY_OPEN",
     "EMPTY_PART",
@@ -1103,6 +1168,7 @@ __all__ = [
     "guidance_text",
     "load_rep_session",
     "long_date",
+    "names",
     "queue_notice",
     "quote_released",
     "quoted",
@@ -1112,6 +1178,8 @@ __all__ = [
     "sent_without_review",
     "sharing_parts",
     "sharing_text",
+    "short_date",
+    "without_org_names",
     "world_date_notice",
     "wrap_counterparty",
 ]
