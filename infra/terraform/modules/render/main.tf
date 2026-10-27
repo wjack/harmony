@@ -11,8 +11,20 @@ terraform {
 }
 
 locals {
-  # Changes here can't affect the app image.
-  ignored_paths = ["docs/**", "infra/**"]
+  # Changes here can't affect the app image: .dockerignore keeps them out of its build
+  # context. Ignoring them saves a rebuild and a redeploy, which would drop every SSE
+  # stream, reset the in-process gate limits and fork worlds onto the new build SHA.
+  # (tests/fixtures/cassettes is in the image, but prod refuses scripted mode.)
+  ignored_paths = [
+    "docs/**",
+    "infra/**",
+    "scripts/**",
+    "tests/**",
+    ".github/**",
+    "Makefile",
+    "compose.yaml",
+    "compose.ci.yaml",
+  ]
 
   database_url = render_postgres.db.connection_info.internal_connection_string
   # Render has no transaction-mode pooler in front of Postgres, so LISTEN and

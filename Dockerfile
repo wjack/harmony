@@ -1,5 +1,9 @@
-# syntax=docker/dockerfile:1.27
+# syntax=docker/dockerfile:1.27@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # check=skip=JSONArgsRecommended
+#
+# The frontend is pinned by digest, as the base images are: Render passes every service
+# env var (the model key and the app's secrets among them) to the build as a build
+# argument, and the frontend image receives them all.
 #
 # One image for the Render web service and the background worker (ARCHITECTURE.md §3,
 # §13). The CMD runs the API; the worker overrides it with `harmony worker`, and the web
@@ -82,5 +86,7 @@ EXPOSE 10000
 # Shell form so ${PORT} expands (Render sets it); exec makes uvicorn PID 1, so it gets
 # SIGTERM directly and shuts down gracefully. X-Forwarded-For is trusted only from
 # private addresses (Render's proxy, Docker's bridge), so a client can't set
-# request.client or the access log's address by forging the header.
-CMD exec uvicorn harmony.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='10.0.0.0/8,172.16.0.0/12,192.168.0.0/16'
+# request.client or the access log's address by forging the header. --workers 1 is
+# explicit because uvicorn otherwise forks $WEB_CONCURRENCY processes, and the gate's
+# unlock, new-session and Reset limits live in one process (LIVE_DEMO_PLAN 3.2, 3.3).
+CMD exec uvicorn harmony.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --proxy-headers --forwarded-allow-ips='10.0.0.0/8,172.16.0.0/12,192.168.0.0/16'

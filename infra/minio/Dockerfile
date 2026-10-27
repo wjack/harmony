@@ -1,3 +1,9 @@
+# syntax=docker/dockerfile:1.27@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+# The same frontend as the app's Dockerfile, so Render's builder doesn't decide which
+# features (COPY --chmod, RUN --mount, HEALTHCHECK --start-interval) it understands.
+# Pinned by digest: Render passes the service's env (MINIO_ROOT_PASSWORD) to the build
+# as build arguments, and the frontend image receives them.
+#
 # MinIO built from source (ARCHITECTURE.md §13). Compose (profile "storage") and the
 # Render private service run this same image.
 #
@@ -65,11 +71,12 @@ COPY --from=build /out/minio /usr/local/bin/minio
 COPY --chmod=0755 entrypoint.sh init.sh /usr/local/bin/
 
 # A fresh named volume copies /data's ownership from the image, so the non-root user
-# can write it. S3_BUCKET matches the app setting of the same name.
+# can write it. A Render disk is mounted root-owned instead, so there is no USER here:
+# entrypoint.sh starts as root only to chown /data, then drops to 10001 (setpriv)
+# before MinIO or init.sh runs. S3_BUCKET matches the app setting of the same name.
 ENV MINIO_UPDATE=off \
     S3_BUCKET=harmony \
     BUCKET_READY_FILE=/tmp/harmony-bucket-ready
-USER 10001:10001
 VOLUME ["/data"]
 EXPOSE 9000 9001
 

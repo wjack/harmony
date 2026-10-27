@@ -19,6 +19,13 @@ resource "temporalcloud_namespace" "this" {
     # Must be turned off in a separate apply before the namespace can be destroyed.
     enable_delete_protection = true
   }
+
+  # The provider's default is 10 minutes. A create that outlives it leaves the
+  # namespace in Temporal Cloud but not in state, so the next apply fails on "already
+  # exists" until the namespace is imported.
+  timeouts {
+    create = "30m"
+  }
 }
 
 # Typed keys in harmony.temporal.search_attributes; RetireWorldWorkflow lists by WorldId.

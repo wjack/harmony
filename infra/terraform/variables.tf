@@ -138,9 +138,9 @@ variable "access_code" {
 }
 
 variable "client_ip_header" {
-  description = "Where the gate reads a visitor's address (CLIENT_IP_HEADER): x-forwarded-for (its rightmost hop, which Render's proxy appends), true-client-ip or cf-connecting-ip. Check it after deploy with `scripts/hosted_check.py --client-key`."
+  description = "Where the gate reads a visitor's address (CLIENT_IP_HEADER): cf-connecting-ip (set by Cloudflare, which all inbound Render web traffic passes through), true-client-ip, or x-forwarded-for (its rightmost hop). On Render the rightmost X-Forwarded-For hop is a proxy (a 10.x load balancer, or a Cloudflare edge), not the visitor. Check it after deploy with `scripts/hosted_check.py --client-key`."
   type        = string
-  default     = "x-forwarded-for"
+  default     = "cf-connecting-ip"
 
   validation {
     condition     = contains(["x-forwarded-for", "true-client-ip", "cf-connecting-ip"], var.client_ip_header)
@@ -151,7 +151,8 @@ variable "client_ip_header" {
 # Hosted spend caps in US dollars (ARCHITECTURE.md §14). The app refuses to boot in prod
 # without the daily, global and client caps, and raises its `global` and today's `daily:`
 # rows to these values at every boot. Lineage and client rows keep the cap they were
-# created with.
+# created with. Sized for Haiku 5.5 in every role (model_override), where a walkthrough
+# costs about $0.05-0.25; raise them with the user before prod returns to Opus.
 
 variable "lineage_budget_usd" {
   description = "Live-model cap per browser session (its lineage); Reset never refills it."
@@ -167,7 +168,7 @@ variable "lineage_budget_usd" {
 variable "client_daily_budget_usd" {
   description = "Live-model cap per known client network per UTC day."
   type        = number
-  default     = 25
+  default     = 10
 
   validation {
     condition     = var.client_daily_budget_usd > 0
@@ -178,7 +179,7 @@ variable "client_daily_budget_usd" {
 variable "daily_budget_usd" {
   description = "Live-model cap per UTC day, across every visitor."
   type        = number
-  default     = 60
+  default     = 20
 
   validation {
     condition     = var.daily_budget_usd > 0
@@ -189,7 +190,7 @@ variable "daily_budget_usd" {
 variable "global_budget_usd" {
   description = "Live-model cap in total. Keep it below the Console workspace's spend limit, so the app's own refusal, which the UI explains, comes first."
   type        = number
-  default     = 250
+  default     = 50
 
   validation {
     condition     = var.global_budget_usd > 0

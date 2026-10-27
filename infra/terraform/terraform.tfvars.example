@@ -25,13 +25,15 @@ anthropic_api_key = ""
 
 # Hosted spend caps, in US dollars.
 # lineage_budget_usd      = 10
-# client_daily_budget_usd = 25
-# daily_budget_usd        = 60
-# global_budget_usd       = 250
+# client_daily_budget_usd = 10
+# daily_budget_usd        = 20
+# global_budget_usd       = 50
 
-# Where the gate reads a visitor's address: x-forwarded-for, true-client-ip or
-# cf-connecting-ip.
-# client_ip_header = "x-forwarded-for"
+# Where the gate reads a visitor's address: cf-connecting-ip (the default; Cloudflare
+# sets it, and all Render web traffic passes through Cloudflare), true-client-ip, or
+# x-forwarded-for (its rightmost hop, a proxy on Render). A value here wins over the
+# default; confirm the source after deploy with scripts/hosted_check.py --client-key.
+# client_ip_header = "cf-connecting-ip"
 
 # Worker capacity and instance types.
 # worker_model_concurrency = 12

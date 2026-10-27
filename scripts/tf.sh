@@ -27,7 +27,15 @@
 # scripts/doctor.sh flags one that isn't.
 #
 # `apply` and `destroy` are refused unless HARMONY_TF_ALLOW_APPLY=1, which is set only
-# once the user has approved the deploy and its spend.
+# once the user has approved the deploy and its spend. They, and `plan -out`, are also
+# refused while infra/terraform differs from origin/main, and `apply <plan>` takes only
+# a plan this script saved from origin/main's current Terraform. Apply the plan the user
+# saw, not a fresh one: a non-interactive shell can't answer Terraform's prompt, and
+# -auto-approve would apply unseen changes.
+#
+#   scripts/tf.sh plan -out=deploy.tfplan     # show the user its summary, never `show -json`
+#   HARMONY_TF_ALLOW_APPLY=1 scripts/tf.sh apply deploy.tfplan
+#   rm infra/terraform/deploy.tfplan          # it holds every secret in plaintext
 set -euo pipefail
 set +x
 umask 077
@@ -37,6 +45,61 @@ env_file="${HARMONY_ENV_FILE:-$repo_root/.env.local}"
 tf_dir="$repo_root/infra/terraform"
 export PATH="$PATH:/opt/homebrew/bin"
 terraform="${TERRAFORM:-terraform}"
+unmerged_ok=${HARMONY_TF_ALLOW_UNMERGED:-0}
+
+# The saved plan this run writes (`plan -out=<file>`) or applies (`apply <file>`), as
+# given: relative to infra/terraform, like Terraform's own -chdir.
+plan_file=""
+case "${1:-}" in
+  plan)
+    previous=""
+    for arg in "${@:2}"; do
+      case $arg in
+        -out=* | --out=*) plan_file=${arg#*=} ;;
+      esac
+      [[ $previous == -out || $previous == --out ]] && plan_file=$arg
+      previous=$arg
+    done
+    ;;
+  apply)
+    last=${!#}
+    (($# > 1)) && [[ $last != -* ]] && plan_file=$last
+    ;;
+esac
+
+# Terraform applies the files on disk, or the configuration a saved plan holds; no PR or
+# CI run has seen either unless it is main's. Refuses a tree whose infra/terraform
+# differs from origin/main: edited, on another branch, or with untracked files. Ignored
+# files (terraform.tfvars, the state, saved plans) don't count. Fetch first.
+require_main() {
+  [[ $unmerged_ok == 1 ]] && return 0
+  if ! git -C "$repo_root" rev-parse --verify --quiet origin/main >/dev/null; then
+    echo "tf.sh: refusing 'terraform $1': no origin/main to compare infra/terraform with." >&2
+    exit 2
+  fi
+  if ! git -C "$repo_root" diff --quiet origin/main -- infra/terraform ||
+    [[ -n $(git -C "$repo_root" ls-files --others --exclude-standard -- infra/terraform) ]]; then
+    echo "tf.sh: refusing 'terraform $1': infra/terraform differs from origin/main." >&2
+    echo "tf.sh: run 'git fetch origin main' and plan and apply from main's Terraform;" >&2
+    echo "tf.sh: HARMONY_TF_ALLOW_UNMERGED=1 overrides, with the user's approval." >&2
+    exit 2
+  fi
+}
+
+# Where `plan -out` notes the origin/main Terraform and the plan file it saved: inside
+# .git, so it is never committed and never counts as an untracked file.
+plan_record() {
+  echo "$(git -C "$repo_root" rev-parse --absolute-git-dir)/harmony-tfplans/$(basename "$plan_file")"
+}
+
+# origin/main's infra/terraform tree and the saved plan's contents, as git object IDs.
+plan_fingerprint() {
+  local path=$plan_file
+  [[ $path == /* ]] || path="$tf_dir/$path"
+  printf '%s %s\n' \
+    "$(git -C "$repo_root" rev-parse --verify --quiet origin/main:infra/terraform)" \
+    "$(git -C "$repo_root" hash-object --no-filters -- "$path" 2>/dev/null)"
+}
 
 case "${1:-}" in
   apply | destroy)
@@ -45,6 +108,20 @@ case "${1:-}" in
       echo "tf.sh: set HARMONY_TF_ALLOW_APPLY=1 once the user has approved the deploy." >&2
       exit 2
     fi
+    require_main "$1"
+    # A saved plan holds the configuration it was made from, which may be a branch's;
+    # the tree on disk now says nothing about it.
+    if [[ -n $plan_file && $unmerged_ok != 1 ]]; then
+      record="$(plan_record)"
+      if [[ ! -f $record || $(cat "$record") != "$(plan_fingerprint)" ]]; then
+        echo "tf.sh: refusing 'terraform apply $plan_file': tf.sh didn't save it from" >&2
+        echo "tf.sh: origin/main's current Terraform. Plan again: scripts/tf.sh plan -out=$plan_file" >&2
+        exit 2
+      fi
+    fi
+    ;;
+  plan)
+    [[ -z $plan_file ]] || require_main "plan -out"
     ;;
 esac
 
@@ -86,9 +163,11 @@ else
 fi
 
 # State written before umask 077, or by Terraform run some other way, gets 600 too.
+# So does a saved plan (`plan -out=deploy.tfplan`), which holds every variable and
+# generated secret in plaintext: delete it once applied.
 protect_state() {
   local file
-  for file in "$tf_dir"/terraform.tfstate*; do
+  for file in "$tf_dir"/terraform.tfstate* "$tf_dir"/*.tfplan "$tf_dir"/tfplan; do
     [[ -f $file ]] && chmod 600 "$file"
   done
   return 0
@@ -97,4 +176,11 @@ protect_state() {
 status=0
 "$terraform" -chdir="$tf_dir" "$@" || status=$?
 protect_state
+if [[ $status == 0 && -n $plan_file && $unmerged_ok != 1 ]]; then
+  record="$(plan_record)"
+  case $1 in
+    plan) mkdir -p "$(dirname "$record")" && plan_fingerprint >"$record" ;;
+    apply) rm -f "$record" ;; # Terraform won't apply a plan twice anyway
+  esac
+fi
 exit "$status"

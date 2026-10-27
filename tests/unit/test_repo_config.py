@@ -217,6 +217,13 @@ def test_the_image_trusts_forwarded_headers_from_private_addresses_only() -> Non
     assert all(network.is_private for network in networks), allowed
 
 
+def test_the_image_runs_one_api_process() -> None:
+    """The gate's limits live in process (one web process), and uvicorn forks
+    $WEB_CONCURRENCY workers unless --workers is given."""
+    argv = _cmd((ROOT / "Dockerfile").read_text())
+    assert argv[argv.index("--workers") + 1] == "1"
+
+
 def _compose_smoke_value(name: str) -> str:
     script = (ROOT / "scripts" / "compose_smoke.sh").read_text()
     match = re.search(rf"^export {name}=(\S+)$", script, re.M)
