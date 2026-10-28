@@ -47,10 +47,11 @@ policy:
   autonomy: auto
   sharing_description: >-
     Our external academic price list with its published fees and terms, what is open
-    on the public instrument calendar and how booking works, sample-prep, air-free
-    handling and delivery requirements (our glovebox, what we supply, and which
-    holders fit our instruments, Ridgeline's included), and typical turnaround. Not:
-    other clients or their bookings, staff notes, or off-list pricing.
+    on the public instrument calendar and how booking works, the customer's own quote
+    and booking, sample-prep, air-free handling and delivery requirements (our
+    glovebox, who receives deliveries, what we supply, and which holders fit our
+    instruments, Ridgeline's included), and typical turnaround. Not: other clients or
+    their bookings, staff notes, or off-list pricing.
   routing_prompt: >-
     Instrument scheduling and off-list pricing exceptions go to Helen. Sample-prep and
     air-free handling questions go to Raj. Anything over $5,000 needs Helen.

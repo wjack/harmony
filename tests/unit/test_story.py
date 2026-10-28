@@ -180,10 +180,11 @@ def test_northlake_shares_its_published_terms_but_not_other_clients() -> None:
     northlake = _org(load_scenario("harmony-demo"), "northlake")
     assert _flat(northlake.policy.sharing_description) == (
         "Our external academic price list with its published fees and terms, what is open "
-        "on the public instrument calendar and how booking works, sample-prep, air-free "
-        "handling and delivery requirements (our glovebox, what we supply, and which "
-        "holders fit our instruments, Ridgeline's included), and typical turnaround. Not: "
-        "other clients or their bookings, staff notes, or off-list pricing."
+        "on the public instrument calendar and how booking works, the customer's own quote "
+        "and booking, sample-prep, air-free handling and delivery requirements (our "
+        "glovebox, who receives deliveries, what we supply, and which holders fit our "
+        "instruments, Ridgeline's included), and typical turnaround. Not: other clients or "
+        "their bookings, staff notes, or off-list pricing."
     )
 
 

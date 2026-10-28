@@ -80,7 +80,7 @@ The orgs' records answer what each counterparty is likely to ask, within what th
 
 - **Summary:** a shared-instrument facility at Northlake University, open to external academic and industry users: powder XRD (Bruker D8, air-free dome holders), SEM with EDS (Thermo Apreo 2) and XPS. Turnaround is usually 5–10 business days, with priority XRD blocks for a published fee. It doesn't do synthesis, sample shipping or interpretation beyond standard reports.
 - **Instructions:** consult the core for prices, availability and anything else, and never guess. Once its side has said a slot is open, it may confirm a booking at published prices (discounts and the priority fee included). Never discuss other clients or their bookings.
-- **Sharing** (spec §3): "Our external academic price list with its published fees and terms, what is open on the public instrument calendar and how booking works, sample-prep, air-free handling and delivery requirements (our glovebox, what we supply, and which holders fit our instruments, Ridgeline's included), and typical turnaround. Not: other clients or their bookings, staff notes, or off-list pricing."
+- **Sharing** (spec §3): "Our external academic price list with its published fees and terms, what is open on the public instrument calendar and how booking works, the customer's own quote and booking, sample-prep, air-free handling and delivery requirements (our glovebox, who receives deliveries, what we supply, and which holders fit our instruments, Ridgeline's included), and typical turnaround. Not: other clients or their bookings, staff notes, or off-list pricing."
 - **Members:**
 
   | Slug | Name | Title | Role | Profile |
