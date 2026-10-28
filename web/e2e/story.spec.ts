@@ -49,7 +49,7 @@ async function openFromSidebar(page: Page, name: string): Promise<void> {
 
 /** The network view is the demo's, opened from the demo bar. */
 async function openNetworkView(page: Page): Promise<void> {
-  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network" }).click();
+  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
 }
 
 /** Opens a chat from the sidebar's Recents, below the requests that share its scroll area. */

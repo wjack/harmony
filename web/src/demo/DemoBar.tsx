@@ -71,7 +71,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
         />
         {session !== null && (
           <BarButton
-            label="Network"
+            label="Network view"
             labelClassName="@max-[504px]/who:hidden"
             onClick={() => {
               void navigate("/network");

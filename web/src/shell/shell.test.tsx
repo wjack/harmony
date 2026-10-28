@@ -370,7 +370,7 @@ it("keeps the full sidebar from a 900px window", async () => {
 it("opens the network view from the demo bar, not the sidebar", async () => {
   const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
   expect(screen.queryByRole("link", { name: "Network" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Network" }));
+  fireEvent.click(screen.getByRole("button", { name: "Network view" }));
   expect(await screen.findByText("Network at /network")).toBeTruthy();
   dispatcher.stop();
 });
