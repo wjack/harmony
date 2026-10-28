@@ -13,8 +13,9 @@
 
 Read from the world's scenario (`scenarios/<name>/story.yaml`, E5): the suggested
 opening message for the composer (for the story's sender), the recipients the story
-expects (for the sender's org, whose request it is), the world's date, and the
-walkthrough steps. Payload-free `demo.notice` / `demo.needs_human` events move
+expects (for the sender's org, whose request it is), who's on the network (the story's
+summary over every org, for "What's on screen"), the world's date, and the walkthrough
+steps. Payload-free `demo.notice` / `demo.needs_human` events move
 the walkthrough along; this route is what it reads.
 
 Owner: E4, reading E5's `story.yaml` (U1 builds the demo bar and walkthrough).
@@ -74,12 +75,26 @@ class StoryStep(_View):
     done_on: str | None
 
 
+class StoryOrg(_View):
+    org: OrgRef
+    # The org's category (`orgs.kind`): research, characterization, fabrication, ...
+    kind: str
+
+
+class StoryNetwork(_View):
+    """Who's on the network, for "What's on screen": the story's summary and every org."""
+
+    summary: str
+    orgs: list[StoryOrg]
+
+
 class DemoStory(_View):
     scenario: str
     world_date: date
     acting_as: MemberRef
     suggested_message: str | None
     suggested_recipients: list[OrgRef]
+    network: StoryNetwork | None
     steps: list[StoryStep]
 
 
@@ -117,6 +132,7 @@ async def get_story(actor: ActorDep, sessionmaker: SessionmakerDep) -> DemoStory
                 acting_as=acting_as,
                 suggested_message=None,
                 suggested_recipients=[],
+                network=None,
                 steps=[],
             )
         members = await _members_by_slug(db, actor, story)
@@ -131,6 +147,7 @@ async def get_story(actor: ActorDep, sessionmaker: SessionmakerDep) -> DemoStory
             if sender_row is not None and sender_row.org_id == actor.org_id
             else []
         )
+        network = await story_network(db, actor.world_id, story)
     return DemoStory(
         scenario=world.scenario,
         world_date=today,
@@ -142,6 +159,7 @@ async def get_story(actor: ActorDep, sessionmaker: SessionmakerDep) -> DemoStory
             else None
         ),
         suggested_recipients=recipients,
+        network=network,
         steps=[
             StoryStep(
                 id=step.id,
@@ -248,6 +266,17 @@ async def suggested_orgs(db: AsyncSession, world_id: UUID, story: StorySpec) -> 
         )
     }
     return [org_ref(rows[slug]) for slug in story.suggested_recipients if slug in rows]
+
+
+async def story_network(db: AsyncSession, world_id: UUID, story: StorySpec) -> StoryNetwork | None:
+    """The story's summary of the network, with every org in the world; None without one."""
+    if story.network is None:
+        return None
+    orgs = await db.scalars(repo.in_world(Org, world_id).order_by(Org.name))
+    return StoryNetwork(
+        summary=story.network,
+        orgs=[StoryOrg(org=org_ref(org), kind=org.kind) for org in orgs],
+    )
 
 
 async def _chat_openers(db: AsyncSession, world_id: UUID, chat_id: UUID) -> list[DemoWhoseOrg]:

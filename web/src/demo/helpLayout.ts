@@ -92,7 +92,7 @@ function cost({ out, aside }: { out: number; aside: number }): number {
 export function placeCallouts(
   specs: readonly CalloutSpec[],
   viewport: Size,
-  /** Anything else callouts must keep off: the "?", the overlay's own Got it bar. */
+  /** Anything else callouts and their arrows keep off: the "?", the network card and Got it bar. */
   obstacles: readonly Box[] = [],
 ): Placement[] {
   const placed: { box: Box; arrow: Point[] }[] = [];
@@ -103,6 +103,7 @@ export function placeCallouts(
     (a, b) => Number(a.extra === true) - Number(b.extra === true) || edgeRoom(a, viewport) - edgeRoom(b, viewport),
   );
   const keepOff = [...specs.map((spec) => spec.target), ...obstacles].map((box) => grow(box, SPACE));
+  const blocked = obstacles.map((box) => grow(box, RING));
   const ring = ringDistance(specs.map((spec) => spec.target));
   for (const spec of order) {
     const others = specs.filter((other) => other !== spec).map((other) => grow(other.target, ring));
@@ -112,7 +113,7 @@ export function placeCallouts(
       // Neither its arrow nor an earlier one may cross a callout or another control.
       const curve = arrowCurve(spec, box, ring + TIP);
       const arrow = SAMPLES.map((t) => pointOn(curve, t));
-      const crossed = [...others, ...placed.map((other) => grow(other.box, RING))];
+      const crossed = [...others, ...blocked, ...placed.map((other) => grow(other.box, RING))];
       if (arrow.some((point) => crossed.some((other) => contains(other, point)))) continue;
       if (placed.some((other) => other.arrow.some((point) => contains(grow(box, RING), point)))) continue;
       placed.push({ box, arrow });

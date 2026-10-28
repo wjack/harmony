@@ -13,6 +13,7 @@ Members have a prose **profile** that routing reads, and no spending limits. Eve
 
 - `suggested_message`: "Find a lab that can run XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders by {+11d}, and get an airtight sample holder made for the transfer. Budget is about $2,000."
 - `suggested_recipients`: northlake, ridgeline, calder (ringed and tagged in the network view).
+- `network`: one sentence on who's on the network, shown in What's on screen's "This network" card over every org.
 
 The beats (spec §10), and what in the content makes each one happen. Nothing forces them: the cassettes play them, and a live model should arrive at the same place.
 

@@ -33,8 +33,8 @@ const WINDOWS = [
       reset: box(1333, 7, 1401, 31),
       requests: box(9, 236, 264, 268),
     }),
-    // The "?" and the "Got it" bar.
-    obstacles: [box(1405, 7, 1429, 31), box(499, 836, 941, 876)],
+    // The "?", and the network card over the "Got it" bar.
+    obstacles: [box(1405, 7, 1429, 31), box(490, 640, 950, 876)],
     placed: ["demo-controls", "network", "acting-as", "budget", "reset", "requests"],
   },
   {
@@ -48,7 +48,7 @@ const WINDOWS = [
       reset: box(793, 7, 861, 31),
       requests: box(7, 236, 42, 268),
     }),
-    obstacles: [box(865, 7, 889, 31), box(229, 636, 671, 676)],
+    obstacles: [box(865, 7, 889, 31), box(220, 440, 680, 676)],
     // Short of room, the budget's callout, an extra, gives way.
     placed: ["demo-controls", "network", "acting-as", "reset", "requests"],
   },

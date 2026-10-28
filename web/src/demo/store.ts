@@ -1,22 +1,18 @@
 import { createStore, useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { DemoStory } from "../api/types";
-
-/** The visitor's walkthrough preferences (ARCHITECTURE.md §11.5); kept in this browser. */
-export interface WalkthroughPrefs {
-  /** Show the suggested opening message as a chip under Alex's composer. */
-  showSuggestedMessage: boolean;
-  /** Ring and tag the story's suggested recipients in the network view. */
-  highlightSuggestedRecipients: boolean;
-}
-
-interface DemoState extends WalkthroughPrefs {
+interface DemoState {
   /** The intro opens by itself until the visitor has seen it once. */
   welcomed: boolean;
   introOpen: boolean;
   controlsOpen: boolean;
   resetConfirmOpen: boolean;
+  /** Demo controls' "See user guide" asks the demo bar's "?" for "What's on screen". */
+  userGuide: boolean;
+  /** "See this guide any time", pointing at the "?", once the tour's guide has closed. */
+  guideTip: boolean;
+  /** That tip has shown in this browser: it shows once. */
+  guideTipShown: boolean;
   /**
    * The first visit's handoffs, one after the other: the intro's Next asks for "What's
    * on screen" once the demo is up as Alex, and closing that asks New chat to put the
@@ -31,12 +27,13 @@ const STORAGE_KEY = "harmony.demo";
 export const demoStore = createStore<DemoState>()(
   persist(
     (): DemoState => ({
-      showSuggestedMessage: true,
-      highlightSuggestedRecipients: true,
       welcomed: false,
       introOpen: false,
       controlsOpen: false,
       resetConfirmOpen: false,
+      userGuide: false,
+      guideTip: false,
+      guideTipShown: false,
       introHelp: false,
       prefillSuggestion: false,
     }),
@@ -44,42 +41,13 @@ export const demoStore = createStore<DemoState>()(
       name: STORAGE_KEY,
       // A storage that throws (private windows) leaves the state in memory only.
       storage: createJSONStorage(() => localStorage),
-      partialize: ({ showSuggestedMessage, highlightSuggestedRecipients, welcomed }) => ({
-        showSuggestedMessage,
-        highlightSuggestedRecipients,
-        welcomed,
-      }),
+      partialize: ({ welcomed, guideTipShown }) => ({ welcomed, guideTipShown }),
     },
   ),
 );
 
 export function useDemoState<T>(selector: (state: DemoState) => T): T {
   return useStore(demoStore, selector);
-}
-
-/** The visitor's walkthrough switches. `useDemoStory()` already applies them. */
-export function useWalkthroughPrefs(): WalkthroughPrefs {
-  const showSuggestedMessage = useDemoState((state) => state.showSuggestedMessage);
-  const highlightSuggestedRecipients = useDemoState((state) => state.highlightSuggestedRecipients);
-  return { showSuggestedMessage, highlightSuggestedRecipients };
-}
-
-/**
- * The story as the visitor chose to see it: no suggested message (so no chip under the
- * composer) or no suggested recipients (so no rings in the network view) when the
- * matching switch in Demo controls is off.
- */
-export function applyWalkthroughPrefs(story: DemoStory, prefs: WalkthroughPrefs): DemoStory {
-  if (prefs.showSuggestedMessage && prefs.highlightSuggestedRecipients) return story;
-  return {
-    ...story,
-    suggested_message: prefs.showSuggestedMessage ? story.suggested_message : null,
-    suggested_recipients: prefs.highlightSuggestedRecipients ? story.suggested_recipients : [],
-  };
-}
-
-export function setWalkthroughPref(key: keyof WalkthroughPrefs, value: boolean): void {
-  demoStore.setState({ [key]: value });
 }
 
 export function openIntro(): void {
@@ -104,6 +72,24 @@ export function finishIntroHelp(): void {
 /** New chat has put the suggested message in its composer. */
 export function prefilledSuggestion(): void {
   demoStore.setState({ prefillSuggestion: false });
+}
+
+/** Demo controls' "See user guide": the modal gives way to "What's on screen". */
+export function seeUserGuide(): void {
+  demoStore.setState({ controlsOpen: false, userGuide: true });
+}
+
+export function closeUserGuide(): void {
+  demoStore.setState({ userGuide: false });
+}
+
+/** The guide closed after the intro or Demo controls opened it: point at the "?", once. */
+export function pointOutGuide(): void {
+  if (!demoStore.getState().guideTipShown) demoStore.setState({ guideTip: true, guideTipShown: true });
+}
+
+export function dismissGuideTip(): void {
+  demoStore.setState({ guideTip: false });
 }
 
 export function openDemoControls(): void {
