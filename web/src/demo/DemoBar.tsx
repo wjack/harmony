@@ -21,6 +21,7 @@ import { Avatar, cx } from "../shell/ui";
 import { useFollowAlert } from "./accounts";
 import { alertsByAccount, clearAlertsFor, useNeedsHumanAlerts, type AccountAlerts } from "./alerts";
 import { findMember, orgName } from "./cast";
+import { HelpButton } from "./HelpOverlay";
 import { openDemoControls, openResetConfirm } from "./store";
 import { useOthersWaiting } from "./waiting";
 import { formatWorldDate, useWorldDate } from "./worldClock";
@@ -39,12 +40,13 @@ interface DemoBarProps {
  * product on purpose, so demo controls are never mistaken for Claude: who you're acting
  * as, the network view (which watches every side, so it is the demo's, not the
  * product's, and counts the other accounts with an item waiting on them), the world
- * date, budget, cross-account alerts and Reset.
+ * date, budget, cross-account alerts and Reset, and a "?" that says what the demo's key
+ * controls do (HelpOverlay.tsx; each control it points at carries `data-help`).
  *
- * The budget and Reset are pinned right and never leave it. Who and when take the room
- * the alerts leave, measured on their own group: short of it, their labels drop first
- * ("World date", "Acting as", the org's full name, "Demo controls"), and only then are
- * they cut at their end.
+ * The budget, Reset and "?" are pinned right and never leave it. Who and when take the
+ * room the alerts leave, measured on their own group: short of it, their labels drop
+ * first ("World date", "Acting as", the org's full name, "Demo controls"), and only
+ * then are they cut at their end.
  */
 export function DemoBar({ session, offline = false, reconnecting = false }: DemoBarProps) {
   const worldDate = useWorldDate(session?.world);
@@ -66,6 +68,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
         </span>
         <BarButton
           label="Demo controls"
+          help="demo-controls"
           labelClassName="@max-[504px]/who:hidden"
           onClick={() => {
             openDemoControls();
@@ -75,6 +78,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
         {session !== null && (
           <BarButton
             label="Network view"
+            help="network"
             labelClassName="@max-[504px]/who:hidden"
             onClick={() => {
               void navigate("/network");
@@ -122,8 +126,14 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
       <div className="flex shrink-0 items-center gap-1">
         <Budget />
         {session !== null && (
-          <BarButton label="Reset" onClick={openResetConfirm} icon={<RotateCcw size={13} strokeWidth={1.75} />} />
+          <BarButton
+            label="Reset"
+            help="reset"
+            onClick={openResetConfirm}
+            icon={<RotateCcw size={13} strokeWidth={1.75} />}
+          />
         )}
+        <HelpButton />
       </div>
     </header>
   );
@@ -134,7 +144,11 @@ function ActingAs({ member }: { member: MemberView }) {
   const org = member.org.name;
   const short = shortOrgName(org);
   return (
-    <span className="flex min-w-0 shrink-0 items-center gap-2 px-1.5" title="The account you're acting as">
+    <span
+      data-help="acting-as"
+      className="flex min-w-0 shrink-0 items-center gap-2 px-1.5"
+      title="The account you're acting as"
+    >
       <Avatar name={member.name} seed={member.org.slug} size={18} />
       <span className="text-demo-muted @max-[700px]/who:hidden">Acting as</span>
       <span className="font-medium">{member.name}</span>
@@ -167,6 +181,7 @@ function Budget() {
       <Divider />
       <button
         type="button"
+        data-help="budget"
         title="This session's live-model budget"
         onClick={() => {
           openDemoControls();
@@ -200,6 +215,7 @@ function Divider() {
 
 function BarButton({
   label,
+  help,
   labelClassName,
   onClick,
   icon,
@@ -207,6 +223,8 @@ function BarButton({
   badgeTitle,
 }: {
   label: string;
+  /** The key "What's on screen" finds it by. */
+  help?: string;
   /** Hides the label where the bar is short of room; the icon stays, and the button keeps its name. */
   labelClassName?: string;
   onClick: () => void;
@@ -219,6 +237,7 @@ function BarButton({
     <button
       type="button"
       aria-label={label}
+      data-help={help}
       title={badge > 0 ? badgeTitle : undefined}
       onClick={onClick}
       className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-2 text-demo-text transition-colors hover:bg-demo-surface"

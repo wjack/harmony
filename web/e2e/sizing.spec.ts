@@ -8,6 +8,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { enterDemo } from "./firstVisit";
 import { unlock } from "./unlock";
 
 const WIDTHS = [880, 900, 1000, 1075, 1280] as const;
@@ -123,8 +124,7 @@ test("the chat keeps its gutter, Reset its place and the sidebar its width, from
 }) => {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
-  await page.getByRole("button", { name: /^Find a lab that can run XRD/ }).click();
+  await enterDemo(page);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page).toHaveURL(/\/chat\//);
 
@@ -141,7 +141,7 @@ test("the chat keeps its gutter, Reset its place and the sidebar its width, from
 async function startOnNetwork(page: Page): Promise<void> {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+  await enterDemo(page);
   await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
   await expect(page).toHaveURL(/\/network/);
 }

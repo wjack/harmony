@@ -203,6 +203,8 @@ Ref: [Export data modal](https://mobbin.com/screens/bbabc6b5-8534-45d8-bdca-a19c
   - a bordered list box;
   - footer with a white "Cancel" and a black primary button.
 - **"Not available in this prototype" popup:** the same modal shell, with the spark icon, "This isn't part of the Harmony prototype", one line on what *is* in scope, and an "OK" button.
+- **Intro** ("Meet Harmony", first visit only): the same shell with the spark, three sentences on what Harmony is, and one black **Next**, which starts the demo as Alex and opens What's on screen; closing that leaves the suggested message in the composer.
+- **What's on screen** (the demo bar's round "?", at its right end): demo chrome over the whole app, all at once: a light scrim with each key control cut out and ringed in the accent colour, joined by a dashed curved arrow to a small dark callout in the demo bar's colours (under the bar's controls, right of the sidebar's Requests). A dark pill at the bottom says "Click anywhere or press Esc to close", with a light **Got it**.
 - **Demo controls modal:** the same shell, with these sections:
   - Account (persona switcher);
   - World (reset; replaying the recorded big run arrives with the network world in P3);

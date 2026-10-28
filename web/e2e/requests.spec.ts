@@ -16,6 +16,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { enterDemo } from "./firstVisit";
 import { unlock } from "./unlock";
 
 /** Long enough for several model turns on both sides (representative, consult, sharing check). */
@@ -36,7 +37,7 @@ test.describe.configure({ timeout: 6 * 60_000 });
 async function startOnNetwork(page: Page): Promise<void> {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+  await enterDemo(page);
   await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
   await expect(page).toHaveURL(/\/network/);
 }

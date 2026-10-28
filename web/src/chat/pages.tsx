@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router";
 
 import { useDemoStory, useSession } from "../app/queries";
 import { useHarmonySettings, useSettingsLive } from "../customize/api";
+import { prefilledSuggestion, useDemoState } from "../demo/store";
 import { useUnavailable } from "../shell/unavailable";
 import { useStartConversation } from "./api";
 import { ChatScreen } from "./ChatScreen";
@@ -32,11 +33,15 @@ export function NewChatPage() {
     story.data !== undefined && member !== null && story.data.acting_as.id === member.id
       ? story.data.suggested_message
       : null;
+  // A first visit ends with the suggestion waiting in the composer (demo/Intro.tsx).
+  const prefill = useDemoState((state) => state.prefillSuggestion) ? suggestion : null;
 
   return (
     <NewChat
       memberName={member?.name ?? null}
       suggestion={suggestion}
+      prefill={prefill}
+      onPrefilled={prefilledSuggestion}
       sending={start.isPending || unknownMode}
       error={start.isError ? describeFailure(start.error) : null}
       sendMode={{ override, org_default: orgDefault, effective: override ?? orgDefault ?? false }}

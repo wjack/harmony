@@ -7,8 +7,9 @@ import { useSession } from "../app/queries";
 import { useLeaving } from "../demo/accounts";
 import { DemoBar } from "../demo/DemoBar";
 import { DemoControls } from "../demo/DemoControls";
+import { Intro } from "../demo/Intro";
 import { ResetDemoDialog } from "../demo/ResetDemoDialog";
-import { openDemoControls, useDemoState } from "../demo/store";
+import { openIntro, useDemoState } from "../demo/store";
 import { Landing } from "./Landing";
 import { Locked } from "./Locked";
 import { Sidebar } from "./Sidebar";
@@ -31,9 +32,9 @@ export function AppLayout() {
   const failures = useRealtime((state) => state.failures);
   const welcomed = useDemoState((state) => state.welcomed);
 
-  // The demo controls introduce the demo on a visitor's first visit.
+  // The intro opens on a visitor's first visit.
   useEffect(() => {
-    if (!welcomed && (status === "no-session" || status === "open")) openDemoControls();
+    if (!welcomed && (status === "no-session" || status === "open")) openIntro();
   }, [welcomed, status]);
 
   // Once this tab has shown the landing, keep it up while the session starts, rather
@@ -44,6 +45,7 @@ export function AppLayout() {
   const landing = (
     <ShellFrame session={null}>
       <Landing />
+      <Intro />
       <DemoControls session={null} />
     </ShellFrame>
   );
@@ -55,6 +57,7 @@ export function AppLayout() {
     if (failures > 0) {
       return (
         <ShellFrame session={null} status="offline">
+          <Intro />
           <DemoControls session={null} />
         </ShellFrame>
       );
@@ -109,6 +112,7 @@ function LiveShell() {
       streamDown={streamDown}
     >
       {leaving ? <div className="h-full" aria-busy="true" /> : <Outlet />}
+      <Intro />
       <DemoControls session={current} />
       <ResetDemoDialog />
     </ShellFrame>
@@ -134,11 +138,14 @@ interface ShellFrameProps {
   sidebar?: { collapsed?: boolean; defaultMenuOpen?: boolean };
 }
 
-/** Demo bar, sidebar and the page area. The gallery renders it around fixtures. */
+/**
+ * Demo bar, sidebar and the page area. The gallery renders it around fixtures. It is
+ * the scope "What's on screen" looks for its controls in.
+ */
 export function ShellFrame({ session, status = "live", streamDown = false, children, sidebar }: ShellFrameProps) {
   const live = status === "live";
   return (
-    <div className="flex h-full min-h-0 flex-col bg-canvas">
+    <div data-help-scope className="flex h-full min-h-0 flex-col bg-canvas">
       <DemoBar session={session} offline={status === "offline"} reconnecting={live && streamDown} />
       <div className="relative flex min-h-0 flex-1">
         <div

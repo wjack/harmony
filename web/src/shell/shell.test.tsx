@@ -38,7 +38,14 @@ beforeEach(() => {
     },
   );
   window.localStorage.clear();
-  demoStore.setState({ welcomed: false, controlsOpen: false, resetConfirmOpen: false });
+  demoStore.setState({
+    welcomed: false,
+    introOpen: false,
+    controlsOpen: false,
+    resetConfirmOpen: false,
+    introHelp: false,
+    prefillSuggestion: false,
+  });
   sidebarStore.setState({ collapsed: false });
   toastStore.setState({ toasts: [] });
   clearAllAlerts();
@@ -55,19 +62,23 @@ it("introduces the demo, starts it as Alex and switches accounts over a fresh st
   const { dispatcher, sources } = renderShell(server);
   await act(() => dispatcher.start());
 
-  // First visit, no session: the landing, with the demo controls open over it.
+  // First visit, no session: the landing, with the intro open over it.
   // (The open modal hides the page from the accessibility tree, so find it by text.)
   expect(screen.getByText("Welcome to Harmony")).toBeTruthy();
-  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
+  const intro = await screen.findByRole("dialog", { name: "Meet Harmony" });
   expect(sources.opened).toHaveLength(0);
 
-  fireEvent.click(within(controls).getByRole("button", { name: "Try the suggested request" }));
+  fireEvent.click(within(intro).getByRole("button", { name: "Next" }));
 
-  // Starting creates the session; the shell comes up as Alex with Recents.
+  // Starting creates the session; the shell comes up as Alex with Recents, under "What's
+  // on screen" (walkthrough.test.tsx follows it to the composer).
+  const help = await screen.findByRole("dialog", { name: "What's on screen" });
+  expect(screen.queryByRole("dialog", { name: "Meet Harmony" })).toBeNull();
+  expect(demoStore.getState().welcomed).toBe(true);
+  fireEvent.keyDown(help, { key: "Escape" });
   await screen.findByRole("button", { name: "Account: Alex Chen" });
   expect(await screen.findByText(RECENT)).toBeTruthy();
-  expect(screen.queryByRole("dialog", { name: "Demo controls" })).toBeNull();
-  expect(demoStore.getState().welcomed).toBe(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(sources.opened.map((source) => source.url)).toEqual(["/api/events?after=7&epoch=1"]);
   act(() => {
     sources.latest.accept();

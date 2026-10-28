@@ -126,6 +126,7 @@ export function Sidebar({ member, collapsed: pinned, defaultMenuOpen = false, of
             <NavRow
               to="/requests"
               label="Requests"
+              help="requests"
               collapsed={collapsed}
               Icon={Inbox}
               badge={live ? <RequestsBadge collapsed={collapsed} /> : null}
@@ -186,8 +187,9 @@ function NavRow({
   to,
   end = false,
   showActive = true,
+  help,
   ...row
-}: RowProps & { to: string; end?: boolean; showActive?: boolean }) {
+}: RowProps & { to: string; end?: boolean; showActive?: boolean; help?: string }) {
   // `/requests/:threadId` keeps Requests selected. New chat is an action, so it never
   // shows as the current page, as in the Claude app.
   const active = useMatch({ path: to, end }) !== null && showActive;
@@ -198,6 +200,7 @@ function NavRow({
           to={to}
           end={end}
           aria-label={row.collapsed ? row.label : undefined}
+          data-help={help}
           className={cx(ROW, row.collapsed ? "justify-center" : "px-[5px]", active ? "bg-hover" : "hover:bg-hover")}
         >
           <RowBody {...row} />

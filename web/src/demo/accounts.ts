@@ -305,11 +305,12 @@ function afterRebuild(dispatcher: RealtimeDispatcher, then: () => void): void {
 }
 
 /**
- * Demo controls' "Try the suggested request" (§11.4): starts the visitor's session if
- * there isn't one yet (worlds are created on first interaction, never on page view),
- * acts as the story's member and opens a new chat.
+ * Demo controls' "Try the suggested request" and the intro's Next (§11.4): starts the
+ * visitor's session if there isn't one yet (worlds are created on first interaction,
+ * never on page view), acts as the story's member and opens a new chat. `then` runs
+ * once it has: the intro shows "What's on screen" next.
  */
-export function useEnterDemo() {
+export function useEnterDemo(then?: () => void) {
   const api = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -334,6 +335,7 @@ export function useEnterDemo() {
     onSuccess: (entered) => {
       if (!entered) return;
       closeDemoControls();
+      then?.();
       void navigate("/");
     },
   });
