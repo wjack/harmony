@@ -219,7 +219,10 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
     const before = await claudeTexts(page).count();
     await card.getByRole("button", { name: "Approve and send" }).click();
-    await expect(statusRow(page, CALDER)).toContainText("Not sent", TURNS);
+    // The status card lists only where it went: Calder, left out, isn't on it.
+    await expect(statusRow(page, NORTHLAKE)).toBeVisible(TURNS);
+    await expect(statusRow(page, RIDGELINE)).toBeVisible();
+    await expect(statusRow(page, CALDER)).toHaveCount(0);
     await expect(page.getByRole("region", { name: /^Harmony Network Request / }).getByText("Sent", { exact: true })).toBeVisible();
 
     // Claude says one sentence: it's out, and where progress shows.
