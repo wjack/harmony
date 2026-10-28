@@ -16,6 +16,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { enterDemo } from "./firstVisit";
 import { unlock } from "./unlock";
 
 /** Long enough for several model turns on both sides (representative, consult, sharing check). */
@@ -175,7 +176,7 @@ async function clippedValues(details: Locator): Promise<string[]> {
 test("before any request is in flight, the network view's note sits clear of every card", async ({ page }) => {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+  await enterDemo(page);
   await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
   await expect(page).toHaveURL(/\/network/);
   const note = page.locator("[data-no-request]");
@@ -191,9 +192,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
   await unlock(page);
   await test.step("Alex sends the suggested message", async () => {
     await page.goto("/");
-    await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
-    await page.getByRole("button", { name: /^Find a lab that can run XRD/ }).click();
-    await expect(page.getByRole("textbox", { name: "Write your message to Claude" })).toHaveValue(/^Find a lab/);
+    await enterDemo(page);
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page).toHaveURL(/\/chat\//);
   });

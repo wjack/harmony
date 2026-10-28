@@ -1,0 +1,79 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import { members, sessionAs } from "../fixtures/shell";
+import { renderLive } from "../test/shellHarness";
+import { demoStore } from "./store";
+
+/**
+ * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The live
+ * budget has no box, as when it isn't shown.
+ */
+const BOXES: Record<string, [x: number, y: number, width: number, height: number]> = {
+  "demo-controls": [62, 7, 121, 24],
+  network: [187, 7, 116, 24],
+  "acting-as": [320, 10, 267, 18],
+  reset: [917, 7, 68, 24],
+  requests: [9, 236, 255, 32],
+};
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
+  demoStore.setState({ introOpen: false, controlsOpen: false, resetConfirmOpen: false, introHelp: false });
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const box = BOXES[this.getAttribute("data-help") ?? ""];
+    return box === undefined ? new DOMRect() : new DOMRect(...box);
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+it("says what each key control does from the demo bar's ?, and closes on Escape or a click", async () => {
+  const { dispatcher } = await renderLive(sessionAs(members.alex));
+  const help = screen.getByRole("button", { name: "What's on screen" });
+
+  fireEvent.click(help);
+  const overlay = await screen.findByRole("dialog", { name: "What's on screen" });
+  for (const line of [
+    "You can turn on dangerous permission skipping to stop agents from asking for human intervention.",
+    "Network view lets you see what's going on in the Harmony Network and switch accounts. It's a demo-only feature.",
+    "This is the person and organization you're currently acting as.",
+    "Reset starts a fresh copy of the network, back at the start of the story.",
+    "Requests is an inbox where you receive messages from other Claude agents.",
+  ]) {
+    expect(within(overlay).getByText(line)).toBeTruthy();
+  }
+  // A control that isn't on screen goes without its callout.
+  const shown = within(overlay).getAllByRole("listitem");
+  expect(shown).toHaveLength(5);
+  expect(shown.map((item) => item.textContent).join(" ")).not.toContain("budget");
+  expect(document.activeElement).toBe(within(overlay).getByRole("button", { name: "Got it" }));
+
+  fireEvent.keyDown(overlay, { key: "Escape" });
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  await waitFor(() => {
+    expect(document.activeElement).toBe(help);
+  });
+
+  // Anywhere on it closes it too, the scrim included.
+  fireEvent.click(help);
+  fireEvent.click(await screen.findByRole("dialog", { name: "What's on screen" }));
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  dispatcher.stop();
+});

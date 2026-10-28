@@ -186,7 +186,7 @@ export default [
   },
   {
     title: "Demo controls and reset",
-    description: "Opens on the first visit: the network in thirty seconds, the cast and three ways in.",
+    description: "Opens from the demo bar and the account menu (a first visit opens the intro instead).",
     render: () => <ControlsLauncher />,
   },
 ] satisfies GallerySection[];

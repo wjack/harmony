@@ -26,10 +26,11 @@ function Rings() {
 function renderNewChat() {
   const api = createApiClient({ baseUrl: "http://harmony.test", fetch: fixtureFetch(shellRoutes()) });
   const queryClient = createQueryClient();
+  const sources = new EventSources();
   const dispatcher = new RealtimeDispatcher({
     queryClient,
     snapshot: () => fetchStreamSnapshot(api, queryClient),
-    openEventSource: new EventSources().open,
+    openEventSource: sources.open,
     openChannel: () => null,
     reload: vi.fn(),
   });
@@ -59,7 +60,7 @@ function renderNewChat() {
       <RouterProvider router={router} />
     </AppProviders>,
   );
-  return dispatcher;
+  return { dispatcher, sources };
 }
 
 beforeEach(() => {
@@ -74,7 +75,10 @@ beforeEach(() => {
   window.localStorage.clear();
   demoStore.setState({
     welcomed: true,
+    introOpen: false,
     controlsOpen: false,
+    introHelp: false,
+    prefillSuggestion: false,
     showSuggestedMessage: true,
     highlightSuggestedRecipients: true,
   });
@@ -84,9 +88,55 @@ afterEach(() => {
   cleanup();
 });
 
+it("introduces Harmony, shows what's on screen, then leaves the suggested message in the composer", async () => {
+  const message = story.suggested_message ?? "";
+  demoStore.setState({ welcomed: false });
+  const { dispatcher, sources } = renderNewChat();
+  await act(() => dispatcher.start());
+  // The intro opens once the stream is up.
+  act(() => {
+    sources.latest.accept();
+  });
+
+  const intro = await screen.findByRole("dialog", { name: "Meet Harmony" });
+  fireEvent.click(within(intro).getByRole("button", { name: "Next" }));
+
+  // Next enters the demo as Alex (he already is here), then "What's on screen" opens over
+  // his new chat; the composer stays empty until it closes.
+  const help = await screen.findByRole("dialog", { name: "What's on screen" });
+  expect(screen.queryByRole("dialog", { name: "Meet Harmony" })).toBeNull();
+  expect(demoStore.getState().welcomed).toBe(true);
+  expect(document.querySelector("textarea")?.value).toBe("");
+
+  fireEvent.keyDown(help, { key: "Escape" });
+  const composer = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "Write your message to Claude" });
+  await waitFor(() => {
+    expect(composer.value).toBe(message);
+  });
+  // Unsent, with the cursor in it, even once the overlay's focus has settled.
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(document.activeElement).toBe(composer);
+  expect(demoStore.getState().prefillSuggestion).toBe(false);
+
+  // Later, the demo bar's "?" shows the same overlay and fills nothing in.
+  fireEvent.change(composer, { target: { value: "" } });
+  const button = screen.getByRole("button", { name: "What's on screen" });
+  fireEvent.click(button);
+  fireEvent.keyDown(await screen.findByRole("dialog", { name: "What's on screen" }), { key: "Escape" });
+  await waitFor(() => {
+    expect(document.activeElement).toBe(button);
+  });
+  expect(composer.value).toBe("");
+
+  dispatcher.stop();
+});
+
 it("hides the suggestion chip and the recipient rings when their walkthrough switches are off", async () => {
   const message = story.suggested_message ?? "";
-  const dispatcher = renderNewChat();
+  const { dispatcher } = renderNewChat();
   await act(() => dispatcher.start());
 
   // Alex's new chat suggests the story's opening message; the story names its recipients.
@@ -117,7 +167,7 @@ it("hides the suggestion chip and the recipient rings when their walkthrough swi
 });
 
 it("turns Skip approvals on for the world from Demo controls", async () => {
-  const dispatcher = renderNewChat();
+  const { dispatcher } = renderNewChat();
   await act(() => dispatcher.start());
 
   fireEvent.click(await screen.findByRole("button", { name: "Demo controls" }));

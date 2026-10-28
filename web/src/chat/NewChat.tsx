@@ -1,5 +1,5 @@
 import { Code, Coffee, GraduationCap, Lightbulb, PenLine } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { firstName } from "../shell/names";
 import { Spark } from "../shell/ui/Spark";
@@ -23,6 +23,9 @@ export interface NewChatProps extends SendModeProps {
   memberName: string | null;
   /** The walkthrough's suggested opening message, if the story has one. */
   suggestion: string | null;
+  /** Put in the composer once, with the cursor after it; then `onPrefilled` says it's taken. */
+  prefill?: string | null;
+  onPrefilled?: () => void;
   sending: boolean;
   error: string | null;
   /** The organization's default didn't load, so a chat that follows it can't start: load it again. */
@@ -36,11 +39,14 @@ export interface NewChatProps extends SendModeProps {
 /**
  * Claude's new-chat screen: the spark and a serif greeting, the composer, and the
  * starter chips. Harmony adds the walkthrough's suggested message as one more chip: a
- * click fills the composer, and the visitor can edit or ignore it.
+ * click fills the composer, and the visitor can edit or ignore it. A first visit fills
+ * it once by itself (`prefill`).
  */
 export function NewChat({
   memberName,
   suggestion,
+  prefill = null,
+  onPrefilled,
   sending,
   error,
   onRetrySendMode = null,
@@ -51,8 +57,19 @@ export function NewChat({
   hour,
 }: NewChatProps) {
   const [draft, setDraft] = useState("");
+  const [prefilled, setPrefilled] = useState(false);
   const composerRef = useRef<ComposerHandle>(null);
   const salutation = greeting(hour ?? new Date().getHours());
+
+  if (prefill !== null && !prefilled) {
+    setPrefilled(true);
+    setDraft(prefill);
+  }
+  useEffect(() => {
+    if (!prefilled) return;
+    composerRef.current?.focus();
+    onPrefilled?.();
+  }, [prefilled, onPrefilled]);
 
   return (
     <div className="flex h-full min-h-0 flex-col items-center overflow-y-auto px-4">

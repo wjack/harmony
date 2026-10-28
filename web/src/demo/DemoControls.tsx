@@ -11,11 +11,11 @@ import { closeDemoControls, openResetConfirm, setWalkthroughPref, useDemoState }
 import { formatWorldDate, useWorldDate } from "./worldClock";
 
 /**
- * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens on the
- * first visit, and from the demo bar and the account menu: the walkthrough switches, Skip
+ * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens from
+ * the demo bar, the account menu and the landing's Start: the walkthrough switches, Skip
  * approvals, the world (reset, replay), and which models run and what this session has
  * spent. "Try the suggested request" starts the demo, or switches back to the story's
- * member.
+ * member. (A first visit opens the intro instead, Intro.tsx.)
  */
 export function DemoControls({ session }: { session: SessionView | null }) {
   const open = useDemoState((state) => state.controlsOpen);

@@ -10,6 +10,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { enterDemo } from "./firstVisit";
 import { unlock } from "./unlock";
 
 /** Long enough for the story's first turns on ScriptedModel. */
@@ -48,8 +49,7 @@ test("every tab follows a switch in place, and a pasted link to someone's chat s
 
   const chatUrl = await test.step("Alex starts a chat, and it waits on him", async () => {
     await a.goto("/");
-    await a.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
-    await a.getByRole("button", { name: /^Find a lab that can run XRD/ }).click();
+    await enterDemo(a);
     await a.getByRole("button", { name: "Send message" }).click();
     await expect(a).toHaveURL(/\/chat\//);
     // The chat is quiet once Claude asks Alex about the outreach, so nothing in it
