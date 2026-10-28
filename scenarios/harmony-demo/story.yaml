@@ -30,6 +30,11 @@ suggested_message: >-
 # Ringed and tagged "Suggested" in the network view. Calder is the near miss: it does
 # computation only, so it is screened as a weak fit and left out of the outreach.
 suggested_recipients: [northlake, ridgeline, calder]
+# Who's on the network, shown in "What's on screen" over every org's monogram.
+network: >-
+  Battery materials research: a university lab with new cathode powders to measure, the
+  instrument cores that measure them, shops that build lab hardware, and the suppliers,
+  testers, data and modeling groups, funder and broker around them.
 
 steps:
   - id: ask

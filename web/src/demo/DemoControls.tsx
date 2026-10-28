@@ -7,14 +7,14 @@ import { Button, Modal, ModalList, Spark, Toggle } from "../shell/ui";
 import { useUnavailable } from "../shell/unavailable";
 import { useEnterDemo } from "./accounts";
 import { useSetSkipApprovals } from "./approvals";
-import { closeDemoControls, openResetConfirm, setWalkthroughPref, useDemoState } from "./store";
+import { closeDemoControls, openResetConfirm, seeUserGuide, useDemoState } from "./store";
 import { formatWorldDate, useWorldDate } from "./worldClock";
 
 /**
  * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens from
- * the demo bar, the account menu and the landing's Start: the walkthrough switches, Skip
- * approvals, the world (reset, replay), and which models run and what this session has
- * spent. "Try the suggested request" starts the demo, or switches back to the story's
+ * the demo bar, the account menu and the landing's Start: the user guide ("What's on
+ * screen", HelpOverlay.tsx), Skip approvals, the world (reset, replay), and which models
+ * run and what this session has spent. "Try the suggested request" starts the demo, or switches back to the story's
  * member. (A first visit opens the intro instead, Intro.tsx.)
  */
 export function DemoControls({ session }: { session: SessionView | null }) {
@@ -59,8 +59,6 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 // --- Controls -----------------------------------------------------------------------
 
 function Controls({ session }: { session: SessionView | null }) {
-  const showSuggestedMessage = useDemoState((state) => state.showSuggestedMessage);
-  const highlightRecipients = useDemoState((state) => state.highlightSuggestedRecipients);
   const unavailable = useUnavailable();
   const worldDate = useWorldDate(session?.world);
   const skipApprovals = useSetSkipApprovals();
@@ -68,26 +66,12 @@ function Controls({ session }: { session: SessionView | null }) {
   return (
     <>
       <Section title="Walkthrough">
-        <ModalList>
-          <ToggleRow
-            id="demo-suggested-message"
-            title="Show the suggested message"
-            body="A chip under Alex's composer fills in the story's opening request."
-            checked={showSuggestedMessage}
-            onChange={(value) => {
-              setWalkthroughPref("showSuggestedMessage", value);
-            }}
-          />
-          <ToggleRow
-            id="demo-suggested-recipients"
-            title="Highlight suggested recipients"
-            body="The network view rings the organizations worth watching."
-            checked={highlightRecipients}
-            onChange={(value) => {
-              setWalkthroughPref("highlightSuggestedRecipients", value);
-            }}
-          />
-        </ModalList>
+        <Button variant="secondary" onClick={seeUserGuide}>
+          See user guide
+        </Button>
+        <p className="mt-2 text-xs leading-4 text-muted">
+          Points out what the demo's key controls do, as the ? in the demo bar does.
+        </p>
       </Section>
 
       <Section title="Approvals">

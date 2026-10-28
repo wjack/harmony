@@ -230,6 +230,19 @@ export const story: DemoStory = {
   suggested_message:
     "Find a lab that can run XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders by Nov 6, and get an airtight sample holder made for the transfer. Budget is about $2,000.",
   suggested_recipients: [orgs.northlake, orgs.ridgeline, orgs.calder],
+  network: {
+    summary:
+      "Battery materials research: a university lab with new cathode powders to measure, the instrument cores that measure them, shops that build lab hardware, and the suppliers, testers, data and modeling groups, funder and broker around them.",
+    orgs: [
+      { org: orgs.calder, kind: "computation" },
+      { org: orgs.cascade, kind: "characterization" },
+      { org: orgs.henderson, kind: "research" },
+      { org: orgs.northlake, kind: "characterization" },
+      { org: orgs.pacific, kind: "characterization" },
+      { org: orgs.ridgeline, kind: "fabrication" },
+      { org: orgs.vantage, kind: "procurement" },
+    ],
+  },
   steps: [],
 };
 
