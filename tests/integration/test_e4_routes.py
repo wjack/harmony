@@ -1417,12 +1417,23 @@ async def test_the_story_suggests_the_message_to_its_sender(app: FastAPI) -> Non
             "calder",
         ]
         assert story["steps"][0]["act_as"]["slug"] == "alex"
+        network = story["network"]
+        assert network["summary"].startswith("Battery materials research")
+        # Every org, whoever is acting: it's the demo's picture of the network.
+        kinds = {row["org"]["slug"]: row["kind"] for row in network["orgs"]}
+        assert len(kinds) == 15
+        assert (kinds["henderson"], kinds["northlake"], kinds["ridgeline"]) == (
+            "research",
+            "characterization",
+            "fabrication",
+        )
 
         await v.act_as("helen")
         story = await v.json("GET", "/demo/story")
         assert story["suggested_message"] is None
         # The picks are Henderson's: Northlake's members aren't told to ask themselves.
         assert story["suggested_recipients"] == []
+        assert len(story["network"]["orgs"]) == 15
 
         await v.act_as("maya")
         story = await v.json("GET", "/demo/story")

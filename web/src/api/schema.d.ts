@@ -1201,6 +1201,7 @@ export interface components {
             suggested_message: string | null;
             /** Suggested Recipients */
             suggested_recipients: components["schemas"]["OrgRef"][];
+            network: components["schemas"]["StoryNetwork"] | null;
             /** Steps */
             steps: components["schemas"]["StoryStep"][];
         };
@@ -2522,6 +2523,22 @@ export interface components {
             failure_reason: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused" | "added_details" | "invalid" | "thread_closed" | "unchanged" | "reopen_failed") | null;
             /** Version */
             version: number;
+        };
+        /**
+         * StoryNetwork
+         * @description Who's on the network, for "What's on screen": the story's summary and every org.
+         */
+        StoryNetwork: {
+            /** Summary */
+            summary: string;
+            /** Orgs */
+            orgs: components["schemas"]["StoryOrg"][];
+        };
+        /** StoryOrg */
+        StoryOrg: {
+            org: components["schemas"]["OrgRef"];
+            /** Kind */
+            kind: string;
         };
         /** StoryStep */
         StoryStep: {

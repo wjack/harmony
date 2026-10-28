@@ -49,6 +49,7 @@ export type ConversationSummary = Schemas["ConversationSummary"];
 export type Inbox = Schemas["Inbox"];
 export type InboxItem = Schemas["InboxItem"];
 export type DemoStory = Schemas["DemoStory"];
+export type StoryNetwork = Schemas["StoryNetwork"];
 export type StoryStep = Schemas["StoryStep"];
 
 /** The typed error body of every P1–P2 route (`code` says which failure it is). */

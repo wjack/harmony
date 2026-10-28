@@ -79,8 +79,9 @@ beforeEach(() => {
     controlsOpen: false,
     introHelp: false,
     prefillSuggestion: false,
-    showSuggestedMessage: true,
-    highlightSuggestedRecipients: true,
+    userGuide: false,
+    guideTip: false,
+    guideTipShown: false,
   });
 });
 
@@ -130,38 +131,6 @@ it("introduces Harmony, shows what's on screen, then leaves the suggested messag
     expect(document.activeElement).toBe(button);
   });
   expect(composer.value).toBe("");
-
-  dispatcher.stop();
-});
-
-it("hides the suggestion chip and the recipient rings when their walkthrough switches are off", async () => {
-  const message = story.suggested_message ?? "";
-  const { dispatcher } = renderNewChat();
-  await act(() => dispatcher.start());
-
-  // Alex's new chat suggests the story's opening message; the story names its recipients.
-  expect(await screen.findByTitle(message)).toBeTruthy();
-  expect(await screen.findByText("Rings: northlake, ridgeline, calder")).toBeTruthy();
-
-  fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
-  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
-
-  // (The open modal hides the page from role queries, so look for the chip by its title.)
-  fireEvent.click(within(controls).getByRole("switch", { name: /Show the suggested message/ }));
-  await waitFor(() => {
-    expect(screen.queryByTitle(message)).toBeNull();
-  });
-  expect(screen.getByText("Rings: northlake, ridgeline, calder")).toBeTruthy();
-
-  fireEvent.click(within(controls).getByRole("switch", { name: /Highlight suggested recipients/ }));
-  expect(await screen.findByText("Rings: none")).toBeTruthy();
-
-  // Back on, both return; the switches are kept for the visitor's next visit.
-  fireEvent.click(within(controls).getByRole("switch", { name: /Show the suggested message/ }));
-  expect(await screen.findByTitle(message)).toBeTruthy();
-  expect(JSON.parse(window.localStorage.getItem("harmony.demo") ?? "{}")).toMatchObject({
-    state: { showSuggestedMessage: true, highlightSuggestedRecipients: false },
-  });
 
   dispatcher.stop();
 });
