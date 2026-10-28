@@ -56,6 +56,7 @@ from harmony.domain import (
     notes,
     reopens,
     requests,
+    routing,
     steers,
     threads,
 )
@@ -273,6 +274,15 @@ class NudgeChatInput(_Payload):
 
 class TakeBackInput(_Payload):
     transcript: TranscriptRef
+    turn_id: UUID
+
+
+class RefusedTurnInput(_Payload):
+    world_id: UUID
+    thread_id: UUID
+    side: Side
+    org_id: UUID
+    # The representative's turn Claude declined: it names the item, so a retry opens one.
     turn_id: UUID
 
 
@@ -506,6 +516,31 @@ class NetworkActivities:
             if ending and state.last_turn and state.closed_by is not None:
                 await _queue_closed_notice(uow, thread, state.closed_by)
             await uow.commit()
+
+    @activity.defn
+    async def open_refused_turn(self, refused: RefusedTurnInput) -> UUID:
+        """Claude declined a representative's turn: a `refused_turn` item for its side's
+        team, routed as a held message is, and the thread `awaiting_principal` on that
+        side. Idempotent; returns the item's id."""
+        await ensure_world_live(self._sessionmaker, refused.world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, refused.world_id) as uow:
+            escalation, created = await escalations.open(
+                uow,
+                escalation_id=escalations.refused_turn_id(refused.turn_id),
+                org_id=refused.org_id,
+                kind="refused_turn",
+                dedupe_key=f"refused_turn:{refused.turn_id}",
+                thread_id=refused.thread_id,
+                side=refused.side,
+                turn_id=refused.turn_id,
+            )
+            if created:
+                await routing.apply_route(uow, escalation, None)
+            await threads.set_state(
+                uow, refused.thread_id, "awaiting_principal", side_to_move=refused.side
+            )
+            await uow.commit()
+        return escalation.id
 
     @activity.defn
     async def note_unsummarized(self, failed: UnsummarizedInput) -> None:

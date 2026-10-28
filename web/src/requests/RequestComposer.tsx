@@ -54,6 +54,8 @@ interface RequestComposerProps {
   closed: boolean;
   /** An Edit of our side's that Claude is still working on. */
   running: SteerView | null;
+  /** Claude's declined turn waits for us: once an Edit is sent, retry the turn with it. */
+  onEditSent?: (() => void) | undefined;
 }
 
 /** A submit that got no answer, kept so the retry of the same text is the same write. */
@@ -62,7 +64,17 @@ interface Unanswered {
   body: string;
 }
 
-export function RequestComposer({ threadId, us, members, memberId, composer, decision, closed, running }: RequestComposerProps) {
+export function RequestComposer({
+  threadId,
+  us,
+  members,
+  memberId,
+  composer,
+  decision,
+  closed,
+  running,
+  onEditSent,
+}: RequestComposerProps) {
   const addNote = useAddNote(threadId);
   const steer = useSteer(threadId);
   const budget = useBudgetState();
@@ -190,6 +202,8 @@ export function RequestComposer({ threadId, us, members, memberId, composer, dec
           }
           write("");
           composer.setMode("comment");
+          // The retried turn waits for this Edit's guidance, and opens with it.
+          onEditSent?.();
         },
         onError: (error) => {
           const shown = editError(error, problemOf(error), memberId);

@@ -82,6 +82,9 @@ export function SteerRow({ entry, us, actions }: { entry: SteerEntry; us: OrgRef
 
 function resolutionSentence(entry: ResolutionEntry, them: OrgRef): string {
   const { kind, resolution } = entry.escalation;
+  if (kind === "refused_turn") {
+    return resolution?.action === "decline" ? "ended the conversation after Claude declined" : "asked Claude to try again";
+  }
   const consult = kind === "consult";
   switch (resolution?.action) {
     case "approve":

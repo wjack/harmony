@@ -13,7 +13,17 @@ export interface ActivityEntry {
   text: string;
 }
 
+/** The item's first entry: why Claude stopped for a teammate. */
+const FLAGGED: Readonly<Record<EscalationView["kind"], string>> = {
+  consult: "Claude asked a teammate to check the answer",
+  outbound_review: "Claude held a reply for review",
+  refused_turn: "Claude declined to continue the conversation",
+};
+
 function resolutionText(escalation: EscalationView): string {
+  if (escalation.kind === "refused_turn") {
+    return escalation.resolution?.action === "decline" ? "ended the conversation" : "asked Claude to try again";
+  }
   switch (escalation.resolution?.action) {
     case "approve":
       return escalation.kind === "consult" ? "released the answer to this thread" : "approved the reply";
@@ -41,7 +51,7 @@ export function buildActivity(workspace: ThreadWorkspace): ActivityEntry[] {
       id: `flagged:${escalation.id}`,
       at: escalation.created_at,
       actor: null,
-      text: escalation.kind === "consult" ? "Claude asked a teammate to check the answer" : "Claude held a reply for review",
+      text: FLAGGED[escalation.kind],
     });
     for (const draft of escalation.drafts) {
       if (draft.draft_rev === 1) continue;

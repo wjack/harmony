@@ -17,6 +17,7 @@ import { useStickToBottom } from "../chat/useStickToBottom";
 import { WhoseNotFound } from "../demo/WhoseNotFound";
 import { Button, Spark, cx } from "../shell/ui";
 import { DecisionCard } from "./DecisionCard";
+import { DeclinedTurnCard } from "./DeclinedTurnCard";
 import { Details } from "./Details";
 import type { RowActions } from "./EventRows";
 import { RepresentativeSaw } from "./RepresentativeSaw";
@@ -34,8 +35,12 @@ import { buildTimeline, openEscalation, partiesOf } from "./timeline";
 import type { MemberView, OrgRef, ThreadDetail, ThreadWorkspace } from "./types";
 import { useComposer } from "./useComposer";
 import { useDecision } from "./useDecision";
+import { useDeclinedTurn } from "./useDeclinedTurn";
 import { useReopen } from "./useReopen";
 import { waitingLine } from "./waiting";
+
+/** Why the box opened in Edit from a declined turn's card. */
+const RETRY_WITH_EDIT = "Claude tries its turn again with this when you send it.";
 
 /** Below this the view has no room for Details beside the transcript. */
 const DETAILS_BESIDE_PX = 820;
@@ -264,7 +269,10 @@ function Conversation(props: ConversationProps) {
   const budget = useBudgetState();
   const composer = useComposer();
   const steers = workspace?.steers ?? [];
-  const escalation = workspace === undefined ? null : openEscalation(workspace.escalations, memberId);
+  const open = workspace === undefined ? null : openEscalation(workspace.escalations, memberId);
+  // A turn Claude declined has no draft to decide: its own card, and Edit retries it.
+  const declined = useDeclinedTurn(open?.kind === "refused_turn" ? open : null, thread.id);
+  const escalation = declined === null ? open : null;
   const consult =
     escalation?.consult_id == null
       ? null
@@ -318,7 +326,7 @@ function Conversation(props: ConversationProps) {
     reopen.prompt?.anchor,
   ]);
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const cardFor = decision?.escalation.id ?? null;
+  const cardFor = decision?.escalation.id ?? declined?.escalation.id ?? null;
   // A card taller than the view would open at its end; its question comes first.
   useLayoutEffect(() => {
     if (cardFor !== null && cardRef.current !== null) revealTop(cardRef.current);
@@ -333,6 +341,22 @@ function Conversation(props: ConversationProps) {
             <p className="py-6 text-center text-ui-sm text-muted">No messages yet.</p>
           ) : (
             <Transcript entries={entries} us={us} them={them} typing={typing} waiting={waiting} actions={actions} />
+          )}
+          {declined !== null && (
+            <div ref={cardRef} className="mt-8">
+              <DeclinedTurnCard
+                turn={declined}
+                threadId={thread.id}
+                us={us}
+                them={them}
+                members={members}
+                memberId={memberId}
+                onEdit={() => {
+                  composer.toEdit(composer.mode === "edit" ? composer.text : "", RETRY_WITH_EDIT);
+                }}
+                unsentEdit={composer.mode === "edit" && composer.text.trim() !== ""}
+              />
+            </div>
           )}
           {decision !== null && (
             <div ref={cardRef} className="mt-8">
@@ -374,6 +398,7 @@ function Conversation(props: ConversationProps) {
           decision={decision}
           closed={closed}
           running={running}
+          onEditSent={declined?.retry}
         />
       </div>
     </>

@@ -53,6 +53,7 @@ from harmony.db.models import (
     Conversation,
     Escalation,
     Event,
+    Member,
     ModelCall,
     NetworkRequest,
     RepNotice,
@@ -75,6 +76,7 @@ from harmony.temporal.activities.agents import (
 from harmony.temporal.activities.network import (
     ApplyResolutionInput,
     NetworkActivities,
+    RefusedTurnInput,
     ThreadStateInput,
 )
 from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
@@ -415,6 +417,69 @@ async def test_a_drafts_route_is_served_as_the_members_it_named(
         assert escalation["drafts"][-1]["route"] == {
             "assignees": [{"slug": "helen", "why": "Helen's schedule."}]
         }
+
+
+async def test_a_refused_turn_waits_in_its_sides_inbox_naming_its_category(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    """Claude declined Northlake's turn: `open_refused_turn` opens an item routed as a
+    held message is, once, and holds the thread on Northlake's side. The inbox names it,
+    and the workspace gives the category from the turn's model call."""
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        outreach = await approved_outreach(db_sessionmaker, world_id, NORTHLAKE, CALDER)
+        thread_id = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
+        turn_id = uuid4()
+        activities = NetworkActivities(cast(Client, None), db_sessionmaker)
+        refused = RefusedTurnInput(
+            world_id=world_id,
+            thread_id=thread_id,
+            side="responder",
+            org_id=NORTHLAKE,
+            turn_id=turn_id,
+        )
+        item_id = await activities.open_refused_turn(refused)
+        assert await activities.open_refused_turn(refused) == item_id
+        async with db_sessionmaker.begin() as session:
+            row = await repo.get_required(session, Escalation, world_id, item_id)
+            assert (row.kind, row.turn_id, row.status) == ("refused_turn", turn_id, "open")
+            [assignee] = escalations.assignee_ids(row)
+            member = await repo.get_required(session, Member, world_id, assignee)
+            thread = await repo.get_required(session, Thread, world_id, thread_id)
+            assert (thread.state, thread.side_to_move) == ("awaiting_principal", "responder")
+            session.add(
+                ModelCall(
+                    turn_id=turn_id,
+                    step_idx=0,
+                    world_id=world_id,
+                    request_text="{}",
+                    response_text=json.dumps(
+                        {
+                            "role": "assistant",
+                            "content": [],
+                            "stop_reason": "refusal",
+                            "stop_details": {"type": "refusal", "category": "cyber"},
+                        }
+                    ),
+                    served_model="scripted",
+                    usage_json={},
+                    cost_usd=Decimal(0),
+                    attempt=1,
+                )
+            )
+
+        await v.act_as(member.slug)
+        [item] = (await v.json("GET", "/inbox"))["needs_you"]
+        assert item["escalation"]["kind"] == "refused_turn"
+        assert item["escalation"]["question"] == "Claude declined to continue the conversation"
+        assert item["escalation"]["reason"] == "Retry Claude's turn, or end the conversation."
+        workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
+        [view] = workspace["escalations"]
+        assert view["refusal"] == {"step": "turn", "category": "cyber", "draft_rev": None}
+        assert view["drafts"] == []
+        # Retry is the item's own resolution, not a question's Retry.
+        problem = await v.json("POST", f"/escalations/{item_id}/retry", json={}, expect=422)
+        assert problem["code"] == "invalid"
 
 
 async def test_drafts_and_close_summaries_stay_with_their_side_after_the_thread_ends(

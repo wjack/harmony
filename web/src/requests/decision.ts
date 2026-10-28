@@ -35,6 +35,10 @@ export function eyebrow(escalation: EscalationView, them: OrgRef, memberId: stri
     const whose = mine ? "your" : possessive(either(escalation.assignees));
     return `Claude needs ${whose} answer before replying to ${them.name}`;
   }
+  if (escalation.kind === "refused_turn") {
+    const who = mine ? "you" : either(escalation.assignees);
+    return `Claude stopped before replying to ${them.name} · ${who} can retry or end it`;
+  }
   const wants = `Claude wants to send this to ${them.name}`;
   return mine ? wants : `${wants} · ${either(escalation.assignees)} reviews`;
 }
@@ -75,9 +79,14 @@ export function reasonLine(escalation: EscalationView): string | null {
 
 /** The note in the reason's place when Claude declined the step the item waits on. */
 export function refusalLine(refusal: Refusal): string {
-  return refusal.step === "answer"
-    ? declinedLine("draft an answer", refusal.category)
-    : declinedLine("check this answer against what you share", refusal.category);
+  switch (refusal.step) {
+    case "answer":
+      return declinedLine("draft an answer", refusal.category);
+    case "sharing_check":
+      return declinedLine("check this answer against what you share", refusal.category);
+    case "turn":
+      return declinedLine("continue the conversation", refusal.category);
+  }
 }
 
 /** The draft part's name. */

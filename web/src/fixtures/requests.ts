@@ -82,6 +82,9 @@ const northlake: OrgRef = orgs.northlake;
 
 /** `api/routes/inbox.py`: how a held message (`outbound_review`) reads in the inbox. */
 const HELD_QUESTION = "Review the outgoing message";
+// A turn Claude declined (`refused_turn`), as the inbox and the workspace word it.
+const REFUSED_TURN_QUESTION = "Claude declined to continue the conversation";
+const REFUSED_TURN_REASON = "Retry Claude's turn, or end the conversation.";
 const HELD_REASON = "A teammate approves every message in Ask mode.";
 
 /** What the representative is told after a teammate replied directly (`take_over`). */
@@ -895,6 +898,28 @@ export function declined(
 }
 
 /**
+ * Claude declined our side's turn on `threadId`: the open item becomes the turn's
+ * (`refused_turn`, with no draft or question), and the conversation waits for us.
+ */
+export function refusedTurn(world: RequestsWorld, threadId: string, category: string | null = "bio"): RequestsWorld {
+  const record = recordOf(world, threadId);
+  const item = openEscalations(record)[0];
+  if (item === undefined) return world;
+  record.workspace.consults = record.workspace.consults.filter((asked) => asked.id !== item.consult_id);
+  Object.assign(item, {
+    kind: "refused_turn",
+    consult_id: null,
+    drafts: [],
+    current_draft_rev: null,
+    reason: REFUSED_TURN_REASON,
+    refusal: { step: "turn", category, draft_rev: null },
+  });
+  record.detail.state = "awaiting_principal";
+  record.detail.side_to_move = record.detail.side;
+  return world;
+}
+
+/**
  * A Retry of the declined step, which here goes through at once: the next rev lands,
  * checked, as the member's edit of the draft if they sent one (else the draft as it was,
  * or Henderson's answer when there was none).
@@ -1047,6 +1072,7 @@ function openEscalations(record: ThreadRecord): EscalationView[] {
 }
 
 function questionOf(record: ThreadRecord, item: EscalationView): string {
+  if (item.kind === "refused_turn") return REFUSED_TURN_QUESTION;
   return record.workspace.consults.find((asked) => asked.id === item.consult_id)?.question ?? HELD_QUESTION;
 }
 
@@ -1269,6 +1295,19 @@ function applyResolve(
     member_id: actor.id,
     org_id: northlake.id,
   };
+
+  if (item.kind === "refused_turn") {
+    // Retry hands the turn back to our Claude; ending it closes the conversation on the refusal.
+    item.refusal = null;
+    if (action === "decline") {
+      endRun(record, { end_reason: "stopped", closed_by: record.detail.side, stop_reason: "refused" });
+    } else {
+      record.detail.state = "active";
+      record.detail.side_to_move = record.detail.side;
+    }
+    touch(record, at);
+    return { escalation_id: item.id, action, message_id: null };
+  }
 
   // Anything else (a past action no longer available) changes nothing.
   switch (action) {

@@ -30,6 +30,7 @@ import {
   reopenFailed,
   reopenOffer,
   reopened,
+  refusedTurn,
   requestsRoutes,
   requestsWorld,
   rewritten,
@@ -674,6 +675,51 @@ describe("the decision card", () => {
       { route: retryRoute(ESCALATION.henderson), body: { draft_text: null, question: "Which day suits them?" } },
     ]);
     expect(within(decision).queryByRole("textbox", { name: "Question for Claude" })).toBeNull();
+  });
+
+  it("says Claude declined its turn, with the category, and Retry hands the turn back to Claude", async () => {
+    const { writes } = renderRequests(THREAD.henderson, { world: refusedTurn(requestsWorld(), THREAD.henderson) });
+    const decision = await card();
+    expect(
+      within(decision).getByRole("heading", { name: "Claude declined to continue the conversation (biosecurity)." }),
+    ).toBeTruthy();
+    expect(within(decision).queryByRole("textbox")).toBeNull();
+
+    fireEvent.click(button(decision, "Retry"));
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "Needs your decision" })).toBeNull();
+    });
+    expect(writes).toEqual([{ route: resolveRoute(ESCALATION.henderson), body: { action: "approve" } }]);
+  });
+
+  it("opens the box's Edit from a declined turn, and sending the instruction retries the turn with it", async () => {
+    const { writes } = renderRequests(THREAD.henderson, { world: refusedTurn(requestsWorld(), THREAD.henderson, null) });
+    const decision = await card();
+    expect(within(decision).getByRole("heading", { name: "Claude declined to continue the conversation." })).toBeTruthy();
+
+    fireEvent.click(button(decision, "Edit"));
+    const region = await box();
+    expect(mode(region, "Edit").getAttribute("aria-checked")).toBe("true");
+    expect(region.textContent).toContain("Claude tries its turn again with this when you send it.");
+    type(region, EDIT_INSTRUCTION);
+    expect(decision.textContent).toContain("Claude tries again with your instruction when you send it.");
+    fireEvent.click(button(region, "Tell Claude"));
+    await waitFor(() => {
+      expect(writes.map((write) => write.route)).toEqual([
+        steersRoute(THREAD.henderson),
+        resolveRoute(ESCALATION.henderson),
+      ]);
+    });
+    expect(writes[0]?.body).toMatchObject({ body: EDIT_INSTRUCTION, escalation_id: null });
+    expect(writes[1]?.body).toEqual({ action: "approve" });
+  });
+
+  it("ends the conversation on a declined turn", async () => {
+    const { writes } = renderRequests(THREAD.henderson, { world: refusedTurn(requestsWorld(), THREAD.henderson) });
+    fireEvent.click(button(await card(), "End the conversation"));
+    expect(await closedRow()).toBeTruthy();
+    expect(writes).toEqual([{ route: resolveRoute(ESCALATION.henderson), body: { action: "decline" } }]);
+    expect(screen.queryByRole("region", { name: "Needs your decision" })).toBeNull();
   });
 
   it("holds Approve while the retried step runs", async () => {

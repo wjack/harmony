@@ -1337,7 +1337,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "consult" | "outbound_review";
+            kind: "consult" | "outbound_review" | "refused_turn";
             /**
              * Status
              * @enum {string}
@@ -1511,7 +1511,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "consult" | "outbound_review";
+            kind: "consult" | "outbound_review" | "refused_turn";
             /**
              * Status
              * @enum {string}
@@ -2059,20 +2059,22 @@ export interface components {
         };
         /**
          * RefusalView
-         * @description Claude declined the step an open question waits on (`stop_reason: "refusal"`):
-         *     drafting its answer, or checking the draft against what the org shares. Retry runs
-         *     that step again (`POST /api/escalations/{id}/retry`).
+         * @description Claude declined the step an open item waits on (`stop_reason: "refusal"`):
+         *     drafting a question's answer, or checking the draft against what the org shares
+         *     (Retry runs that step again: `POST /api/escalations/{id}/retry`), or the
+         *     representative's turn itself (`turn`, a `refused_turn` item, which approving
+         *     retries).
          */
         RefusalView: {
             /**
              * Step
              * @enum {string}
              */
-            step: "answer" | "sharing_check";
+            step: "answer" | "sharing_check" | "turn";
             /** Category */
             category: string | null;
             /** Draft Rev */
-            draft_rev: number;
+            draft_rev: number | null;
         };
         /** RejectCard */
         RejectCard: {

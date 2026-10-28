@@ -86,8 +86,8 @@ class Consult(CreatedAt, VersionedEntity, Base):
 
 
 class Escalation(CreatedAt, VersionedEntity, Base):
-    """An inbox item: a consult answer or an outgoing message waiting on a person (§4,
-    §6).
+    """An inbox item: a consult answer, an outgoing message, or a representative's turn
+    Claude declined, waiting on a person (§4, §6).
 
     Resolved through a Temporal Update that writes `WHERE status = 'open'`, so a second
     resolver loses cleanly. `status` is free text (`agents.models.EscalationStatus`).
@@ -112,6 +112,8 @@ class Escalation(CreatedAt, VersionedEntity, Base):
     side: Mapped[Side | None]
     kind: Mapped[EscalationKind]
     consult_id: Mapped[UUID | None]
+    # The representative's turn Claude declined (`refused_turn`): the item's subject.
+    turn_id: Mapped[UUID | None]
     status: Mapped[str] = mapped_column(server_default=text("'open'"))
     dedupe_key: Mapped[str]
     # Member ids the item is routed to.

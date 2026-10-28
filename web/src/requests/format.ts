@@ -98,6 +98,8 @@ export function needsLabel(kind: EscalationKind): string {
       return "Needs your answer";
     case "outbound_review":
       return "Reply needs your review";
+    case "refused_turn":
+      return "Claude declined to continue";
   }
 }
 

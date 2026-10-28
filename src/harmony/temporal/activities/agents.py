@@ -233,6 +233,9 @@ class RepTurnInput(_Payload):
     reopened: bool = False
     # The thread's highest message seq when this run began (`RepToolScope.run_start_seq`).
     run_start_seq: int = Field(default=0, ge=0)
+    # A Retry of the side's turn `retry_of`, which Claude declined: it opens as that turn
+    # did, and is asked to write.
+    retry_of: int | None = Field(default=None, ge=1)
 
 
 class RepTurnResult(_Payload):
@@ -538,16 +541,19 @@ class AgentActivities:
                     uow, thread_id=turn.thread_id, side=turn.side, turn_id=turn.turn_id
                 )
                 await uow.commit()
-            if turn.turn == 1:
+            # A refused call stored no notices: a Retry of the first turn needs the date too.
+            if (turn.retry_of or turn.turn) == 1:
                 notices = _joined(context.world_date_notice(today), notices)
             fallback = _fallback(turn, thread)
             nothing_new = not (turn.owed or incoming) and fallback == NOTHING_NEW
             # Nor does a held message declined without a reason leave anything to
             # answer: text after it acknowledges the representative's own side, and
             # sent, it would be held as a new message for the same person to decline.
-            # A reopened turn is asked to write, whatever it is owed.
-            quiet = not turn.reopened and (
-                nothing_new or (not incoming and _only_declined(turn.owed))
+            # A reopened turn, or a Retry, is asked to write, whatever it is owed.
+            quiet = (
+                not turn.reopened
+                and turn.retry_of is None
+                and (nothing_new or (not incoming and _only_declined(turn.owed)))
             )
             executor = RepToolExecutor(
                 self._sessionmaker,
@@ -1243,7 +1249,7 @@ def _fallback(turn: RepTurnInput, thread: Thread) -> str:
         return REOPENED
     if thread.state in thread_domain.TERMINAL_STATES:
         return THREAD_ENDED
-    if turn.side == "requester" and turn.turn == 1:
+    if turn.side == "requester" and (turn.retry_of or turn.turn) == 1:
         return OPEN_THREAD
     return NOTHING_NEW
 

@@ -53,7 +53,7 @@ from harmony.api.deps import (
     snapshot_session,
 )
 from harmony.api.routes.acting import require_acting
-from harmony.api.routes.inbox import held_reason
+from harmony.api.routes.inbox import REFUSED_TURN_REASON, held_reason
 from harmony.api.routes.problems import (
     ApiProblemError,
     from_update_failure,
@@ -180,15 +180,18 @@ class EscalationDraftView(_View):
 
 
 class RefusalView(_View):
-    """Claude declined the step an open question waits on (`stop_reason: "refusal"`):
-    drafting its answer, or checking the draft against what the org shares. Retry runs
-    that step again (`POST /api/escalations/{id}/retry`)."""
+    """Claude declined the step an open item waits on (`stop_reason: "refusal"`):
+    drafting a question's answer, or checking the draft against what the org shares
+    (Retry runs that step again: `POST /api/escalations/{id}/retry`), or the
+    representative's turn itself (`turn`, a `refused_turn` item, which approving
+    retries)."""
 
     step: refusals.RefusedStep
     # The model's category for it (`stop_details.category`), when it gave one.
     category: str | None
     # The draft rev the declined call worked on: a Retry's (`AnswerUsed.draft_rev`) is newer.
-    draft_rev: int
+    # None for a turn.
+    draft_rev: int | None
 
 
 class EscalationView(_View):
@@ -546,6 +549,14 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
             if row.consult_id is not None and row.status == "open"
         ),
     )
+    turns_declined = await refusals.turn_refusals(
+        db,
+        (
+            row.turn_id
+            for row in escalation_rows
+            if row.turn_id is not None and row.status == "open"
+        ),
+    )
     return ThreadWorkspace(
         thread_id=thread.id,
         side=side,
@@ -559,7 +570,11 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
                 rewritten_by,
                 members,
                 org_slugs,
-                declined.get(row.consult_id) if row.consult_id is not None else None,
+                declined.get(row.consult_id)
+                if row.consult_id is not None
+                else turns_declined.get(row.turn_id)
+                if row.turn_id is not None
+                else None,
             )
             for row in escalation_rows
         ],
@@ -715,7 +730,9 @@ def _escalation_view(
         status=escalations.escalation_status(row.status),
         consult_id=row.consult_id,
         reason=(
-            release.why_needed(consult, current.held_reason if current is not None else None)
+            REFUSED_TURN_REASON
+            if row.kind == "refused_turn"
+            else release.why_needed(consult, current.held_reason if current is not None else None)
             if consult is not None
             else held_reason(held.rationale if held is not None else None)
         ),

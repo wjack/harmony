@@ -20,10 +20,15 @@ call that stops it:
   If that turn fails or is refused, the close stands (with no `stop_reason`), and its
   org gets a note from Claude saying why there is no summary (`note_unsummarized`).
 
-Otherwise the other side moves next. A refusal closes the thread as a `close` without a
-summary would, the other side's failed last turn getting the same note, or, before any
-message has crossed, with no last turn (the responder has nothing to answer or
-summarize); a failed turn or answer closes it with no last turn.
+Otherwise the other side moves next. A refusal waits for the refusing side's team (a
+`refused_turn` item; the thread `awaiting_principal`, `_refused`): Retry runs the turn
+again as the side's next turn, on the input Claude declined when nothing answered it
+(`take_back_turn`), opening with any guidance an Edit wrote meanwhile. Ending the
+conversation instead closes it as a `close` without a summary would, the other side's
+failed last turn getting the same note, or, before any message has crossed, with no
+last turn (the responder has nothing to answer or summarize). Runs from before this
+(`workflow.patched("refused-turn")` false) close at once. A failed turn or answer closes
+the thread with no last turn.
 Either way the row gets a `stop_reason` (3.5): `refused`, a spend cap's reason, or
 `model_error`. The thread ends `expired` after two silent turns in a row, one per side
 (no message, no consult, no close: 3.13 E3), after a requester turn that ends before any
@@ -108,6 +113,7 @@ with workflow.unsafe.imports_passed_through():
         TurnStop,
     )
     from harmony.agents.tools.rep import CUT_OFF_CONSULT, CUT_OFF_HELD
+    from harmony.agents.transcript import RepSideTranscript
     from harmony.db.models.choices import (
         EndReason,
         EscalationKind,
@@ -136,9 +142,11 @@ with workflow.unsafe.imports_passed_through():
         ReassignInput,
         RecordReopenInput,
         RecordSteerInput,
+        RefusedTurnInput,
         ResolutionApplied,
         SettleSteerInput,
         SteerRecorded,
+        TakeBackInput,
         ThreadStateInput,
         UnsummarizedInput,
     )
@@ -185,6 +193,9 @@ SILENT_TURNS_TO_EXPIRE = 2
 STEER_OPENING_WAIT = timedelta(seconds=30)
 # Guards the chat nudges (`_nudge_chat`) and `use_answer` for runs started before them.
 CHAT_HOME_PATCH = "chat-home"
+# Guards the refused turn's wait for its side's team (`_refused`): runs started before
+# it close the thread on a refusal.
+REFUSED_TURN_PATCH = "refused-turn"
 
 
 @dataclass(slots=True)
@@ -306,6 +317,11 @@ class ThreadWorkflow:
         self._reopening: Side | None = None
         # Items this run settled or cancelled: an Edit naming one doesn't wait for it.
         self._settled: set[UUID] = set()
+        # Each side's last turn's input as it went in (owed results, and the seq it was
+        # delivered after): what a Retry of a refused turn sends again.
+        self._last_input: dict[Side, tuple[list[OwedResult], int]] = {}
+        # The side's refused turn its next turn retries, until that turn has run.
+        self._retry_of: dict[Side, int | None] = {"requester": None, "responder": None}
 
     @workflow.run
     async def run(self, thread: ThreadInput) -> ThreadResult:
@@ -586,6 +602,13 @@ class ThreadWorkflow:
                 "the member isn't in the organization this escalation belongs to",
                 type=NOT_IN_ORG_ERROR,
             )
+        if item.kind == "refused_turn":
+            # Retry (`approve`) or end the conversation (`decline`): there's no draft.
+            if resolution.action == "take_over" or resolution.draft_rev is not None:
+                raise ApplicationError(
+                    "a declined turn is retried or ended", type=INVALID_RESOLUTION_ERROR
+                )
+            return item, resolution
         text = (resolution.text or "").strip()
         if resolution.action == "take_over" and not text:
             raise ApplicationError("take_over needs text", type=INVALID_RESOLUTION_ERROR)
@@ -647,7 +670,8 @@ class ThreadWorkflow:
         item = self._open_escalations.get(steer.escalation_id)
         if item is None or item.resolving or item.redrafting or item.side != steer.side:
             return None
-        if item.kind == "consult" and item.consult_id is None:
+        if item.kind == "refused_turn" or (item.kind == "consult" and item.consult_id is None):
+            # Nothing to rewrite: a declined turn's Retry opens with the guidance.
             return None
         return item
 
@@ -673,6 +697,8 @@ class ThreadWorkflow:
         self._turns[side] += 1
         turn = self._turns[side]
         owed, self._owed[side] = self._owed[side], []
+        self._last_input[side] = (owed, self._delivered[side])
+        retry_of, self._retry_of[side] = self._retry_of[side], None
         self._opening += 1
         try:
             result = await workflow.execute_activity_method(
@@ -691,6 +717,7 @@ class ThreadWorkflow:
                     steer_seq=self._steer_seq[side],
                     reopened=self._reopening == side,
                     run_start_seq=self._run_start_seq,
+                    retry_of=retry_of,
                 ),
                 **model_activity_options(),
             )
@@ -755,16 +782,9 @@ class ThreadWorkflow:
         if held is not None:
             return await self._held(side, held, result.owed)
         if result.stop == "refusal":
-            if self._crossed:
-                await self._close(side, stop_reason="refused")
-            else:
-                # Nothing reached the responder: it has nothing to summarize, and is
-                # never woken on a thread nobody wrote to (3.13 E3). Who refused is
-                # still stored: only they may reopen it.
-                await self._end(
-                    "closed", end_reason="stopped", stop_reason="refused", closed_by=side
-                )
-            return other(side)
+            if workflow.patched(REFUSED_TURN_PATCH):
+                return await self._refused(side)
+            return await self._end_refused(side)
         self._owe(side, result.owed)
         if not self._crossed:
             await self._end("expired", end_reason="unsent")
@@ -839,6 +859,82 @@ class ThreadWorkflow:
             return side
         self._owe(side, applied.owed, tool_use_id=tool_use_id)
         return await self._sent_on(side) if applied.sent else side
+
+    async def _refused(self, side: Side) -> Side:
+        """Claude declined `side`'s turn: the thread waits for that side's team (a
+        `refused_turn` item) instead of closing. Retry runs the turn again as the side's
+        next turn, on the input Claude declined when nothing answered it; an Edit before
+        it writes the guidance that turn opens with. Ending the conversation closes it
+        as the refusal would have."""
+        thread = self._input
+        org_id = self._org(side)
+        turn_id = turn_id_for(thread.world_id, thread.thread_id, org_id, self._turns[side])
+        self._opening += 1
+        try:
+            escalation_id = await workflow.execute_activity_method(
+                NetworkActivities.open_refused_turn,
+                RefusedTurnInput(
+                    world_id=thread.world_id,
+                    thread_id=thread.thread_id,
+                    side=side,
+                    org_id=org_id,
+                    turn_id=turn_id,
+                ),
+                **main_activity_options(),
+            )
+        except ActivityError as failed:
+            workflow.logger.warning("%s's refused turn wasn't opened: %s", side, failed)
+            return await self._end_refused(side)
+        finally:
+            self._opening -= 1
+        item = self._track(escalation_id, "refused_turn", side)
+        # The activity holds the row `awaiting_principal`.
+        self._state, self._side_to_move = "awaiting_principal", side
+        await self._signal_request()
+        applied = await self._wait_resolution(item.escalation_id)
+        if applied is None:
+            return side
+        if applied.resolved.action == "decline":
+            return await self._end_refused(side)
+        await self._take_back(side, turn_id)
+        self._retry_of[side] = self._turns[side]
+        return side
+
+    async def _end_refused(self, side: Side) -> Side:
+        """End the conversation on `side`'s refusal, closed by that side. The other side
+        gets its last turn when a message has crossed; before one has, it has nothing to
+        summarize and is never woken on a thread nobody wrote to (3.13 E3). Who refused
+        is still stored: only they may reopen it."""
+        if self._crossed:
+            await self._close(side, stop_reason="refused")
+        else:
+            await self._end("closed", end_reason="stopped", stop_reason="refused", closed_by=side)
+        return other(side)
+
+    async def _take_back(self, side: Side, turn_id: UUID) -> None:
+        """Hand `side`'s next turn the input its refused turn `turn_id` took in, when the
+        model answered none of it: its stored input is deleted (`take_back_turn`), and
+        its owed results and the counterparty's messages are delivered again. Otherwise
+        the next turn opens as any would."""
+        thread = self._input
+        owed, delivered = self._last_input.get(side, ([], self._delivered[side]))
+        try:
+            taken = await workflow.execute_activity_method(
+                NetworkActivities.take_back_turn,
+                TakeBackInput(
+                    transcript=RepSideTranscript(
+                        world_id=thread.world_id, thread_id=thread.thread_id, side=side
+                    ),
+                    turn_id=turn_id,
+                ),
+                **main_activity_options(),
+            )
+        except ActivityError as failed:
+            workflow.logger.warning("%s's refused turn wasn't taken back: %s", side, failed)
+            return
+        if taken:
+            self._delivered[side] = delivered
+            self._owed[side] = [*owed, *self._owed[side]]
 
     async def _sent_on(self, side: Side) -> Side:
         """A person let a message of `side`'s through: the other side answers next."""

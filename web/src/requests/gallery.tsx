@@ -12,6 +12,7 @@ import {
   reopenOffer,
   reopenWorking,
   reopened,
+  refusedTurn,
   requestsRoutes,
   requestsWorld,
   rewritten,
@@ -163,8 +164,14 @@ export default [
   view(
     "Claude declined to draft an answer",
     THREAD.henderson,
-    "The answerer refused Henderson Lab's question, so there's no draft: Helen can write the answer and approve it, or Retry for Claude's draft.",
+    "The answerer refused Henderson Lab's question, so there's no draft. Helen can Retry for Claude's draft, reword the question first with Edit question, or write the answer and approve it.",
     { world: world((made) => declined(made, THREAD.henderson, "answer", null)) },
+  ),
+  view(
+    "Claude declined to continue",
+    THREAD.henderson,
+    "Our Claude refused its own turn in the conversation (biosecurity), so the conversation waits for Northlake instead of closing. Retry runs the turn again; Edit opens the box, and sending the instruction retries with it; End the conversation closes it.",
+    { world: world((made) => refusedTurn(made, THREAD.henderson)) },
   ),
   view("Shared with you", THREAD.calder, "Raj shared Calder's request with Helen and asked a question.", {}, 720),
 
