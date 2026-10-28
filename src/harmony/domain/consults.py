@@ -19,10 +19,12 @@ representative and from whom (`release`, or `decline` with what it may say). A r
 is an escalation draft (`escalations.add_draft`), not a new decision.
 
 One answer, many askers: when Claude judges that a requester-side question asks an
-earlier one on the request again (`record_same_as`), the two share a card, the group's
-first consult. The chat owner's approval of any of its items, in their own words, is the
-card's answer (`card_answer`), and goes to the organizations ticked on the card (`set_goes_to`). A
-draft that starts from it records which item it came from (`record_drafted_from`).
+earlier one, still waiting for its answer, on the request again (`record_same_as`), the
+two share a card, the group's first consult. The chat owner's approval of any of its
+items, in their own words, is the card's answer (`member_answer`). It goes only to the
+askers the owner kept ticked, whose organizations the card records (`add_goes_to`); a
+later asker's question reaches a person afresh. A draft that starts from it records
+which item it came from (`record_drafted_from`).
 
 Writes queue a `consult` snapshot to the consulting org's thread scope only.
 
@@ -277,10 +279,11 @@ async def record_drafted_from(uow: UnitOfWork, consult_id: UUID, escalation_id: 
     return consult
 
 
-async def set_goes_to(uow: UnitOfWork, card_id: UUID, org_ids: Sequence[UUID]) -> Consult:
-    """The organizations the card's answer goes to, as the member ticked them."""
+async def add_goes_to(uow: UnitOfWork, card_id: UUID, org_ids: Sequence[UUID]) -> Consult:
+    """Record the organizations of the askers the card's answer went to."""
     consult = await _locked(uow, card_id)
-    consult.goes_to_org_ids = [str(org_id) for org_id in dict.fromkeys(org_ids)]
+    added = [*consult.goes_to_org_ids, *(str(org_id) for org_id in org_ids)]
+    consult.goes_to_org_ids = list(dict.fromkeys(added))
     await uow.session.flush()
     _queue(uow, consult)
     return consult
@@ -308,13 +311,6 @@ def member_answer(items: Iterable[Escalation], owner_id: UUID | None) -> Escalat
     return max(approved, key=lambda item: item.resolved_at or item.created_at, default=None)
 
 
-async def card_answer(session: AsyncSession, world_id: UUID, card_id: UUID) -> Escalation | None:
-    """The card's answer, if the chat's owner gave one."""
-    card = await get(session, world_id=world_id, consult_id=card_id)
-    owner_id = await _owner_of(session, card)
-    return member_answer(await _card_items(session, world_id, card_id), owner_id)
-
-
 async def card_askers(
     session: AsyncSession, world_id: UUID, card_id: UUID, member_id: UUID
 ) -> list[Escalation]:
@@ -327,12 +323,10 @@ async def card_askers(
     ]
 
 
-async def cards_to_join(
-    session: AsyncSession, consult: Consult, counterparty_id: UUID
-) -> list[Consult]:
+async def cards_to_join(session: AsyncSession, consult: Consult) -> list[Consult]:
     """The cards the consult may ask again: those of its side's questions on the
     request's other threads, asked before it, while a person decides one of the card's
-    items, or once the card's answer goes to `counterparty_id`. Oldest first."""
+    items and the chat's owner hasn't answered it. Oldest first."""
     thread = await repo.get_required(session, Thread, consult.world_id, consult.thread_id)
     owner_id = await _owner_of(session, consult)
     rows = await session.execute(
@@ -359,15 +353,12 @@ async def cards_to_join(
             cards[asked.id] = asked
         if item is not None:
             items.setdefault(card_of(asked), []).append(item)
-    joinable: list[Consult] = []
-    for card_id, card in cards.items():
-        mine = items.get(card_id, [])
-        answered = member_answer(mine, owner_id) is not None
-        if any(item.status == "open" for item in mine) or (
-            answered and str(counterparty_id) in card.goes_to_org_ids
-        ):
-            joinable.append(card)
-    return joinable
+    return [
+        card
+        for card_id, card in cards.items()
+        if any(item.status == "open" for item in items.get(card_id, []))
+        and member_answer(items.get(card_id, []), owner_id) is None
+    ]
 
 
 async def _owner_of(session: AsyncSession, consult: Consult) -> UUID | None:
@@ -477,7 +468,7 @@ __all__ = [
     "OPEN_STATUSES",
     "QUESTION_MAX_CHARS",
     "activity",
-    "card_answer",
+    "add_goes_to",
     "card_askers",
     "card_of",
     "cards_to_join",
@@ -496,5 +487,4 @@ __all__ = [
     "record_same_as",
     "record_sharing_check",
     "release",
-    "set_goes_to",
 ]

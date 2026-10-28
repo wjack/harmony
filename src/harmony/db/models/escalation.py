@@ -77,8 +77,8 @@ class Consult(CreatedAt, VersionedEntity, Base):
     # The earlier consult on the request that Claude judged asks the same question:
     # always the group's first, the card the chat shows. NULL when none did.
     same_as_id: Mapped[UUID | None]
-    # On a card: the organizations its answer goes to, as org id strings, stored when
-    # the member answers. An organization gets the answer only if it is in the list.
+    # On a card: the organizations of the askers its answer went to, as org id strings,
+    # added when the chat's owner answers (the shown asker and the ones kept ticked).
     goes_to_org_ids: Mapped[JsonArray] = mapped_column(server_default=text("'[]'::jsonb"))
     # The escalation whose member answer this consult's draft started from (a reused
     # answer); NULL for a draft of its own.

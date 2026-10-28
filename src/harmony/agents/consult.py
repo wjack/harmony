@@ -21,9 +21,10 @@
    draft rev to the open escalation: a person decides it.
 4. One answer, many askers. `match_question` asks Claude (`same_question.md`, one call
    under the `screener` role) whether a requester-side question asks one of the
-   request's cards again. A draft can start from a member's answer to another item on
-   its card (`Reuse`): the first draft of a later asker, or a rev the `use_answer`
-   Update reserves. Its prompt keeps the first draft's review text and adds
+   request's cards again while it waits for its answer. A rev the `use_answer` Update
+   reserves starts from the member's answer to another item on its card (`Reuse`). A
+   later asker never does: its question reaches a person afresh. Its prompt keeps the
+   first draft's review text and adds
    `consult_reuse.md` in place of a redraft's: the member's answer and its date, with
    other organizations' names replaced, never the question it answered. The sharing
    check runs on it in every mode, and `settle` may release it by `auto` even on an
@@ -672,21 +673,6 @@ async def reuse_of(session: AsyncSession, world_id: UUID, escalation_id: UUID) -
     )
 
 
-async def card_reuse(session: AsyncSession, consult: Consult) -> Reuse | None:
-    """The answer a consult that asks a card again starts from: the card's answer, when
-    a member gave one and it goes to this consult's counterparty."""
-    if consult.same_as_id is None:
-        return None
-    card = await consults.get(session, world_id=consult.world_id, consult_id=consult.same_as_id)
-    answer = await consults.card_answer(session, consult.world_id, card.id)
-    if answer is None:
-        return None
-    parties = await _parties(session, consult)
-    if str(parties.counterparty.id) not in card.goes_to_org_ids:
-        return None
-    return await reuse_of(session, consult.world_id, answer.id)
-
-
 async def match_question(
     sessionmaker: async_sessionmaker[AsyncSession],
     model: CheckpointedModel,
@@ -707,7 +693,7 @@ async def match_question(
     async with sessionmaker() as session:
         consult = await consults.get(session, world_id=world_id, consult_id=consult_id)
         parties = await _parties(session, consult)
-        cards = await consults.cards_to_join(session, consult, parties.counterparty.id)
+        cards = await consults.cards_to_join(session, consult)
         cards = cards[-MATCH_MAX_EARLIER:]
         if not cards:
             return None
@@ -871,10 +857,10 @@ async def settle(
 ) -> Answered | Escalated:
     """Release the answer or hand it to a person (module docstring). `sharing` is the
     check's verdict when the caller ran it; `reused_from`, the item whose member answer
-    the draft started from. Idempotent: a settled consult returns what it settled to,
-    and a retry or redraft of an escalated one only adds its draft rev (while the
-    escalation is open), unless the rev was drafted from a member's earlier answer
-    (`_settle_reused`). IDs derive from the consult."""
+    a rev of an open escalation started from. Idempotent: a settled consult returns what
+    it settled to, and a retry or redraft of an escalated one only adds its draft rev
+    (while the escalation is open), unless the rev was drafted from a member's earlier
+    answer (`_settle_reused`). IDs derive from the consult."""
     session = uow.session
     consult = await consults.get(session, world_id=uow.world_id, consult_id=consult_id)
     settled = settled_result(consult)
@@ -912,24 +898,19 @@ async def settle(
         return await _escalate(uow, consult, None, draft_rev)
 
     draft = outcome.draft
-    reused = reused_from is not None
     consult = await consults.record_draft(uow, consult_id, draft, answer_turn_id=outcome.turn_id)
-    if reused_from is not None:
-        consult = await consults.record_drafted_from(uow, consult_id, reused_from)
     mode = (await _parties(session, consult)).mode()
     check: SharingCheck | None = None
-    if release.needs_sharing_check(mode, draft, reused=reused):
+    if release.needs_sharing_check(mode, draft):
         check = sharing or SharingCheck(within_sharing=False, reason=UNCHECKED)
         consult = await consults.record_sharing_check(uow, consult_id, check)
-    match release.decide(mode, draft, check, reused=reused):
+    match release.decide(mode, draft, check):
         case release.Release(answer=text):
             released = result_text("approve", text)
             await consults.release(uow, consult_id, text=released, released_by="auto")
             return Answered(consult_id=consult_id, result_text=released)
-        case release.NeedsHuman(detail=detail):
-            return await _escalate(
-                uow, consult, outcome, draft_rev, held_reason=detail if reused else None
-            )
+        case release.NeedsHuman():
+            return await _escalate(uow, consult, outcome, draft_rev)
 
 
 async def _settle_reused(
@@ -976,8 +957,6 @@ async def _escalate(
     consult: Consult,
     outcome: DraftReady | None,
     draft_rev: int,
-    *,
-    held_reason: str | None = None,
 ) -> Escalated:
     """Open the consult's escalation with the draft, if any, and route it by the
     answerer's proposal (the default assignee without one)."""
@@ -994,16 +973,11 @@ async def _escalate(
     draft = outcome.draft if outcome is not None else None
     if outcome is not None:
         await escalations.add_draft(
-            uow,
-            escalation.id,
-            outcome.draft,
-            turn_id=outcome.turn_id,
-            draft_rev=draft_rev,
-            held_reason=held_reason,
+            uow, escalation.id, outcome.draft, turn_id=outcome.turn_id, draft_rev=draft_rev
         )
     consult = await consults.mark_needs_human(uow, consult.id)
     routed = await routing.apply_route(uow, escalation, draft.route if draft else None)
-    reason = release.why_needed(consult, held_reason)
+    reason = release.why_needed(consult)
     log.info("consult %s needs a person: %s", consult.id, reason)
     return Escalated(
         consult_id=consult.id,
@@ -1169,7 +1143,6 @@ __all__ = [
     "answer",
     "answer_inputs",
     "answer_request",
-    "card_reuse",
     "check_sharing",
     "escalation_id_for",
     "failed_check",

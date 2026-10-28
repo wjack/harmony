@@ -606,34 +606,49 @@ class NetworkActivities:
         """Tell the request's chat there's news (`network_news`, signal-with-start): a
         counterparty wrote, or a conversation ended. One read, no write: the chat looks
         later, so the item list needs no refetch now."""
-        from harmony.temporal.workflows.conversation import ConversationWorkflow
-
         await ensure_world_live(self._sessionmaker, nudge.world_id)
-        async with self._sessionmaker() as session:
-            request = await repo.get_required(
-                session, NetworkRequest, nudge.world_id, nudge.request_id
-            )
-            if request.conversation_id is None:
-                return
-            conversation = await repo.get_required(
-                session, Conversation, nudge.world_id, request.conversation_id
-            )
-            arg = await conversation_input(session, conversation)
-        await start_world_workflow(
+        await nudge_request_chat(
             self._client,
             self._sessionmaker,
-            ConversationWorkflow.run,
-            arg,
             world_id=nudge.world_id,
-            workflow_id=conversation_workflow_id(nudge.world_id, conversation.id),
-            org_id=conversation.org_id,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            start_signal="network_news",
-            start_signal_args=[NetworkNews(request_id=nudge.request_id)],
+            news=NetworkNews(request_id=nudge.request_id),
         )
 
 
 # --- Shared with the API -------------------------------------------------------------
+
+
+async def nudge_request_chat(
+    client: Client,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    world_id: UUID,
+    news: NetworkNews,
+) -> None:
+    """Signal-with-start `network_news` on the chat the request came from, if any."""
+    # Imported here: the workflow module imports this one for its activity types.
+    from harmony.temporal.workflows.conversation import ConversationWorkflow
+
+    async with sessionmaker() as session:
+        request = await repo.get_required(session, NetworkRequest, world_id, news.request_id)
+        if request.conversation_id is None:
+            return
+        conversation = await repo.get_required(
+            session, Conversation, world_id, request.conversation_id
+        )
+        arg = await conversation_input(session, conversation)
+    await start_world_workflow(
+        client,
+        sessionmaker,
+        ConversationWorkflow.run,
+        arg,
+        world_id=world_id,
+        workflow_id=conversation_workflow_id(world_id, conversation.id),
+        org_id=conversation.org_id,
+        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        start_signal="network_news",
+        start_signal_args=[news],
+    )
 
 
 async def start_request_workflow(
@@ -1097,6 +1112,7 @@ __all__ = [
     "UnsummarizedInput",
     "conversation_input",
     "domain_errors",
+    "nudge_request_chat",
     "run_query",
     "run_update",
     "start_request_workflow",

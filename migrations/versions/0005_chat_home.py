@@ -2,7 +2,7 @@
 
 - `consults.same_as_id`: the earlier consult on the request this one asks again
   (Claude's match), always the group's first, the card.
-- `consults.goes_to_org_ids`: on a card, the organizations its answer goes to.
+- `consults.goes_to_org_ids`: on a card, the organizations of the askers its answer went to.
 - `consults.drafted_from_id`: the escalation whose member answer a reused draft
   started from.
 - `escalation_drafts.held_reason`: why a reused rev waits for a person.

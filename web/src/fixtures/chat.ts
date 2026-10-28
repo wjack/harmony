@@ -363,7 +363,6 @@ function question(state: ChatState, spec: QuestionSpec): InlineQuestionItem {
     answer,
     askers: [],
     recipients,
-    goes_to_org_ids: answer === null ? [] : recipients.map((org) => org.id),
     deliveries:
       answeredAt === null
         ? []

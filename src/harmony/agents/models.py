@@ -406,13 +406,12 @@ class QuestionAsker(_Model):
 #   member answered in its own conversation);
 # - `fitted`: another asker, sent Claude's version fitted to its question, after its
 #   org's checks;
-# - `later`: the same for an asker that asked after the answer ("Used for Mesa");
 # - `drafting`: that version is being written;
-# - `held`: the asker waits for a person (`reason`): its version didn't pass, or it asked
-#   after the answer and wasn't sent it;
-# - `not_sent`: the asker isn't in the card's goes-to list, or a member declined it;
+# - `held`: the asker waits for a person (`reason`): its version didn't pass;
+# - `not_sent`: the member unticked the asker, it asked after the answer, or a member
+#   declined it;
 # - `ended`: its conversation ended before the answer reached it.
-DeliveryState = Literal["as_written", "fitted", "later", "drafting", "held", "not_sent", "ended"]
+DeliveryState = Literal["as_written", "fitted", "drafting", "held", "not_sent", "ended"]
 
 
 class QuestionDelivery(_Model):
@@ -436,9 +435,10 @@ class InlineQuestionItem(_ChatItem):
 
     A card groups the request's items that ask the same question and are routed to the
     chat's owner. The one shown (`escalation_id`, `question`, `from_org`) is the item a
-    member answered, else the oldest open one; the rest are `askers`. Answered, it
-    lists one `deliveries` row per asker, later askers included, and who answered
-    (`answered_by`, `answered_at`)."""
+    member answered, else the oldest open one; the rest are `askers`. The answer goes to
+    the one shown and the askers the member keeps ticked, never to another conversation.
+    Answered, it lists one `deliveries` row per asker, and who answered (`answered_by`,
+    `answered_at`)."""
 
     type: Literal["inline_question"] = "inline_question"
     escalation_id: UUID
@@ -449,11 +449,9 @@ class InlineQuestionItem(_ChatItem):
     action: EscalationAction | None
     answer: str | None
     askers: list[QuestionAsker] = []
-    # The request's organizations, for "Answer goes to · Change", and the ones ticked:
-    # every recipient until a member answers, then the ones they ticked (none for an
-    # answer given outside the chat's card).
+    # The request's organizations: the member's answer may name none but the shown
+    # asker's.
     recipients: list[OrgRef] = []
-    goes_to_org_ids: list[UUID] = []
     deliveries: list[QuestionDelivery] = []
     answered_by: MemberRef | None
     answered_at: datetime | None

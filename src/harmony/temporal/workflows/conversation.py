@@ -31,13 +31,15 @@ Update looks. A `network_news` signal (a counterparty wrote, or a conversation e
 `NetworkActivities.nudge_chat`) arms a look. It is due at the later of `LOOK_LULL`
 after the latest news and `LOOK_EVERY` after the last look, but never later than
 `LOOK_LATEST` after the first news it hasn't looked at, so a busy request can't put it
-off for ever. Member messages and `closed` updates run first; a turn that takes a
-`closed` update clears the armed look, since that turn reads every conversation. A look
-is an `internal_turn` with `look=True`: its own turn id, numbered by its own count
-(`looks`), never a chat turn number, so the chat's cassette turns don't move with
-wall-clock lulls. It doesn't read as a turn in flight (`looking` instead), and a failed
-or refused one sets no `turn_failure` and isn't run again. Runs from before looks
-(`workflow.patched("chat-home")` false) never arm one.
+off for ever. News that the owner answered their representative's question
+(`answered`) makes it due at once: Claude may ask about passing part of the answer on
+to the request's other conversations. Member messages and `closed` updates run first; a
+turn that takes a `closed` update clears the armed look, since that turn reads every
+conversation. A look is an `internal_turn` with `look=True`: its own turn id, numbered
+by its own count (`looks`), never a chat turn number, so the chat's cassette turns
+don't move with wall-clock lulls. It doesn't read as a turn in flight (`looking`
+instead), and a failed or refused one sets no `turn_failure` and isn't run again. Runs
+from before looks (`workflow.patched("chat-home")` false) never arm one.
 
 An approved outreach card starts the `NetworkRequestWorkflow`: the update handler stores
 the resolution (`NetworkActivities.apply_card_resolution`), and the run loop then runs
@@ -155,6 +157,7 @@ class ConversationWorkflow:
         self._news_first_at = carried.news_first_at
         self._news_latest_at = carried.news_latest_at
         self._looked_at = carried.looked_at
+        self._news_answered = carried.news_answered
         self._looking = False
         # Set at the top of the run: a run from before looks never arms one.
         self._looks_on = False
@@ -207,11 +210,13 @@ class ConversationWorkflow:
 
     @workflow.signal
     def network_news(self, news: NetworkNews) -> None:
-        """A counterparty wrote, or a conversation ended: arm an update look."""
+        """A counterparty wrote, a conversation ended, or the owner answered a question:
+        arm an update look."""
         now = workflow.now()
         if self._news_first_at is None:
             self._news_first_at = now
         self._news_latest_at = now
+        self._news_answered = self._news_answered or news.answered
 
     @workflow.update
     async def resolve_card(self, resolution: CardResolution) -> CardResolved:
@@ -267,11 +272,16 @@ class ConversationWorkflow:
 
     async def _wait(self, due: datetime | None) -> bool:
         """Wait for work until the armed look is `due`, or for `CONVERSATION_IDLE` when
-        none is armed. News that arms a look ends the wait, to wait for the look instead.
-        False when the wait timed out."""
+        none is armed. News that arms a look, or brings it forward (an answer), ends the
+        wait, to wait for the look instead. False when the wait timed out."""
+
+        def sooner() -> bool:
+            now_due = self._look_due()
+            return now_due is not None and (due is None or now_due < due)
+
         try:
             await workflow.wait_condition(
-                lambda: self._has_work() or (due is None and self._look_due() is not None),
+                lambda: self._has_work() or sooner(),
                 timeout=CONVERSATION_IDLE if due is None else _until(due),
             )
         except TimeoutError:
@@ -283,6 +293,8 @@ class ConversationWorkflow:
         first, latest = self._news_first_at, self._news_latest_at
         if not self._looks_on or first is None or latest is None:
             return None
+        if self._news_answered:
+            return latest
         due = latest + LOOK_LULL
         if self._looked_at is not None:
             due = max(due, self._looked_at + LOOK_EVERY)
@@ -293,6 +305,7 @@ class ConversationWorkflow:
         member's picture. News arriving meanwhile arms the next one."""
         conversation = self._input
         self._news_first_at = self._news_latest_at = None
+        self._news_answered = False
         self._looked_at = workflow.now()
         self._looking = True
         try:
@@ -327,6 +340,7 @@ class ConversationWorkflow:
         if any(update.kind == "closed" for update in updates):
             # The closing turn reads every conversation: nothing is left to look at.
             self._news_first_at = self._news_latest_at = None
+            self._news_answered = False
         self._turns += 1
         self._turns_this_run += 1
         await self._run_turn(
@@ -585,6 +599,7 @@ class ConversationWorkflow:
                     news_first_at=self._news_first_at,
                     news_latest_at=self._news_latest_at,
                     looked_at=self._looked_at,
+                    news_answered=self._news_answered,
                 )
             }
         )

@@ -162,10 +162,14 @@ class NetworkUpdate(_Payload):
 
 class NetworkNews(_Payload):
     """Signal `network_news`: a counterparty wrote on one of this chat's requests, or a
-    conversation on one ended. Sent by `NetworkActivities.nudge_chat` (signal-with-start).
-    It arms an update look and never starts a turn itself."""
+    conversation on one ended (`NetworkActivities.nudge_chat`), or the chat's owner
+    answered their own representative's question on one (the resolve route), all by
+    signal-with-start. It arms an update look and never starts a turn itself."""
 
     request_id: UUID
+    # The owner answered: the look is due at once, so Claude can ask about passing part
+    # of the answer on.
+    answered: bool = False
 
 
 class ConversationCarry(_Payload):
@@ -192,6 +196,8 @@ class ConversationCarry(_Payload):
     news_latest_at: datetime | None = None
     # When the last look ran.
     looked_at: datetime | None = None
+    # The armed look follows an answer of the owner's, so it is due at once.
+    news_answered: bool = False
 
 
 class ConversationInput(_Payload):

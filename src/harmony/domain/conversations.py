@@ -12,8 +12,8 @@ in turn order, so a member message never lands between a request and its respons
   `tool_activity` (status from its `tool_result`), except `send_network_request`, which
   renders as its card. A tool row reads in the present tense until its result is
   stored ("Searching the Harmony network…"), then in the past with what a search found
-  ("2 possible fits of 14"); its `detail` is what it worked on (the need, the query,
-  the record's title);
+  ("2 possible fits of 14") or where a share went; its `detail` is what it worked on
+  (the need, the query, the record's title, the words shared);
 - `cards` (by `tool_use_id`) → `outreach_card`, followed by a `request_status` item
   once it is approved. A recipient row is `selected` when it is in the request: every
   listed row while the card awaits the member or once it was rejected; the rows the
@@ -77,6 +77,7 @@ from harmony.agents.models import (
 from harmony.agents.transcript import (
     LOOK_NOTE_BLOCK,
     LOOK_NOTE_PREFIX,
+    AnsweredQuestion,
     WireMessage,
     is_look_note,
 )
@@ -99,6 +100,7 @@ from harmony.db.models.choices import CardRejectedWith
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards as cards_domain
 from harmony.domain import consults, escalations, records, requests
+from harmony.domain.threads import TERMINAL_STATES
 from harmony.events.schemas import EntitySnapshot, EventScope
 from harmony.llm.wire import canonical_json
 
@@ -113,6 +115,7 @@ _TOOL_LABELS: Final[Mapping[str, tuple[str, str | None]]] = {
     records.READ_DOCUMENT: ("Read a document", None),
     "search_network": ("Searched the Harmony network", "need"),
     "get_request_status": ("Checked on the request", None),
+    "share_with_representatives": ("Shared with your representatives", "text"),
 }
 # A chat's row while its tool runs (no result stored yet).
 _RUNNING_LABELS: Final[Mapping[str, str]] = {
@@ -120,6 +123,7 @@ _RUNNING_LABELS: Final[Mapping[str, str]] = {
     records.READ_DOCUMENT: "Reading a document",
     "search_network": "Searching the Harmony network…",
     "get_request_status": "Checking on the request",
+    "share_with_representatives": "Sharing with your representatives",
 }
 
 
@@ -427,6 +431,67 @@ async def requests_with_news(
     return list(rows)
 
 
+async def answers_to_pass_on(
+    session: AsyncSession, conversation: Conversation, *, since: datetime | None
+) -> list[AnsweredQuestion]:
+    """The answers the chat's owner gave, in their own words, to their own
+    representative's questions on the chat's requests after `since` (ever, when None),
+    oldest first, each with the request's other open conversations: those that haven't
+    ended and didn't ask the question of its card. An answer with none is left out."""
+    rows = await session.execute(
+        select(Escalation, Consult, NetworkRequest, Thread.responder_org_id)
+        .join(
+            Consult,
+            (Consult.world_id == Escalation.world_id) & (Consult.id == Escalation.consult_id),
+        )
+        .join(Thread, (Thread.world_id == Consult.world_id) & (Thread.id == Consult.thread_id))
+        .join(
+            NetworkRequest,
+            (NetworkRequest.world_id == Thread.world_id) & (NetworkRequest.id == Thread.request_id),
+        )
+        .where(
+            Escalation.world_id == conversation.world_id,
+            NetworkRequest.conversation_id == conversation.id,
+            Consult.side == "requester",
+            Escalation.resolved_by_member_id == conversation.owner_member_id,
+            Escalation.resolved_at > since if since is not None else true(),
+        )
+        .order_by(Escalation.resolved_at, Escalation.id)
+    )
+    orgs = await _org_refs(session, conversation.world_id)
+    answers: list[AnsweredQuestion] = []
+    for item, consult, request, asker_id in rows:
+        words = await escalations.settled_words(session, item)
+        if consults.member_answer([item], conversation.owner_member_id) is None or not words:
+            continue
+        card_id = consults.card_of(consult)
+        asked = set(
+            await session.scalars(
+                select(Consult.thread_id).where(
+                    Consult.world_id == conversation.world_id, consults.in_card(card_id)
+                )
+            )
+        )
+        others = [
+            orgs[thread.responder_org_id]
+            for thread in await requests.threads_of(session, request)
+            if thread.state not in TERMINAL_STATES and thread.id not in asked
+        ]
+        if not others:
+            continue
+        card = await consults.get(session, world_id=conversation.world_id, consult_id=card_id)
+        went = [UUID(org_id) for org_id in card.goes_to_org_ids] or [asker_id]
+        answers.append(
+            AnsweredQuestion(
+                request_id=request.id,
+                answer=words,
+                asked=[orgs[org_id].name for org_id in went],
+                others=[(org.name, org.slug) for org in others],
+            )
+        )
+    return answers
+
+
 def _is_look_note(conversation: Conversation) -> ColumnElement[bool]:
     return and_(
         ChatMessage.world_id == conversation.world_id,
@@ -654,6 +719,13 @@ def _transcript_item(
             outcome=None,
             turn_id=row.turn_id,
         )
+    outcome = None
+    if result.status == "done":
+        outcome = (
+            _shared_with(block.get("input"), orgs)
+            if name == "share_with_representatives"
+            else _outcome(name, result.content)
+        )
     return ToolActivityItem(
         id=item_id,
         at=row.created_at,
@@ -661,7 +733,7 @@ def _transcript_item(
         label=label,
         detail=detail,
         status=result.status,
-        outcome=_outcome(name, result.content) if result.status == "done" else None,
+        outcome=outcome,
         turn_id=row.turn_id,
     )
 
@@ -710,6 +782,18 @@ def _outcome(name: str, content: JsonValue) -> str | None:
                 return None
     except ValidationError:
         return None
+
+
+def _shared_with(tool_input: JsonValue | None, orgs: Mapping[UUID, OrgRef]) -> str | None:
+    """Where a share went: "Northlake Characterization Core and Calder Computational"."""
+    slugs = tool_input.get("organizations") if isinstance(tool_input, dict) else None
+    if not isinstance(slugs, list):
+        return None
+    names = {org.slug: org.name for org in orgs.values()}
+    shown = [names[slug] for slug in slugs if isinstance(slug, str) and slug in names]
+    if not shown:
+        return None
+    return " and ".join(shown) if len(shown) <= 2 else f"{', '.join(shown[:-1])} and {shown[-1]}"
 
 
 def _fits(screened: ScreenedCounts) -> str:
@@ -875,12 +959,7 @@ async def _question_card(
         else None
     )
     card = next((a.consult for a in asked if a.consult.id == card_id), shown.consult)
-    # Every recipient is ticked until the card is settled; then the list as stored.
-    goes_to = (
-        list(recipients)
-        if answer is None and open_items
-        else [UUID(org_id) for org_id in card.goes_to_org_ids]
-    )
+    goes_to = [UUID(org_id) for org_id in card.goes_to_org_ids]
     answered_by = None
     if answer is not None and answer.resolved_by_member_id is not None:
         member = await repo.get_required(
@@ -909,7 +988,6 @@ async def _question_card(
             if a is not shown
         ],
         recipients=[orgs[org_id] for org_id in recipients if org_id in orgs],
-        goes_to_org_ids=goes_to,
         deliveries=(
             []
             if answer is None
@@ -935,10 +1013,9 @@ async def _delivery(
 ) -> QuestionDelivery | None:
     """What became of the card's answer in one conversation (`DeliveryState`); None for
     one it never concerned: a question answered from the records alone, or an item a
-    teammate decides."""
+    teammate decides. `goes_to`: the organizations of the askers it went to."""
     consult, item = asked.consult, asked.item
     answered_at = answer.resolved_at or answer.created_at
-    reused = "fitted" if consult.created_at <= answered_at else "later"
 
     def row(
         state: DeliveryState, at: datetime | None, reason: str | None = None
@@ -948,12 +1025,11 @@ async def _delivery(
         )
 
     if item is None:
-        released = consult.drafted_from_id is not None and consult.status == "released"
-        return row(reused, consult.released_at) if released else None
+        return None
     if item is answer:
         return row("as_written", item.resolved_at)
     if item.status == "resolved" and item.resolved_by_member_id is None:
-        return row(reused, item.resolved_at)
+        return row("fitted", item.resolved_at)
     if asked not in routed:
         return None
     match item.status:
@@ -970,11 +1046,10 @@ async def _delivery(
         return row(
             "held", current.created_at if current else None, release.why_needed(consult, held)
         )
-    if asked.org_id not in goes_to:
+    # An asker that asked after the answer was given never got it.
+    if asked.org_id not in goes_to or item.created_at > answered_at:
         return row("not_sent", None)
-    if item.created_at <= answered_at:
-        return row("drafting", None)
-    return row("held", item.created_at, release.why_needed(consult))
+    return row("drafting", None)
 
 
 def _item(asked: _Asked) -> Escalation:
@@ -1040,6 +1115,7 @@ __all__ = [
     "NO_MEMBER_MESSAGE",
     "TITLE_MAX_CHARS",
     "SendMode",
+    "answers_to_pass_on",
     "append_assistant_content",
     "append_member_message",
     "append_turn_input",

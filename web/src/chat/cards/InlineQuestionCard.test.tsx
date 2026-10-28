@@ -15,7 +15,6 @@ function org(n: number, slug: string, name: string): OrgRef {
 const NORTHLAKE = org(1, "northlake", "Northlake Characterization Core");
 const KESTREL = org(2, "kestrel", "Kestrel XRD Services");
 const AURORA = org(3, "aurora", "Aurora Beamline");
-const MESA = org(4, "mesa", "Mesa Microscopy");
 const QUARTZ = org(6, "quartz", "Quartz Spectroscopy");
 
 const OPEN: InlineQuestionItem = {
@@ -31,7 +30,6 @@ const OPEN: InlineQuestionItem = {
   answer: null,
   askers: [],
   recipients: [],
-  goes_to_org_ids: [],
   deliveries: [],
   answered_by: null,
   answered_at: null,
@@ -49,7 +47,7 @@ const GROUPED: InlineQuestionItem = {
     asker(KESTREL, "Will more batches follow, and roughly when?"),
     asker(AURORA, "Will there be later rounds? Should we hold beam time in January?"),
   ],
-  recipients: [NORTHLAKE, KESTREL, AURORA, QUARTZ, MESA],
+  recipients: [NORTHLAKE, KESTREL, AURORA, QUARTZ],
 };
 
 function show(item: Partial<InlineQuestionItem>, onAnswer: (body: ResolveEscalation) => void = () => undefined): void {
@@ -109,17 +107,14 @@ it("answers a question three conversations asked once, holds an answer naming an
   show(GROUPED, onAnswer);
   expect(screen.getByText("Same question from 3")).toBeTruthy();
   expect(screen.getByText(/Should we hold beam time in January\?/)).toBeTruthy();
-  expect(screen.getByText("anyone on this request who asks")).toBeTruthy();
-
-  // Change: every organization on the request, ticked, the askers marked.
-  fireEvent.click(screen.getByRole("button", { name: "Change" }));
-  const list = screen.getByRole("group", { name: "Answer goes to" });
-  const boxes = within(list).getAllByRole("checkbox");
-  expect(boxes.map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, true, true, true]);
-  expect(within(list).getAllByText("asked")).toHaveLength(3);
-  expect(within(list).getAllByText("if it asks")).toHaveLength(2);
-  fireEvent.click(within(list).getByRole("checkbox", { name: /Aurora Beamline/ }));
-  expect(screen.getByText("anyone on this request who asks, except Aurora Beamline")).toBeTruthy();
+  // Only the askers get the answer, each other one ticked until the member unticks it.
+  expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+  const goesTo = (names: string) => screen.getByText((_, node) => node?.textContent === `Answer goes to ${names}`);
+  expect(goesTo("Northlake Characterization Core, Kestrel XRD Services and Aurora Beamline")).toBeTruthy();
+  const boxes = screen.getAllByRole("checkbox");
+  expect(boxes.map((box) => (box as HTMLInputElement).checked)).toEqual([true, true]);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Answer Aurora Beamline too" }));
+  expect(goesTo("Northlake Characterization Core and Kestrel XRD Services")).toBeTruthy();
 
   // Northlake gets the words as written, so naming another organization on the request holds Send.
   const box = screen.getByRole("textbox", { name: "Your answer about Northlake Characterization Core" });
@@ -129,10 +124,10 @@ it("answers a question three conversations asked once, holds an answer naming an
     "Your answer names Aurora Beamline, and Northlake gets your words as written. Leave the name out.",
   );
   expect(send).toHaveProperty("disabled", true);
-  // A short name counts too.
-  fireEvent.change(box, { target: { value: "Same as we told Kestrel." } });
+  // A short name counts too, and so does an organization that didn't ask.
+  fireEvent.change(box, { target: { value: "Same as we told Quartz." } });
   expect(screen.getByRole("alert").textContent).toBe(
-    "Your answer names Kestrel, and Northlake gets your words as written. Leave the name out.",
+    "Your answer names Quartz Spectroscopy, and Northlake gets your words as written. Leave the name out.",
   );
 
   fireEvent.change(box, { target: { value: "Three rounds: 12 now, about 8 at week 5 and 6 at week 9." } });
@@ -143,38 +138,33 @@ it("answers a question three conversations asked once, holds an answer naming an
     action: "approve",
     text: "Three rounds: 12 now, about 8 at week 5 and 6 at week 9.",
     also_for: ["esc-kestrel"],
-    goes_to_org_ids: [NORTHLAKE.id, KESTREL.id, QUARTZ.id, MESA.id],
   });
 
-  // Answered: one row per conversation, and Review where it waits on a person.
+  // Answered: one row per asker, and Review where it waits on a person.
   show({
     ...GROUPED,
+    askers: [...GROUPED.askers, asker(QUARTZ, "How many rounds?")],
     status: "resolved",
     action: "approve",
     answer: "Three rounds.",
     answered_by: { id: "m1", slug: "maya", name: "Prof. Maya Henderson" },
     answered_at: "2026-11-02T14:06:00Z",
-    goes_to_org_ids: [NORTHLAKE.id, KESTREL.id, QUARTZ.id, MESA.id],
     deliveries: [
       { thread_id: "thread-northlake", org: NORTHLAKE, state: "as_written", at: "2026-11-02T14:06:00Z", reason: null },
       { thread_id: "thread-kestrel", org: KESTREL, state: "fitted", at: "2026-11-02T14:07:00Z", reason: null },
       { thread_id: "thread-aurora", org: AURORA, state: "not_sent", at: null, reason: null },
       { thread_id: "thread-quartz", org: QUARTZ, state: "held", at: null, reason: "It would book beam time." },
-      { thread_id: "thread-mesa", org: MESA, state: "later", at: "2026-11-02T14:31:00Z", reason: null },
     ],
   });
   expect(screen.queryByRole("textbox")).toBeNull();
   expect(screen.getByText(/^Your answer · Maya, /)).toBeTruthy();
-  expect(screen.getByText("anyone on this request who asks, except Aurora Beamline")).toBeTruthy();
+  expect(screen.queryByText(/^Answer goes to/)).toBeNull();
   const rows = within(screen.getByRole("list", { name: "Where your answer went" })).getAllByRole("listitem");
   expect(rows.map((row) => row.textContent)).toEqual([
     expect.stringMatching(/Northlake Characterization CoreSent as you wrote it · \d/),
     expect.stringMatching(/Kestrel XRD ServicesSent · fitted to Kestrel's question, within what Henderson Lab shares · \d/),
     expect.stringMatching(/Aurora BeamlineNot sentReview$/),
     expect.stringMatching(/Quartz SpectroscopyHeld for reviewIt would book beam time\.Review$/),
-    expect.stringMatching(
-      /Mesa MicroscopyUsed for Mesa Microscopy · .+ · asked later, fitted to Mesa Microscopy's question, within what Henderson Lab shares$/,
-    ),
   ]);
   expect(screen.getByRole("link", { name: "Review Quartz Spectroscopy" }).getAttribute("href")).toBe("/requests/thread-quartz");
 });

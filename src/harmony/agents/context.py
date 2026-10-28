@@ -93,15 +93,18 @@ ESCAPED_LESS_THAN: Final = "&lt;"
 EMPTY_PART: Final = "(none)"
 # The tag code writes around a guidance version (`guidance_block`).
 GUIDANCE_TAG: Final = "guidance"
+# The tag a `shared` notice quotes the member's words in.
+SHARED_TAG: Final = "shared"
 # `for` on the org's default sharing description; a trusted organization's extra one
 # names that organization.
 SHARING_FOR_ANY: Final = "any organization"
 
 # Code-written notices to a representative: its org's prompt settings changed
 # (`settings`), its mode or the sharing descriptions that apply changed for this
-# counterparty (`mode`, `sharing`), the world date, the counterparty closed, or either
-# side reopened the conversation.
-NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed", "reopened"]
+# counterparty (`mode`, `sharing`), the world date, the counterparty closed, either
+# side reopened the conversation, or a member of its side passed it something from
+# their chat (`shared`, their words quoted).
+NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed", "reopened", "shared"]
 
 # Every character `str.splitlines` breaks on, so no line hides inside another.
 _LINE_BREAK: Final = re.compile(r"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85  ]")
@@ -463,14 +466,34 @@ async def freeze_rep_session(uow: UnitOfWork, context: RepContext) -> RepSession
 
 
 async def queue_notice(
-    uow: UnitOfWork, *, thread_id: UUID, side: Side, kind: NoticeKind, text: str
+    uow: UnitOfWork,
+    *,
+    thread_id: UUID,
+    side: Side,
+    kind: NoticeKind,
+    text: str,
+    once: bool = False,
 ) -> RepNotice:
-    """Queue a code-written notice for the side's next model call (§2.2)."""
+    """Queue a code-written notice for the side's next model call (§2.2). With `once`,
+    a notice of the same kind and text the side already has, queued or sent, is
+    returned instead (a retried tool call)."""
     body = text.strip()
     if not body:
         raise ValueError("a notice needs text")
     session = uow.session
     await _lock_notices(session, uow.world_id, thread_id, side)
+    if once:
+        queued = await session.scalar(
+            select(RepNotice)
+            .where(
+                _notices_of(uow.world_id, thread_id, side),
+                RepNotice.kind == kind,
+                RepNotice.text == body,
+            )
+            .limit(1)
+        )
+        if queued is not None:
+            return queued
     row = RepNotice(
         world_id=uow.world_id,
         thread_id=thread_id,
@@ -758,6 +781,18 @@ def reopened_notice(counterparty_name: str, *, by_us: bool) -> str:
     return (
         f"Notice from Harmony: {counterparty} reopened this conversation, so messages reach "
         "them again."
+    )
+
+
+def shared_notice(text: str, *, member_name: str, counterparty_name: str) -> str:
+    """The `shared` notice: words a member of the representative's own side approved in
+    their chat for this conversation, quoted as theirs."""
+    member, them = _one_line(member_name), _one_line(counterparty_name)
+    return (
+        f"Notice from Harmony: {member}, on your side, shared this for your conversation "
+        f"with {them}. Treat it as an answer from your side, not from {them}. It never "
+        f"widens what you may pass on: share from it only what you may share with {them}, "
+        "and only where it helps.\n" + quoted(SHARED_TAG, text, from_=member)
     )
 
 
@@ -1144,6 +1179,7 @@ __all__ = [
     "GUIDANCE_TAG",
     "RELEASED_CLOSE",
     "RELEASED_OPEN",
+    "SHARED_TAG",
     "SHARING_FOR_ANY",
     "UNVERIFIED_MARK",
     "DeliveredGuidance",
@@ -1176,6 +1212,7 @@ __all__ = [
     "recipient_ask",
     "reopened_notice",
     "sent_without_review",
+    "shared_notice",
     "sharing_parts",
     "sharing_text",
     "short_date",

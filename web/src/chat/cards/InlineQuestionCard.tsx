@@ -69,7 +69,8 @@ const SETTLED: Record<NonNullable<InlineQuestionItem["action"]>, Settled> = {
  * When other conversations on the request ask the same thing, they join this card as
  * its askers, and one answer serves them all: the shown asker gets the member's words
  * as written, each other ticked asker a version fitted to its question and checked for
- * that organization. Later askers on the request get it the same way, if ticked.
+ * that organization. The answer goes only to the askers; afterwards Claude may ask in
+ * the chat whether part of it may go to the request's other conversations.
  *
  * The answer hands the move to the representative, whose turn a spent cap or a pause
  * would refuse, ending the thread for good: while the budget isn't `ok` it holds, and
@@ -129,12 +130,6 @@ export function InlineQuestionCard({ item, us, busy, blocked, error, onAnswer }:
               </p>
             </>
           )}
-          {item.action === "approve" && item.goes_to_org_ids.length > 0 && (
-            <p className="mt-2.5 text-[12.5px] leading-5 text-muted">
-              Answer goes to:{" "}
-              <span className="text-secondary">{goesTo(item.recipients, new Set(item.goes_to_org_ids))}</span>
-            </p>
-          )}
           {item.deliveries.length > 0 && (
             <ul aria-label="Where your answer went" className="mt-3 border-t border-border">
               {item.deliveries.map((delivery) => (
@@ -151,13 +146,13 @@ export function InlineQuestionCard({ item, us, busy, blocked, error, onAnswer }:
 function AnswerBox({ item, us, busy, blocked, error, onAnswer }: InlineQuestionCardProps) {
   const [answer, setAnswer] = useState("");
   const [showAsks, setShowAsks] = useState(true);
-  const [picking, setPicking] = useState(false);
-  // Every organization on the request starts ticked: "anyone on this request who asks".
-  const [ticked, setTicked] = useState<ReadonlySet<string>>(() => new Set(item.recipients.map((org) => org.id)));
+  // Every other asker still waiting starts ticked; unticked, it gets nothing and waits on its own.
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(
+    () => new Set(item.askers.filter((asker) => asker.status === "open").map((asker) => asker.escalation_id)),
+  );
 
-  const asked = new Set([item.from_org.id, ...item.askers.map((asker) => asker.from_org.id)]);
   // The other askers still waiting and ticked get a version fitted to their question.
-  const fitted = item.askers.filter((asker) => asker.status === "open" && ticked.has(asker.from_org.id));
+  const fitted = item.askers.filter((asker) => asker.status === "open" && ticked.has(asker.escalation_id));
   // The shown asker gets the words as written, so they mustn't name anyone else on the request.
   const kept = [item.from_org.name, us];
   const named = item.recipients.filter((org) => org.id !== item.from_org.id && namesOrg(answer, org.name, kept));
@@ -169,14 +164,13 @@ function AnswerBox({ item, us, busy, blocked, error, onAnswer }: InlineQuestionC
       action: "approve",
       text: answer.trim(),
       also_for: fitted.map((asker) => asker.escalation_id),
-      goes_to_org_ids: item.recipients.filter((org) => ticked.has(org.id)).map((org) => org.id),
     });
   };
-  const toggle = (orgId: string) => {
+  const toggle = (escalationId: string) => {
     setTicked((current) => {
       const next = new Set(current);
-      if (next.has(orgId)) next.delete(orgId);
-      else next.add(orgId);
+      if (next.has(escalationId)) next.delete(escalationId);
+      else next.add(escalationId);
       return next;
     });
   };
@@ -213,8 +207,27 @@ function AnswerBox({ item, us, busy, blocked, error, onAnswer }: InlineQuestionC
             <ul className="mt-2 flex flex-col gap-1.5 border-l-2 border-border-strong py-0.5 pl-3 text-secondary">
               {item.askers.map((asker) => (
                 <li key={asker.escalation_id}>
-                  <span className="font-medium text-ink">{asker.from_org.name}</span>: {asker.question}
-                  {asker.status === "cancelled" && <span className="text-muted"> · Conversation ended</span>}
+                  {asker.status === "open" ? (
+                    <label className="flex cursor-pointer items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={ticked.has(asker.escalation_id)}
+                        aria-label={`Answer ${asker.from_org.name} too`}
+                        onChange={() => {
+                          toggle(asker.escalation_id);
+                        }}
+                        className="mt-px size-4 shrink-0 accent-ink"
+                      />
+                      <span className="min-w-0">
+                        <span className="font-medium text-ink">{asker.from_org.name}</span>: {asker.question}
+                      </span>
+                    </label>
+                  ) : (
+                    <>
+                      <span className="font-medium text-ink">{asker.from_org.name}</span>: {asker.question}
+                      {asker.status === "cancelled" && <span className="text-muted"> · Conversation ended</span>}
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
@@ -242,17 +255,10 @@ function AnswerBox({ item, us, busy, blocked, error, onAnswer }: InlineQuestionC
         <div className="mt-2.5 flex items-center gap-3">
           {blocked === null ? (
             <p className="min-w-0 flex-1 text-[12.5px] leading-5 text-muted">
-              Answer goes to: <span className="text-secondary">{goesTo(item.recipients, ticked)}</span> ·{" "}
-              <button
-                type="button"
-                aria-expanded={picking}
-                onClick={() => {
-                  setPicking((value) => !value);
-                }}
-                className={cx("whitespace-nowrap text-link", picking ? "underline" : "hover:underline")}
-              >
-                Change
-              </button>
+              Answer goes to{" "}
+              <span className="text-secondary">
+                {listed([item.from_org, ...fitted.map((asker) => asker.from_org)].map((org) => org.name))}
+              </span>
             </p>
           ) : (
             <p role="status" className="flex min-w-0 flex-1 items-center gap-2 text-[13px] leading-5 text-secondary">
@@ -264,35 +270,6 @@ function AnswerBox({ item, us, busy, blocked, error, onAnswer }: InlineQuestionC
             {busy ? "Sending…" : "Send answer"}
           </Button>
         </div>
-        {picking && blocked === null && (
-          <fieldset className="mt-2.5 rounded-[10px] border border-border-strong bg-canvas p-1.5">
-            <legend className="float-left w-full px-2 pt-1 pb-1 text-ui-xs text-muted">Answer goes to</legend>
-            {item.recipients.map((org) => (
-              <label
-                key={org.id}
-                className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-[6px] px-2 py-1.5 text-[13.5px] leading-5 hover:bg-hover"
-              >
-                <input
-                  type="checkbox"
-                  checked={ticked.has(org.id)}
-                  // The question shown is the one being answered.
-                  disabled={org.id === item.from_org.id}
-                  onChange={() => {
-                    toggle(org.id);
-                  }}
-                  className="size-4 shrink-0 accent-ink"
-                />
-                <OrgAvatar org={org} size={22} />
-                <span className="min-w-0 flex-1 truncate text-ink">{org.name}</span>
-                <span className="text-ui-xs whitespace-nowrap text-muted">{asked.has(org.id) ? "asked" : "if it asks"}</span>
-              </label>
-            ))}
-            <p className="mt-1 border-t border-border px-2 pt-2 pb-1 text-ui-xs text-muted">
-              Only the ones that ask get it, now or later on this request. Each answer first passes {possessive(us)}{" "}
-              checks for that organization. Untick one and it never gets it.
-            </p>
-          </fieldset>
-        )}
         {hint !== null && blocked === null && (
           <p
             role={named.length > 0 ? "alert" : undefined}
@@ -318,13 +295,12 @@ function DeliveryRow({ delivery, us }: { delivery: QuestionDelivery; us: string 
   const line: Record<QuestionDelivery["state"], string> = {
     as_written: `Sent as you wrote it${at}`,
     fitted: `Sent · fitted to ${possessive(name)} question, ${within}${at}`,
-    later: `Used for ${name}${at} · asked later, fitted to ${possessive(name)} question, ${within}`,
     drafting: `Fitting your answer to ${possessive(name)} question…`,
     held: "Held for review",
     not_sent: "Not sent",
     ended: "Conversation ended",
   };
-  const sent = delivery.state === "as_written" || delivery.state === "fitted" || delivery.state === "later";
+  const sent = delivery.state === "as_written" || delivery.state === "fitted";
   const review = delivery.state === "held" || delivery.state === "not_sent";
   return (
     <li className="grid grid-cols-[22px_minmax(0,1fr)_auto] items-start gap-x-2.5 border-b border-dashed border-border py-2.5 last:border-b-0">
@@ -357,12 +333,6 @@ function captionOf(item: InlineQuestionItem, settled: Settled | null): string | 
     return `Your answer · ${firstName(item.answered_by.name)}, ${clockTime(item.answered_at)}`;
   }
   return settled?.caption ?? null;
-}
-
-/** "anyone on this request who asks", less the organizations unticked. */
-function goesTo(recipients: readonly OrgRef[], ticked: ReadonlySet<string>): string {
-  const left = recipients.filter((org) => !ticked.has(org.id)).map((org) => shortOrgName(org.name));
-  return left.length === 0 ? "anyone on this request who asks" : `anyone on this request who asks, except ${listed(left)}`;
 }
 
 /** "Northlake gets your words as written. Kestrel and Aurora get them fitted to their question." */

@@ -33,8 +33,8 @@ sharing check per draft rev, and each screener call in `AgentScreen`.
   drafted from a member's answer to another item on its card (`reuse_from`, the
   `use_answer` Update). Before a requester-side first draft, the matcher
   (`agents.consult.match_question`) says whether it asks one of the request's cards
-  again; when that card's answer goes to this counterparty, the draft starts from it.
-  A draft from a member's earlier answer is checked at any rev, in any mode.
+  again while that card waits for its answer; the draft is still its own. A draft from
+  a member's earlier answer is checked at any rev, in any mode.
 - `write_guidance`: a steer's guidance call (`agents.steer.write_guidance`), stored as
   the side's next guidance version, or as why it was rejected (docs/design/EDIT.md
   §3.3). Idempotent per steer.
@@ -423,6 +423,7 @@ class AgentActivities:
                     cassette_thread=cassette_thread,
                     look=look is not None,
                     wrote_at=look.wrote_at if look is not None else None,
+                    member_spoke=bool(turn.messages),
                 ),
                 screen,
             )
@@ -729,12 +730,10 @@ class AgentActivities:
     async def _reuse(
         self, consult: AnswerConsultInput, model: CheckpointedClient, *, attempt: int
     ) -> answerer.Reuse | None:
-        """The member's answer this draft starts from, if any: the item `reuse_from`
-        names, or, for a requester-side first draft, the answer of the card the matcher
-        says it asks again (stored as `same_as_id`, so a retry doesn't ask twice). That
-        answer is stored as `drafted_from_id` before drafting, so a retry, which gets the
-        first attempt's checkpointed draft, treats it as reused too, whatever the card
-        says by then. A matcher call that fails on the last attempt is no match."""
+        """The member's answer this draft starts from: the item `reuse_from` names, if
+        any. A requester-side first draft starts from none, but the matcher first says
+        which open card it asks again (stored as `same_as_id`, so a retry doesn't ask
+        twice). A matcher call that fails on the last attempt is no match."""
         world_id = consult.world_id
         if consult.reuse_from is not None:
             async with self._sessionmaker() as session:
@@ -743,8 +742,6 @@ class AgentActivities:
             return None
         async with self._sessionmaker() as session:
             row = await consults.get(session, world_id=world_id, consult_id=consult.consult_id)
-            if row.drafted_from_id is not None:
-                return await answerer.reuse_of(session, world_id, row.drafted_from_id)
         if row.same_as_id is None and row.status == "answering":
             started = time.monotonic()
             try:
@@ -767,14 +764,7 @@ class AgentActivities:
                     await consults.record_same_as(uow, consult.consult_id, card_id)
                 await _record_match_turn(uow, consult, _elapsed_ms(started))
                 await uow.commit()
-        async with self._sessionmaker() as session:
-            row = await consults.get(session, world_id=world_id, consult_id=consult.consult_id)
-            reuse = await answerer.card_reuse(session, row)
-        if reuse is not None and row.status == "answering":
-            async with unit_of_work(self._sessionmaker, world_id) as uow:
-                await consults.record_drafted_from(uow, consult.consult_id, reuse.escalation_id)
-                await uow.commit()
-        return reuse
+        return None
 
     async def _sharing_check(
         self,
@@ -1091,9 +1081,10 @@ class _Look:
 
 async def _look(session: AsyncSession, turn: InternalTurnInput) -> _Look | None:
     """The look's note, naming the chat's requests where a counterparty wrote or a
-    conversation ended since Claude last wrote or looked; None when there are none.
-    The look's own rows don't count, so a retried look finds what it found the first
-    time."""
+    conversation ended since Claude last wrote or looked, and quoting the answers the
+    chat's owner gave meanwhile that the request's other open conversations haven't had
+    (`conversations.answers_to_pass_on`); None when there are none. The look's own rows
+    don't count, so a retried look finds what it found the first time."""
     conversation = await repo.get_required(
         session, Conversation, turn.world_id, turn.conversation_id
     )
@@ -1101,10 +1092,11 @@ async def _look(session: AsyncSession, turn: InternalTurnInput) -> _Look | None:
     looked_at = await conversations.last_looked_at(session, conversation, besides=turn.turn_id)
     since = max((at for at in (wrote_at, looked_at) if at is not None), default=None)
     news = await conversations.requests_with_news(session, conversation, since=since)
-    if not news:
+    answers = await conversations.answers_to_pass_on(session, conversation, since=since)
+    if not news and not answers:
         return None
     owner = await repo.get_required(session, Member, turn.world_id, conversation.owner_member_id)
-    return _Look(note=look_note(owner.name, news), wrote_at=wrote_at)
+    return _Look(note=look_note(owner.name, news, answers), wrote_at=wrote_at)
 
 
 async def _card_sent(session: AsyncSession, turn: InternalTurnInput) -> bool:

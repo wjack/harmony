@@ -13,9 +13,10 @@ Rules every implementation keeps:
   activity loads the bytes.
 
 A chat's update looks (`ConversationWorkflow`) open with a code-written note
-(`look_note`). A later turn's history keeps a finished look only as its note and what
-Claude wrote, and leaves a silent one out (`chat_history`), so the status results looks
-read don't pile up in the chat.
+(`look_note`), which also quotes any answer the chat's owner just gave their own
+representative that Claude may ask about passing on. A later turn's history keeps a
+finished look only as its note and what Claude wrote, and leaves a silent one out
+(`chat_history`), so the status results looks read don't pile up in the chat.
 
 Every message carries the turn that wrote it. A turn's messages are contiguous and form
 the transcript's tail while the turn runs (the workflow runs one turn per transcript at
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import groupby
 from typing import Annotated, Final, Literal, Protocol
@@ -40,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from harmony.agents.context import quoted
 from harmony.db.models import ChatMessage, Conversation, RepTranscript
 from harmony.db.models.choices import Side, TranscriptRole
 from harmony.db.uow import UnitOfWork, unit_of_work
@@ -53,11 +56,23 @@ _CHAT_ID_PREFIX: Final = "transcript"
 # An update look's opening: no counterparty text, and the ids, since
 # `get_request_status` without one reads only the chat's latest request.
 LOOK_NOTE_PREFIX: Final = "Harmony: there's news on "
-LOOK_NOTE: Final = (
-    LOOK_NOTE_PREFIX + "{member}'s {requests} since you last spoke. Check get_request_status "
-    "for each. Tell {member} only what changes their picture: a price, a date, a yes or "
-    "no, a blocker, a counter-proposal. Say who said it. Otherwise end your turn without "
-    "writing."
+_LOOK_HEAD: Final = LOOK_NOTE_PREFIX + "{member}'s {requests} since you last spoke."
+_LOOK_NEWS: Final = (
+    "Check get_request_status for each. Tell {member} only what changes their picture: a "
+    "price, a date, a yes or no, a blocker, a counter-proposal. Say who said it."
+)
+_LOOK_QUIET: Final = "Otherwise end your turn without writing."
+LOOK_NOTE: Final = f"{_LOOK_HEAD} {_LOOK_NEWS} {_LOOK_QUIET}"
+# A look's part for an answer the chat's owner gave their representative, on a request
+# with other open conversations (`AnsweredQuestion`): the member's words, quoted.
+LOOK_ANSWER: Final = (
+    "On request {request}, {member} answered a question from your representative in "
+    "its {conversations} with {asked}, and the answer went there only:\n{answer}\n"
+    "It hasn't gone to your representative's other open {other_conversations} on the "
+    "request, with {others}. If a specific part of it would clearly help your "
+    "representative there, ask {member} whether you may pass that part on: quote the "
+    "exact words, and name the organizations whose conversations they would go to. Ask "
+    "once, and pass nothing on unless {member} says yes in this chat."
 )
 # The note as a stored text block starts, for queries over `content_text`.
 LOOK_NOTE_BLOCK: Final = canonical_json({"type": "text", "text": LOOK_NOTE_PREFIX})[:-2]
@@ -252,11 +267,55 @@ async def append_in(
     return seqs
 
 
-def look_note(member: str, request_ids: Sequence[UUID]) -> str:
-    """The note an update look opens with, naming the requests with news."""
-    ids = ", ".join(str(request_id) for request_id in request_ids)
-    requests = f"requests {ids}" if len(request_ids) > 1 else f"request {ids}"
-    return LOOK_NOTE.format(member=member, requests=requests)
+@dataclass(frozen=True, slots=True)
+class AnsweredQuestion:
+    """An answer the chat's owner gave their own representative, which a look asks them
+    about passing on."""
+
+    request_id: UUID
+    # The member's words.
+    answer: str
+    # The organizations of the conversations the answer went to.
+    asked: Sequence[str]
+    # The request's other open conversations, as (organization name, slug).
+    others: Sequence[tuple[str, str]]
+
+
+def look_note(
+    member: str, request_ids: Sequence[UUID], answers: Sequence[AnsweredQuestion] = ()
+) -> str:
+    """The note an update look opens with, naming the requests with news
+    (`request_ids`) and any answers it asks about passing on."""
+    named = list(dict.fromkeys([*request_ids, *(answer.request_id for answer in answers)]))
+    ids = ", ".join(str(request_id) for request_id in named)
+    requests = f"requests {ids}" if len(named) > 1 else f"request {ids}"
+    if not answers:
+        return LOOK_NOTE.format(member=member, requests=requests)
+    head = _LOOK_HEAD.format(member=member, requests=requests)
+    if request_ids:
+        head += " " + _LOOK_NEWS.format(member=member)
+    parts = [
+        LOOK_ANSWER.format(
+            request=answer.request_id,
+            member=member,
+            conversations=_conversations(answer.asked),
+            asked=_listed(list(answer.asked)),
+            other_conversations=_conversations(answer.others),
+            answer=quoted("answer", answer.answer, from_=member),
+            others=_listed([f"{name} ({slug})" for name, slug in answer.others]),
+        )
+        for answer in answers
+    ]
+    return "\n\n".join([head, *parts, _LOOK_QUIET])
+
+
+def _conversations(orgs: Sequence[object]) -> str:
+    return "conversation" if len(orgs) == 1 else "conversations"
+
+
+def _listed(names: Sequence[str]) -> str:
+    """ "A", "A and B", "A, B and C"."""
+    return " and ".join(names) if len(names) <= 2 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def is_look_note(message: WireMessage) -> bool:
@@ -389,9 +448,11 @@ async def _touch_conversation(uow: UnitOfWork, ref: ConversationTranscript) -> N
 
 
 __all__ = [
+    "LOOK_ANSWER",
     "LOOK_NOTE",
     "LOOK_NOTE_BLOCK",
     "LOOK_NOTE_PREFIX",
+    "AnsweredQuestion",
     "ConversationTranscript",
     "RepSideTranscript",
     "SqlTranscriptStore",

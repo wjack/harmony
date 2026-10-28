@@ -2644,6 +2644,31 @@ async def test_news_that_never_lets_up_gets_a_look_three_minutes_after_the_first
         await replays(env, handle)
 
 
+async def test_an_answer_brings_the_look_forward(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        request_id = uuid4()
+        script.internal = [_turn("end_turn"), _turn("end_turn"), _turn("end_turn")]
+        handle, _ = await start_chat(env)
+        await eventually(taken(script), lambda t: len(t) == 1, "the first turn")
+        start = await env.get_current_time()
+        # News arms a look for the lull; the owner's answer makes it due at once, even
+        # within a minute of the last look.
+        await handle.signal("network_news", NetworkNews(request_id=request_id))
+        await env.sleep(timedelta(seconds=10))
+        await handle.signal("network_news", NetworkNews(request_id=request_id, answered=True))
+        await eventually(taken(script), lambda t: len(t) == 2, "the first look")
+        await env.sleep(timedelta(seconds=10))
+        await handle.signal("network_news", NetworkNews(request_id=request_id, answered=True))
+        await eventually(taken(script), lambda t: len(t) == 3, "the second look")
+
+        assert (await handle.result()).turns == 1
+        assert looks(script, start) == [(1, 10), (2, 20)]
+        await replays(env, handle)
+
+
 async def test_an_armed_look_outlasts_the_idle_exit_and_a_closing_turn_disarms_it(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:

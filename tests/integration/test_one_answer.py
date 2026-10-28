@@ -1,8 +1,10 @@
-"""One answer, many askers: the matcher puts a requester-side question on an earlier
-one's card; a member's answer goes to the card's other askers as reused drafts (checked
-in every mode, released by `auto`, or held with why), and the chat shows the card as
-one question. Also the resolve route's refusals for a card's answer. Scripted model
-calls on a seeded harmony-demo world."""
+"""One answer, many askers: the matcher puts a requester-side question on an earlier,
+still unanswered one's card; a member's answer goes to the card's ticked askers as
+reused drafts (checked in every mode, released by `auto`, or held with why), never to a
+later asker, and the chat shows the card as one question. The resolve route sends the
+answer to its askers only, and refuses what it must. Claude in the chat may pass part
+of an answer to the request's other conversations, once the member says yes. Scripted
+model calls on a seeded harmony-demo world."""
 
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any, Final, cast
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -18,15 +21,23 @@ from temporalio.client import Client
 from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 
 from harmony.agents import consult as answerer
-from harmony.agents import keys
+from harmony.agents import context, keys
 from harmony.agents.consult import escalation_id_for
 from harmony.agents.models import EscalationResolution, InlineQuestionItem, Route, RouteAssignee
+from harmony.agents.runtime import ToolCall
+from harmony.agents.tools.internal import (
+    SHARE_WITH_REPRESENTATIVES,
+    InternalToolExecutor,
+    InternalToolScope,
+)
 from harmony.api.app import create_app
+from harmony.api.routes import escalations as escalations_route
 from harmony.config import Settings
 from harmony.db import repo
-from harmony.db.models import Consult, Conversation, Escalation
+from harmony.db.models import Consult, Conversation, Escalation, RepNotice
 from harmony.db.uow import unit_of_work
 from harmony.domain import consults, conversations, escalations, routing
+from harmony.domain import threads as threads_domain
 from harmony.events.bus import StreamMessage
 from harmony.llm import ModelRole
 from harmony.llm.budget import FreeSpend
@@ -40,6 +51,7 @@ from harmony.temporal.activities.agents import (
     ConsultReleased,
 )
 from harmony.temporal.activities.network import ApplyResolutionInput, NetworkActivities
+from harmony.temporal.workflows.payloads import AnswerUsed, EscalationResolved, NetworkNews
 from tests.integration._e4_world import (
     ALEX,
     CALDER,
@@ -113,16 +125,14 @@ REV_2: Final = keys.answerer_step(2, 0)
 def _script() -> dict[CassetteKey, CassetteEntry]:
     first = _draft("Probably yes.", held="What the powders are is Alex's call.")
     script: dict[CassetteKey, CassetteEntry] = {}
-    for org in (NORTHLAKE, CALDER, RIDGELINE, BAYSIDE):
+    for org in (NORTHLAKE, CALDER, RIDGELINE, BAYSIDE, TIDEWATER):
         script |= _scripted(org, "answerer", 0, first)
-    for org in (CALDER, RIDGELINE, BAYSIDE, TIDEWATER):
+    for org in (CALDER, RIDGELINE, BAYSIDE):
         script |= _scripted(org, "screener", 0, {"same_as": 1}, matcher=True)
     fitted = _draft("They're sodium layered oxides; compositions stay with us.")
     script |= _scripted(CALDER, "answerer", REV_2, fitted)
     script |= _scripted(CALDER, "sharing_check", 1, WITHIN)
     script |= _scripted(RIDGELINE, "answerer", REV_2, _draft("Sodium layered oxides.", HELD))
-    script |= _scripted(TIDEWATER, "answerer", 0, fitted)
-    script |= _scripted(TIDEWATER, "sharing_check", 0, WITHIN)
     return script
 
 
@@ -201,10 +211,11 @@ async def test_one_answer_reaches_every_asker_it_should(db_sessionmaker: Session
             escalation_id_for(asked[org].consult_id) for org in asked
         ]
 
-    # Alex answers Northlake's, ticking every organization but Bayside.
+    # Alex answers Northlake's, keeping Calder and Ridgeline ticked: the route records
+    # those askers' organizations.
     source = escalation_id_for(card)
     async with unit_of_work(sm, world_id) as uow:
-        await consults.set_goes_to(uow, card, [NORTHLAKE, CALDER, RIDGELINE, TIDEWATER])
+        await consults.add_goes_to(uow, card, [NORTHLAKE, CALDER, RIDGELINE])
         await uow.commit()
     resolution = EscalationResolution(
         escalation_id=source, action="approve", text=ANSWER, member_id=ALEX, org_id=HENDERSON
@@ -257,22 +268,28 @@ async def test_one_answer_reaches_every_asker_it_should(db_sessionmaker: Session
         assert current is not None
         assert current.held_reason == HELD
 
-    # Tidewater asks later: answered from the card with no one asked.
+    # Tidewater asks the same later: the matcher never sees the answered card, and
+    # the question reaches Alex on its own, drafted without his answer.
     asked[TIDEWATER] = await _ask(sm, outreach, TIDEWATER, "Can I tell them what the powders are?")
     later = await _answer(sm, model, asked[TIDEWATER])
-    assert isinstance(later, ConsultReleased)
+    assert isinstance(later, ConsultEscalated)
+    assert later.assignee_ids == [ALEX]
+    matched = {r.key.thread for r in model.requests if r.key.role == "screener"}
+    assert keys.match_key("henderson.tidewater") not in matched
+    assert "already told your side" not in _request(model, TIDEWATER, "answerer", 0)
     async with sm() as session:
         row = await consults.get(session, world_id=world_id, consult_id=asked[TIDEWATER].consult_id)
-        assert (row.same_as_id, row.drafted_from_id, row.released_by) == (card, source, "auto")
-        assert await repo.get(session, Escalation, world_id, escalation_id_for(row.id)) is None
+        assert (row.same_as_id, row.drafted_from_id) == (None, None)
 
-        # Alex's chat shows one question, the answer and where it went.
+        # Alex's chat shows the one question, the answer and where it went, and
+        # Tidewater's as a question of its own.
         chat = await repo.get_required(session, Conversation, world_id, outreach.conversation_id)
-        [shown] = [
+        [shown, own] = [
             item
             for item in await conversations.chat_items(session, chat)
             if isinstance(item, InlineQuestionItem)
         ]
+    assert (own.from_org.id, own.status, own.askers) == (TIDEWATER, "open", [])
     assert (shown.escalation_id, shown.question, shown.answer) == (source, FIRST_QUESTION, ANSWER)
     assert shown.answered_by is not None
     assert shown.answered_by.slug == "alex"
@@ -281,38 +298,13 @@ async def test_one_answer_reaches_every_asker_it_should(db_sessionmaker: Session
         (RIDGELINE, "open"),
         (BAYSIDE, "open"),
     ]
-    assert shown.goes_to_org_ids == [NORTHLAKE, CALDER, RIDGELINE, TIDEWATER]
     states = {row.org.id: (row.state, row.reason) for row in shown.deliveries}
     assert states == {
         NORTHLAKE: ("as_written", None),
         CALDER: ("fitted", None),
         RIDGELINE: ("held", HELD),
         BAYSIDE: ("not_sent", None),
-        TIDEWATER: ("later", None),
     }
-
-    # Alex approves Bayside's own draft as written. Drafted for Bayside's conversation,
-    # it never becomes the card's answer, so a later asker still starts from Alex's words.
-    bayside = escalation_id_for(asked[BAYSIDE].consult_id)
-    await NetworkActivities(cast(Client, None), sm).apply_resolution(
-        ApplyResolutionInput(
-            world_id=world_id,
-            thread_id=asked[BAYSIDE].thread_id,
-            resolution=EscalationResolution(
-                escalation_id=bayside,
-                action="approve",
-                draft_rev=1,
-                member_id=ALEX,
-                org_id=HENDERSON,
-            ),
-            message_id=uuid4(),
-        )
-    )
-    async with sm() as session:
-        row = await consults.get(session, world_id=world_id, consult_id=asked[TIDEWATER].consult_id)
-        reuse = await answerer.card_reuse(session, row)
-    assert reuse is not None
-    assert (reuse.escalation_id, reuse.answer) == (source, ANSWER)
 
 
 # --- The resolve route's refusals --------------------------------------------------------
@@ -394,10 +386,6 @@ async def test_a_cards_answer_goes_only_where_it_may(
             # Only an approval in the member's own words goes to other askers.
             {"action": "decline", "text": "Not yet.", "also_for": [str(asker)]},
             {"action": "approve", "draft_rev": 1, "also_for": [str(asker)]},
-            # The ticked list comes only with the answer it governs.
-            {"action": "approve", "draft_rev": 1, "goes_to_org_ids": [str(NORTHLAKE)]},
-            # Only to organizations the request went to.
-            {**approve, "goes_to_org_ids": [str(NORTHLAKE), str(BAYSIDE)]},
             # An answer that names another organization on the request, in full or short.
             {**approve, "text": "Same as we told Calder  computational."},
             {**approve, "text": "Same as we told Ridgeline: sodium layered oxides."},
@@ -410,9 +398,9 @@ async def test_a_cards_answer_goes_only_where_it_may(
         assert details[-2].startswith("Your answer names Calder Computational,")
         assert details[-1].startswith("Your answer names Ridgeline Fabrication,")
 
-        # Only the chat's owner sets where the answer goes, and only from an item routed
-        # to them: not Alex on Maya's item, nor Maya on her own.
-        ticked = {**approve, "goes_to_org_ids": [str(NORTHLAKE)]}
+        # Only the chat's owner sends an answer to other askers, and only from an item
+        # routed to them: not Alex on Maya's item, nor Maya on her own.
+        ticked = {**approve, "also_for": [str(asker)]}
         for member in ("alex", "maya"):
             await v.act_as(member)
             problem = await v.json("POST", f"/escalations/{mayas}/resolve", json=ticked, expect=422)
@@ -427,3 +415,138 @@ async def test_a_cards_answer_goes_only_where_it_may(
     async with sm() as session:
         root = await repo.get_required(session, Consult, world_id, card)
         assert root.goes_to_org_ids == []
+
+
+async def test_an_answer_goes_to_its_askers_only(
+    app_settings: Settings,
+    db_engine: AsyncEngine,
+    db_sessionmaker: Sessionmaker,
+    temporal_env: WorkflowEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The answer goes to the asker shown and the askers kept ticked, the card records
+    their organizations, and the chat is told so Claude can ask about the rest."""
+    sm = db_sessionmaker
+    updates: list[tuple[str, UUID]] = []
+    nudged: list[NetworkNews] = []
+
+    async def update(
+        services: Any, actor: Any, escalation: Escalation, name: str, arg: Any, result: Any
+    ) -> Any:
+        updates.append((name, escalation.id))
+        if name == "use_answer":
+            return AnswerUsed(escalation_id=escalation.id, draft_rev=2)
+        return EscalationResolved(escalation_id=escalation.id, action="approve")
+
+    async def nudge(client: Any, sessionmaker: Any, *, world_id: UUID, news: NetworkNews) -> None:
+        nudged.append(news)
+
+    monkeypatch.setattr(escalations_route, "_update", update)
+    monkeypatch.setattr(escalations_route, "nudge_request_chat", nudge)
+    app: FastAPI = create_app(
+        app_settings.model_copy(update={"admin_secret": SecretStr(ADMIN_SECRET)}),
+        engine=db_engine,
+        temporal=temporal_env.client,
+    )
+    async with visitor(app) as v:
+        await v.start()
+        world_id = UUID((await v.session())["world_id"])
+        outreach = await approved_outreach(sm, world_id, NORTHLAKE, CALDER, RIDGELINE)
+        orgs = (NORTHLAKE, CALDER, RIDGELINE)
+        threads = {org: await open_thread(sm, outreach, org) for org in orgs}
+        powders = "May I tell them what the powders are?"
+        card, shown = await _routed(sm, world_id, threads[NORTHLAKE], "alex", powders)
+        _, calder = await _routed(sm, world_id, threads[CALDER], "alex", powders, same_as=card)
+        await _routed(sm, world_id, threads[RIDGELINE], "alex", powders, same_as=card)
+        await v.act_as("alex")
+        # Ridgeline's asker is left unticked.
+        body = {"action": "approve", "text": "Sodium layered oxides.", "also_for": [str(calder)]}
+        await v.json("POST", f"/escalations/{shown}/resolve", json=body)
+    assert updates == [("resolve_escalation", shown), ("use_answer", calder)]
+    assert nudged == [NetworkNews(request_id=outreach.request_id, answered=True)]
+    async with sm() as session:
+        root = await repo.get_required(session, Consult, world_id, card)
+    assert root.goes_to_org_ids == [str(NORTHLAKE), str(CALDER)]
+
+
+# --- Passing part of an answer on --------------------------------------------------------
+
+
+async def test_shared_words_reach_only_the_conversations_approved(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    sm = db_sessionmaker
+    world_id = await seeded_world(sm)
+    outreach = await approved_outreach(sm, world_id, NORTHLAKE, CALDER, RIDGELINE)
+    threads = {org: await open_thread(sm, outreach, org) for org in (NORTHLAKE, CALDER, RIDGELINE)}
+    async with unit_of_work(sm, world_id) as uow:
+        await threads_domain.set_state(uow, threads[CALDER], "closed", end_reason="closed")
+        await uow.commit()
+
+    def executor(**scope: Any) -> InternalToolExecutor:
+        defaults: dict[str, Any] = {
+            "world_id": world_id,
+            "conversation_id": outreach.conversation_id,
+            "org_id": HENDERSON,
+            "member_id": ALEX,
+            "turn_id": uuid4(),
+            "turn": 2,
+            "cassette_thread": keys.chat_key("alex", 1),
+            "member_spoke": True,
+        }
+        return InternalToolExecutor(sm, InternalToolScope(**defaults | scope), cast(Any, None))
+
+    async def share(tools: InternalToolExecutor, text: str, *orgs: str, request: UUID) -> Any:
+        call = ToolCall(
+            id=f"toolu_{uuid4().hex[:8]}",
+            name=SHARE_WITH_REPRESENTATIVES,
+            input={"request_id": str(request), "organizations": list(orgs), "text": text},
+        )
+        return await tools.execute(call, step_idx=0)
+
+    async def notices() -> list[tuple[UUID, str, str, str]]:
+        async with sm() as session:
+            rows = await session.scalars(
+                repo.in_world(RepNotice, world_id).order_by(RepNotice.thread_id, RepNotice.seq)
+            )
+            return [(row.thread_id, row.side, row.kind, row.text) for row in rows]
+
+    words = "We want delivery by November 6; earlier is fine."
+    request = outreach.request_id
+    refused = [
+        # Not in an update look, nor before the member has said yes in this turn.
+        await share(executor(look=True), words, "northlake", request=request),
+        await share(executor(member_spoke=False), words, "northlake", request=request),
+        # Only this chat's requests, only conversations on it, none that has ended.
+        await share(executor(), words, "northlake", request=uuid4()),
+        await share(executor(), words, "northlake", "bayside", request=request),
+        await share(executor(), words, "northlake", "calder", request=request),
+        # Never another organization's name.
+        await share(executor(), "Ridgeline wants it by Nov 6.", "northlake", request=request),
+    ]
+    assert all(result.is_error for result in refused)
+    assert "said yes to it in this chat" in refused[1].result
+    assert "Ridgeline Fabrication" in refused[-1].result
+    assert await notices() == []
+
+    # One conversation may hear its own name. A retried call queues nothing more.
+    done = [
+        await share(executor(), words, "northlake", "@ridgeline", request=request) for _ in range(2)
+    ]
+    assert not any(result.is_error for result in done)
+    assert "Northlake Characterization Core and Ridgeline Fabrication" in done[0].result
+    own = await share(executor(), "Northlake's slot works.", "northlake", request=request)
+    assert not own.is_error
+
+    def shared(text: str, org: str) -> tuple[str, str, str]:
+        notice = context.shared_notice(text, member_name="Alex Chen", counterparty_name=org)
+        return ("requester", "shared", notice)
+
+    northlake, ridgeline = "Northlake Characterization Core", "Ridgeline Fabrication"
+    assert sorted(await notices()) == sorted(
+        [
+            (threads[NORTHLAKE], *shared(words, northlake)),
+            (threads[NORTHLAKE], *shared("Northlake's slot works.", northlake)),
+            (threads[RIDGELINE], *shared(words, ridgeline)),
+        ]
+    )

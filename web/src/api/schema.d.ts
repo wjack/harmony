@@ -1070,7 +1070,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "settings" | "mode" | "sharing" | "world_date" | "closed" | "reopened";
+            kind: "settings" | "mode" | "sharing" | "world_date" | "closed" | "reopened" | "shared";
             /** Text */
             text: string;
             /**
@@ -1481,9 +1481,10 @@ export interface components {
          *
          *     A card groups the request's items that ask the same question and are routed to the
          *     chat's owner. The one shown (`escalation_id`, `question`, `from_org`) is the item a
-         *     member answered, else the oldest open one; the rest are `askers`. Answered, it
-         *     lists one `deliveries` row per asker, later askers included, and who answered
-         *     (`answered_by`, `answered_at`).
+         *     member answered, else the oldest open one; the rest are `askers`. The answer goes to
+         *     the one shown and the askers the member keeps ticked, never to another conversation.
+         *     Answered, it lists one `deliveries` row per asker, and who answered (`answered_by`,
+         *     `answered_at`).
          */
         InlineQuestionItem: {
             /** Id */
@@ -1530,11 +1531,6 @@ export interface components {
              * @default []
              */
             recipients: components["schemas"]["OrgRef"][];
-            /**
-             * Goes To Org Ids
-             * @default []
-             */
-            goes_to_org_ids: string[];
             /**
              * Deliveries
              * @default []
@@ -1900,7 +1896,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "as_written" | "fitted" | "later" | "drafting" | "held" | "not_sent" | "ended";
+            state: "as_written" | "fitted" | "drafting" | "held" | "not_sent" | "ended";
             /** At */
             at: string | null;
             /** Reason */
@@ -2144,8 +2140,6 @@ export interface components {
             draft_rev?: number | null;
             /** Also For */
             also_for?: string[];
-            /** Goes To Org Ids */
-            goes_to_org_ids?: string[] | null;
         };
         /**
          * RewrittenBy

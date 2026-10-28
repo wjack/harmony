@@ -176,7 +176,7 @@ export function useRejectCard(conversationId: string) {
 
 /**
  * Answer a question routed to the member inline: the same resolution the Requests inbox
- * sends, plus the card's other ticked askers (`also_for`) and its ticked list.
+ * sends, plus the card's other ticked askers (`also_for`).
  */
 export function useResolveQuestion(conversationId: string) {
   const api = useApi();
