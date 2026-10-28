@@ -29,8 +29,11 @@ settings:
 policy:
   autonomy: auto
   sharing_description: >-
-    Prices, seal options, lead times and delivery from our price list, and what we
-    need to quote a part. Not: the shop's workload or other customers.
+    Our price list (prices, seal options, lead times, the rush and delivery), the
+    ready and delivery dates it gives an order, whether the rush is open, which
+    instruments our listed holders fit and what they carry, how an order fits the
+    dates and budget the customer gave us, and what we need to quote a part. Not:
+    other customers, or what else the shop is working on.
   routing_prompt: Everything goes to Dana.
   default_assignee: dana
 
@@ -43,7 +46,8 @@ knowledge:
     title: Price list
     kind: price-list
     body: >-
-      Sealed SEM transfer holder for the Thermo Fisher Apreo 2 airlock, aluminum body,
+      RT-A2 sealed SEM transfer holder for the Thermo Fisher Apreo 2 airlock, aluminum
+      body, made to the core's airlock spec (KF40 port, one 2-030 O-ring on the lid),
       carries one standard SEM stub (any number of powder mounts on it): $240, ready in
       4 business days, Viton seal included. Kalrez seal in its place
       +$85, recommended for long storage under argon. Free delivery on Northlake campus

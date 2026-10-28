@@ -46,10 +46,11 @@ settings:
 policy:
   autonomy: auto
   sharing_description: >-
-    Our external academic price list and its published terms, what is open on the
-    public instrument calendar, sample-prep, air-free handling and delivery
-    requirements, and typical turnaround. Not: other clients or their bookings, staff notes, or off-list
-    pricing.
+    Our external academic price list with its published fees and terms, what is open
+    on the public instrument calendar and how booking works, sample-prep, air-free
+    handling and delivery requirements (our glovebox, what we supply, and which
+    holders fit our instruments, Ridgeline's included), and typical turnaround. Not:
+    other clients or their bookings, staff notes, or off-list pricing.
   routing_prompt: >-
     Instrument scheduling and off-list pricing exceptions go to Helen. Sample-prep and
     air-free handling questions go to Raj. Anything over $5,000 needs Helen.
@@ -87,14 +88,17 @@ knowledge:
       Next standard XRD block: Tue Nov 10, with reports by Fri Nov 13. Priority XRD
       block open: Wed Nov 4, 09:00–13:00, for up to 14 powders, with reports by Thu
       Nov 5. SEM/EDS open from Tue Nov 3, except Thursday afternoons through December:
-      a session takes up to 16 powders on one stub, with reports two business days
-      after it (a session on Wed Nov 4 reports by Fri Nov 6).
+      sessions run 09:00–13:00 and 13:00–17:00, each taking up to 16 powders on one
+      stub, with reports two business days after it (a session on Wed Nov 4 reports by
+      Fri Nov 6). We don't hold slots: a customer who accepts a quote is booked into
+      its open slots.
   - slug: air-free-handling
     title: Air-free handling, XRD
     kind: procedure
     body: >-
-      We load air-sensitive powders into dome holders in our glovebox. Customers ship
-      samples sealed under Ar. We take sealed holders with Viton or Kalrez O-rings.
+      We load air-sensitive powders into our own air-free dome holders in our
+      glovebox, at no extra charge: customers bring no XRD holders. The dome holders
+      seal with Viton or Kalrez O-rings. Customers deliver samples sealed under Ar.
   - slug: sem-air-free
     title: SEM/EDS on air-sensitive powders
     kind: procedure

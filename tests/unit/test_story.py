@@ -179,10 +179,11 @@ def test_every_org_describes_itself_and_what_it_shares_in_prose(name: str) -> No
 def test_northlake_shares_its_published_terms_but_not_other_clients() -> None:
     northlake = _org(load_scenario("harmony-demo"), "northlake")
     assert _flat(northlake.policy.sharing_description) == (
-        "Our external academic price list and its published terms, what is open on the "
-        "public instrument calendar, sample-prep, air-free handling and delivery "
-        "requirements, and typical turnaround. Not: other clients or their bookings, "
-        "staff notes, or off-list pricing."
+        "Our external academic price list with its published fees and terms, what is open "
+        "on the public instrument calendar and how booking works, sample-prep, air-free "
+        "handling and delivery requirements (our glovebox, what we supply, and which "
+        "holders fit our instruments, Ridgeline's included), and typical turnaround. Not: "
+        "other clients or their bookings, staff notes, or off-list pricing."
     )
 
 
@@ -240,6 +241,7 @@ def test_the_records_hold_what_the_story_turns_on() -> None:
 
     ridgeline = _records(scenario, "ridgeline")["price-list"]
     assert "carries one standard SEM stub (any number of powder mounts on it): $240" in ridgeline
+    assert "RT-A2 sealed SEM transfer holder" in ridgeline
     assert "Kalrez seal in its place +$85" in ridgeline
     assert "Free delivery on Northlake campus the next business day" in ridgeline
     assert 240 + 85 == 325
