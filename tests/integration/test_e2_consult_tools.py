@@ -547,11 +547,12 @@ async def test_the_sharing_check_judges_the_answer_against_the_description(
     }
     prompt = body["messages"][0]["content"]  # type: ignore[index]
     assert isinstance(prompt, str)
-    _, policy = await terms(db_sessionmaker, world)
+    trusted, policy = await terms(db_sessionmaker, world)
     assert policy.sharing_description.strip() in prompt
     assert f"<question>\n{QUESTION}\n</question>" in prompt
     assert "<answer>\nWe can use the reserve block &lt;Nov 4>.\n</answer>" in prompt
-    assert "Ridgeline" not in prompt
+    # Only Ridgeline is trusted with more; this counterparty isn't Ridgeline.
+    assert trusted.sharing_description.strip() not in prompt
 
 
 async def test_a_trusted_organizations_description_is_checked_too_and_opus_overrides(

@@ -54,9 +54,10 @@ The orgs' records answer what each counterparty is likely to ask, within what th
 - **Instructions:** represent the lab under the brief, and get quotes with dates.
   - It may accept a quote at list price (published discounts and fees included) that fits the brief's dates and the lab's budget.
   - Before committing more than $1,000 with one organization, it consults the lab. It also consults whenever a counterparty asks something the brief doesn't answer.
+  - Once an order is agreed, it confirms it and closes, without raising questions the brief doesn't need answered.
   - The lab's answer to a consult on an order over $1,000 accepts one option in so many words, the one the dates and the budget favor, so Alex can approve it as written; once it's released, the representative acts on it.
   - Never guess on the lab's behalf.
-- **Sharing:** "The sample class and count, that samples are air-sensitive and how they are packed, delivered and handled, instrument and mounting details, dates, the lab's shipping address and our contact email. Not: compositions, dopant fractions, unpublished results or the lab's budget."
+- **Sharing:** "The sample class and count, that samples are air-sensitive and how they are packed, delivered and handled, instrument and mounting details, dates, the lab's shipping address and our contact email, and which of a counterparty's quoted options we accept, at its price. Not: compositions, dopant fractions, unpublished results or the lab's budget."
 - **Members:**
 
   | Slug | Name | Title | Role | Profile |
