@@ -46,10 +46,10 @@ function sawWithGuidance(): RepresentativeContext | null {
   return {
     ...representative,
     guidance: [
-      { version: 1, text: "Quote the overview scan price only; don't quote 3 µm scans this quarter.", delivered_at: at(40) },
+      { version: 1, text: "Quote the overview scan price only; don't quote high-resolution scans this quarter.", delivered_at: at(40) },
       {
         version: 2,
-        text: "Quote the overview scan price only; don't quote 3 µm scans this quarter. Say nothing is booked until they confirm.",
+        text: "Quote the overview scan price only; don't quote high-resolution scans this quarter. Say nothing is booked until they confirm.",
         delivered_at: at(12),
       },
     ],

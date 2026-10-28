@@ -109,22 +109,23 @@ knowledge:
     body: >-
       We scan a batch of coupons in one session in a stacked holder that fits the
       Versa's stage mount. We don't supply holders; Ridgeline Fabrication's listed
-      Versa holder fits as delivered. Scans finer than 5 µm voxels need a carbon-fiber
+      StackMount holder fits as delivered. High-resolution scans need a carbon-fiber
       tube: an aluminum one blurs them.
   - slug: drop-off
     title: Drop-off
     kind: procedure
     body: >-
-      Coupons and holders are received at the core's front desk: Room 112, Physical
-      Sciences Building, Northlake campus, weekdays 9:00–17:00. Coupons for a session
+      Coupons and holders are received at the core's front desk: Room 112, Engineering
+      Hall, Northlake campus, weekdays 9:00–17:00. Coupons for a session
       must be in by 17:00 the business day before. Label or engrave each coupon with an
       ID; we report results by ID.
   - slug: versa-mount
     title: Xradia Versa, holder fit
     kind: spec
     body: >-
-      Stacked holders for the Xradia 620 Versa: M6 kinematic base, tube at most 40 mm
-      across and 300 mm tall.
+      Stacked holders for the Xradia 620 Versa sit on its kinematic stage mount.
+      Ridgeline Fabrication has our mount drawings, and its listed StackMount holder fits
+      as delivered.
   - slug: nov-4-compression-block
     title: Raj's note, Nov 4 compression block
     kind: note

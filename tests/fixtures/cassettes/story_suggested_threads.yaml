@@ -26,7 +26,7 @@
 #
 # henderson.ridgeline: Ridgeline asks which instrument the holder fits and which tube.
 # Henderson's answerer finds both in the lab's records (Northlake's Xradia 620 Versa, a
-# carbon-fiber tube for 3 µm scans), and the answer goes back with no person.
+# carbon-fiber tube for high-resolution scans), and the answer goes back with no person.
 # Ridgeline's answerer quotes from the price list: $240 + $85 for carbon fiber = $325,
 # delivered Mon Nov 2. Henderson's representative accepts on its own (list price,
 # within its ask, under $1,000), and Ridgeline confirms at list price and closes;
@@ -124,7 +124,7 @@ entries:
       - type: text
         text: |-
           {
-            "answer": "Each coupon is a 20 mm titanium cube engraved with its ID. The lab is on Northlake campus too, so Alex Chen will drop the coupons off at the core himself, any weekday, as early as the core needs them; no courier. For the CT, the lab is having a stacked holder made for the core's Zeiss Xradia 620 Versa, with a carbon-fiber tube, that carries all 12 coupons through one scan session; it will be delivered to the core. The compression tests need nothing from the lab: the core tests the coupons between its own platens. The goal is CT and compression results by Fri Nov 6; results by Fri Nov 13 would still work. Contact: alex.chen@henderson-lab.example.",
+            "answer": "Each coupon is a 20 mm titanium cube engraved with its ID. The lab is on Northlake campus too, so it will drop the coupons off at the core's front desk itself, any weekday, as early as the core needs them; no courier. For the CT, the lab is having a stacked holder made for the core's Zeiss Xradia 620 Versa, with a carbon-fiber tube, that carries all 12 coupons through one scan session; it will be delivered to the core. The compression tests need nothing from the lab: the core tests the coupons between its own platens. The goal is CT and compression results by Fri Nov 6; results by Fri Nov 13 would still work. Contact: alex.chen@henderson-lab.example.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
@@ -150,7 +150,7 @@ entries:
         input:
           text: >-
             Each coupon is a 20 mm titanium cube engraved with its ID. We're on Northlake
-            campus too, so Alex Chen will drop them off at the core himself, any weekday,
+            campus too, so we'll drop them off at your front desk ourselves, any weekday,
             as early as you need them. For the CT, we're having a stacked holder made for
             your Zeiss Xradia 620 Versa, with a carbon-fiber tube, that carries all 12
             coupons through one scan session; it will be delivered to you. As we
@@ -169,8 +169,7 @@ entries:
         input:
           question: >-
             Henderson Frame Lab (Northlake University) has 12 titanium lattice coupons, 20 mm
-            cubes engraved with IDs, which Alex Chen will drop off from their lab on
-            campus. Their own stacked CT holder for our Xradia 620 Versa, with a
+            cubes engraved with IDs, which they will drop off from their lab on campus. Their own stacked CT holder for our Xradia 620 Versa, with a
             carbon-fiber tube, will be delivered to us. They'd like CT and compression-test
             reports by Fri Nov 6, but Fri Nov 13 also works. What can we do, and at what
             price?
@@ -220,7 +219,7 @@ entries:
       - type: text
         text: |-
           {
-            "answer": "We have two options for all 12 coupons at our published academic prices. A compression test crushes the coupon, so either way we scan first: CT in the Wed Nov 4 session, 09:00–13:00, in their stacked holder, with CT reports by Fri Nov 6. Standard: compression tests in the next standard block, Tue Nov 10, with reports by Fri Nov 13: $1,284. That is compression 12 × $45 = $540 and CT 12 × $60 = $720, each 10% off for 10 or more coupons ($486 and $648), plus $150 intake and setup for the batch. Priority: the compression tests in the priority block on Wed Nov 4, 13:00–17:00, which is open, with reports by Thu Nov 5: $1,434, the same plus the $150 priority fee. Either way, the coupons and the holder should reach our front desk, Room 112, Physical Sciences Building, by 17:00 on Tue Nov 3. We test the coupons between our own platens, so the compression tests need nothing else from them. Quotes are valid 14 days.",
+            "answer": "We have two options for all 12 coupons at our published academic prices. A compression test crushes the coupon, so either way we scan first: CT in the Wed Nov 4 session, 09:00–13:00, in their stacked holder, with CT reports by Fri Nov 6. Standard: compression tests in the next standard block, Tue Nov 10, with reports by Fri Nov 13: $1,284. That is compression 12 × $45 = $540 and CT 12 × $60 = $720, each 10% off for 10 or more coupons ($486 and $648), plus $150 intake and setup for the batch. Priority: the compression tests in the priority block on Wed Nov 4, 13:00–17:00, which is open, with reports by Thu Nov 5: $1,434, the same plus the $150 priority fee. Either way, the coupons and the holder should reach our front desk by 17:00 on Tue Nov 3. We test the coupons between our own platens, so the compression tests need nothing else from them. Quotes are valid 14 days.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
@@ -253,8 +252,7 @@ entries:
             12 × $60, each 10% off for 10 or more coupons, plus $150 intake and setup.
             Priority: the compression tests in our priority block on Wed Nov 4,
             13:00–17:00, with reports by Thu Nov 5, for $1,434, the same plus our $150
-            priority fee. Either way, the coupons and the holder need to be at our front
-            desk, Room 112, Physical Sciences Building, by 17:00 on Tue Nov 3. We test
+            priority fee. Either way, the coupons and the holder need to be at our front desk by 17:00 on Tue Nov 3. We test
             between our own platens, so you needn't bring anything else. The quote is
             valid 14 days. Which would you like?
   - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 3, step: 1}
@@ -324,7 +322,7 @@ entries:
             Thank you. Let's go with the priority option, please: the CT in your Wed Nov 4
             morning session and the compression tests in your priority block that
             afternoon, $1,434, with compression reports by Thu Nov 5 and CT reports by Fri
-            Nov 6. Alex will drop the 12 coupons off at your front desk by 17:00 on Tue
+            Nov 6. We'll drop the 12 coupons off at your front desk by 17:00 on Tue
             Nov 3.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 5, step: 1}
     content:
@@ -342,8 +340,7 @@ entries:
             Booked: CT on all 12 coupons in our Wed Nov 4 session, 09:00–13:00, and
             compression tests in our priority block that afternoon, 13:00–17:00, $1,434,
             with compression reports by Thu Nov 5 and CT reports by Fri Nov 6. Please have
-            the coupons and the holder at our front desk, Room 112, Physical Sciences
-            Building, by 17:00 on Tue Nov 3. Thanks, and good luck with the tests.
+            the coupons and the holder at our front desk by 17:00 on Tue Nov 3. Thanks, and good luck with the tests.
   - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 4, step: 1}
     content:
       - type: tool_use
@@ -432,19 +429,18 @@ entries:
       - type: thinking
         thinking: >-
           Alex's holder note has all of it: the core's Zeiss Xradia 620 Versa, all 12
-          coupons in one scan session, a carbon-fiber tube because the lab scans at 3 µm
-          voxels, delivered to the core. Instrument and mounting details are shared, so
+          coupons in one scan session, a carbon-fiber tube because the lab needs high-resolution scans, delivered to the core. Instrument and mounting details are shared, so
           no one needs to be asked.
       - type: text
         text: |-
           {
-            "answer": "The holder is for a Zeiss Xradia 620 Versa micro-CT, and should carry all 12 coupons through one scan session. It should have a carbon-fiber tube: the lab scans at 3 µm voxels to see strut defects. Please deliver it to the characterization core's front desk on Northlake campus: Room 112, Physical Sciences Building.",
+            "answer": "The holder is for a Zeiss Xradia 620 Versa micro-CT, and should carry all 12 coupons through one scan session. It should have a carbon-fiber tube: the lab needs high-resolution scans to see strut defects. Please deliver it to the characterization core's front desk on Northlake campus.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
               "assignees": [{"member": "alex", "why": "they're your coupons and your request"}]
             },
-            "rationale": "All from Alex's note on the LTC-12 CT holder: the instrument, the carbon-fiber tube for 3 µm scans, and delivery to the core. Instrument, mounting and delivery details are within what the lab shares.",
+            "rationale": "All from Alex's note on the LTC-12 CT holder: the instrument, the carbon-fiber tube for high-resolution scans, and delivery to the core. Instrument, mounting and delivery details are within what the lab shares.",
             "short_question": "Tell Ridgeline the holder is for the Xradia Versa, with a carbon-fiber tube?"
           }
   - match: {org: henderson, role: sharing_check, thread: "henderson.ridgeline", turn: 1, step: 0}
@@ -464,10 +460,8 @@ entries:
         input:
           text: >-
             It's for a Zeiss Xradia 620 Versa micro-CT, and it should carry all 12 coupons
-            through one scan session. We'd like a carbon-fiber tube: we scan at 3 µm voxels
-            to see strut defects. Please deliver it to the characterization core's front
-            desk on Northlake campus, Room 112, Physical Sciences Building, before Tue Nov
-            3. What would that cost, and when could it arrive?
+            through one scan session. We'd like a carbon-fiber tube: we need high-resolution scans to see strut defects. Please deliver it to the characterization core's front
+            desk on Northlake campus before Tue Nov 3. What would that cost, and when could it arrive?
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 3, step: 1}
     content:
       - type: thinking
@@ -480,8 +474,7 @@ entries:
         input:
           question: >-
             Henderson Frame Lab wants a stacked CT holder for a Zeiss Xradia 620 Versa that
-            carries 12 coupons through one scan session, with a carbon-fiber tube (they
-            scan at 3 µm voxels), delivered to the characterization core on Northlake
+            carries 12 coupons through one scan session, with a carbon-fiber tube (they need high-resolution scans), delivered to the characterization core on Northlake
             campus before Tue Nov 3. What's the price, and when could it be delivered?
   - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
@@ -503,14 +496,14 @@ entries:
       - type: text
         text: |-
           {
-            "answer": "The RV-16 stacked CT holder for the Zeiss Xradia 620 Versa is made to the core's mount spec and carries up to 16 coupons up to 20 mm across in one scan session. It's $240 with an aluminum tube, and a carbon-fiber tube in its place adds $85: $325 in total. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. Carbon fiber is what we recommend for scans finer than 5 µm voxels.",
+            "answer": "The StackMount CT holder for the Zeiss Xradia 620 Versa fits the Versa's stage as delivered and carries up to 16 coupons up to 20 mm across in one scan session. It's $240 with an aluminum tube, and a carbon-fiber tube in its place adds $85: $325 in total. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. Carbon fiber is what we recommend for high-resolution scans.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
               "assignees": [{"member": "dana", "why": "you handle quotes and scheduling"}]
             },
-            "rationale": "The RV-16 holder from the price list with the carbon-fiber tube option, at the standard lead time and free campus delivery. Nothing here goes beyond the price list.",
-            "short_question": "Quote Henderson Frame Lab $325 for the carbon-fiber RV-16 holder, delivered Nov 2?"
+            "rationale": "The StackMount holder from the price list with the carbon-fiber tube option, at the standard lead time and free campus delivery. Nothing here goes beyond the price list.",
+            "short_question": "Quote Henderson Frame Lab $325 for the carbon-fiber StackMount holder, delivered Nov 2?"
           }
   - match: {org: ridgeline, role: sharing_check, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
@@ -535,13 +528,13 @@ entries:
       - type: text
         text: |-
           {
-            "answer": "The RV-16 stacked CT holder for the Zeiss Xradia 620 Versa is made to the core's mount spec and carries up to 16 coupons up to 20 mm across in one scan session. It's $240 with its standard aluminum tube. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3.",
+            "answer": "The StackMount CT holder for the Zeiss Xradia 620 Versa fits the Versa's stage as delivered and carries up to 16 coupons up to 20 mm across in one scan session. It's $240 with its standard aluminum tube. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
               "assignees": [{"member": "dana", "why": "you handle quotes and scheduling"}]
             },
-            "rationale": "The RV-16 holder from the price list without the carbon-fiber option, as Dana asked, at the standard lead time and free campus delivery.",
+            "rationale": "The StackMount holder from the price list without the carbon-fiber option, as Dana asked, at the standard lead time and free campus delivery.",
             "short_question": "Quote Henderson Frame Lab $240 for the holder with its standard tube, delivered Nov 2?"
           }
   # Turn 3 opens with the released answer.
@@ -552,14 +545,11 @@ entries:
         name: send_message
         input:
           text: >-
-            We make exactly that. Our RV-16 stacked CT holder for the Xradia 620 Versa is
-            made to the core's mount spec and carries up to 16 coupons up to 20 mm across
+            We make exactly that. Our StackMount CT holder for the Xradia 620 Versa fits the Versa's stage as delivered and carries up to 16 coupons up to 20 mm across
             in one scan session. It's $240 with an aluminum tube, and a carbon-fiber tube
             in its place adds $85: $325 in total. It's ready in 4 business days and we
             deliver free on Northlake campus the next business day, so if you confirm
-            today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. We
-            recommend carbon fiber for scans finer than 5 µm voxels, so it suits your 3 µm
-            scans. Shall we go ahead?
+            today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. We recommend carbon fiber for high-resolution scans, so it suits yours. Shall we go ahead?
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 3, step: 1}
     content:
       - type: thinking
@@ -573,7 +563,7 @@ entries:
         name: send_message
         input:
           text: >-
-            Yes, please go ahead: the RV-16 stacked CT holder for the Xradia 620 Versa with
+            Yes, please go ahead: the StackMount CT holder for the Xradia 620 Versa with
             a carbon-fiber tube, $325, delivered to the characterization core's front desk
             on Northlake campus on Mon Nov 2. Thank you.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 4, step: 1}
@@ -587,19 +577,17 @@ entries:
         name: send_message
         input:
           text: >-
-            Confirmed: one RV-16 stacked CT holder for the Xradia 620 Versa with a
-            carbon-fiber tube, $325, delivered to the characterization core's front desk,
-            Room 112, Physical Sciences Building, on Mon Nov 2. Thanks for the order.
+            Confirmed: one StackMount CT holder for the Xradia 620 Versa with a
+            carbon-fiber tube, $325, delivered to the characterization core's front desk on Northlake campus on Mon Nov 2. Thanks for the order.
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 4, step: 1}
     content:
       - type: tool_use
         name: close
         input:
           summary: >-
-            Order from Henderson Frame Lab: one RV-16 stacked CT holder for the Zeiss Xradia 620
+            Order from Henderson Frame Lab: one StackMount CT holder for the Zeiss Xradia 620
             Versa, carbon-fiber tube, $325 at list price. Ready Fri Oct 30, delivered free
-            to the characterization core's front desk on Northlake campus (Room 112,
-            Physical Sciences Building) on Mon Nov 2.
+            to the characterization core's front desk on Northlake campus on Mon Nov 2.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 5, step: 0}
     content:
       - type: thinking

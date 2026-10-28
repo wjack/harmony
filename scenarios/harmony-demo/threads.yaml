@@ -39,7 +39,7 @@ threads:
           six, standard report included. The next open CT session is next Tuesday.
       - from: henderson
         at: -40d
-        body: That works. Alex will drop the coupons off on Monday. Thank you.
+        body: That works. We'll drop the coupons off on Monday. Thank you.
     access:
       - member: alex
         reason: routed
@@ -77,8 +77,8 @@ threads:
           welds first, since the surface texture helps us line the scan up with your
           drawings, and a polished surface hides where porosity breaks through. We mount
           each bracket on our standard rotation stage with a foam collar so it can't
-          shift during the scan, and run it at 15 µm voxels, which resolves pores down to
-          about 50 µm. Aluminum this thick scans well at 80 kV without a filter; if you'd
+          shift during the scan, and run it at high resolution, which resolves even small
+          pores. Aluminum this thick scans well at 80 kV without a filter; if you'd
           like us to look for tungsten inclusions from the welding electrode as well, say
           so and we'll run a second, higher-energy scan of that weld. Expect a porosity
           map of each weld, the largest pore's size and depth, slice images through

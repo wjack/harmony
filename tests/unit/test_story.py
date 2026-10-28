@@ -209,8 +209,8 @@ def test_the_records_hold_what_the_story_turns_on() -> None:
     scenario = load_scenario("harmony-demo")
     henderson = _records(scenario, "henderson")
     assert "Zeiss Xradia 620 Versa, with a carbon-fiber tube" in henderson["ct-holder"]
-    assert "we scan at 3 µm voxels" in henderson["ct-holder"]
-    assert "Alex drops them off at the core himself" in henderson["coupons"]
+    assert "we need high-resolution scans to see strut defects" in henderson["ct-holder"]
+    assert "we drop them off at the core's front desk ourselves" in henderson["coupons"]
     assert "alex.chen@henderson-lab.example" in henderson["coupons"]
     dates = henderson["dates"]
     assert "results by Fri Nov 6, for the group meeting on Mon Nov 9" in dates
@@ -234,7 +234,7 @@ def test_the_records_hold_what_the_story_turns_on() -> None:
     assert "a priority compression block is a $150 flat fee" in prices
     assert "Helen decides only off-list exceptions." in northlake["pricing-policy"]
     assert "a coupon booked for CT too is scanned first" in northlake["compression-testing"]
-    assert "Room 112, Physical Sciences Building" in northlake["drop-off"]
+    assert "Room 112, Engineering Hall, Northlake campus" in northlake["drop-off"]
     # Who freed the Nov 4 block: a client, so it stays out of every answer.
     assert "Voltaic" in northlake["nov-4-compression-block"]
     standard = (12 * 45 + 12 * 60) * 9 // 10 + 150
@@ -243,9 +243,9 @@ def test_the_records_hold_what_the_story_turns_on() -> None:
 
     ridgeline = _records(scenario, "ridgeline")["price-list"]
     assert "carries up to 16 coupons up to 20 mm across in one scan session: $240" in ridgeline
-    assert "RV-16 stacked CT holder" in ridgeline
+    assert "StackMount CT holder" in ridgeline
     assert "Carbon-fiber tube in its place +$85" in ridgeline
-    assert "Free delivery on Northlake campus the next business day" in ridgeline
+    assert "Free delivery to any front desk on Northlake campus the next business day" in ridgeline
     assert 240 + 85 == 325
     assert 1_434 + 325 == 1_759
     # Ordered on the anchor, Mon Oct 26: ready Fri Oct 30, delivered Mon Nov 2.

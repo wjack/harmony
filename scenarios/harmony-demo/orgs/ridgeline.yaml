@@ -46,12 +46,11 @@ knowledge:
     title: Price list
     kind: price-list
     body: >-
-      RV-16 stacked CT holder for the Zeiss Xradia 620 Versa, made to the core's mount
-      spec (M6 kinematic base, 40 mm tube), carries up to 16 coupons up to 20 mm across
-      in one scan session: $240, ready in 4 business days, aluminum tube included.
-      Carbon-fiber tube in its place +$85, recommended for scans finer than 5 µm
-      voxels. Free delivery on Northlake campus the next business day after it's
-      ready. Rush: ready in 3 business days for +$60, when the lathe is free. Other
+      StackMount CT holder for the Zeiss Xradia 620 Versa, which fits the Versa's stage
+      as delivered and carries up to 16 coupons up to 20 mm across in one scan session:
+      $240, ready in 4 business days, aluminum tube included. Carbon-fiber tube in its
+      place +$85, recommended for high-resolution scans. Free delivery to any front desk
+      on Northlake campus the next business day after it's ready. Rush: ready in 3 business days for +$60, when the lathe is free. Other
       holders and fixtures are quoted from drawings.
   - slug: shop-load
     title: Shop load

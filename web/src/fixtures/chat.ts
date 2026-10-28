@@ -155,7 +155,7 @@ export const screened: ScreenedCounts = { total: 14, strong: 2, possible: 4, no:
 
 /** What Alex answers, unless a gallery visitor types something else. */
 export const ANSWERS = {
-  tube: "Carbon fiber, please. We scan at 3 µm voxels to see strut defects.",
+  tube: "Carbon fiber, please. We need high-resolution scans to see strut defects.",
   northlake: "Yes, take priority.",
   ridgeline: "Yes, go ahead with Ridgeline, with the carbon-fiber tube.",
 } as const;
@@ -308,7 +308,7 @@ const TUBE: QuestionSpec = {
   threadId: RIDGELINE_THREAD_ID,
   from: orgs.ridgeline,
   question:
-    "Ridgeline asks which tube the holder should use: aluminum, which is included, or carbon fiber for $85 more, which they recommend for scans finer than 5 µm voxels. Which would you like?",
+    "Ridgeline asks which tube the holder should use: aluminum, which is included, or carbon fiber for $85 more, which they recommend for high-resolution scans. Which would you like?",
   askedAt: "question",
   answeredBy: "go_ahead",
   answer: ANSWERS.tube,
@@ -536,7 +536,7 @@ export const SUMMARIES = {
     ridgeline: "Ordered the stacked CT holder with a carbon-fiber tube for $325, delivered to the core on Nov 2.",
   },
   northlake: "Henderson Frame Lab booked CT and compression tests on 12 coupons for $1,434, in the Wed Nov 4 priority block.",
-  ridgeline: "Henderson Frame Lab ordered one RV-16 CT holder with a carbon-fiber tube, $325.",
+  ridgeline: "Henderson Frame Lab ordered one StackMount CT holder with a carbon-fiber tube, $325.",
 } as const;
 
 function recipient(

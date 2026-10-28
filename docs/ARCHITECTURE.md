@@ -578,7 +578,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
    - The outreach card proposes Northlake Core and Ridgeline Fabrication, and shows Calder Computational screened as a weak fit.
    - The brief is prose: the coupon class and count, the deadline and the budget, but *not* the lattice designs. Alex approving it is what releases its contents.
    - Alex approves, or types what to change, which counts as rejecting with feedback.
-3. Ridgeline's representative asks which tube material the holder needs. Henderson's representative consults. Henderson's internal Claude can't find it, so the question appears inline in Alex's chat. Alex answers "Carbon fiber, please. We scan at 3 µm voxels." The answer is released to that thread, and Ridgeline quotes $325 in a message.
+3. Ridgeline's representative asks which tube material the holder needs. Henderson's representative consults. Henderson's internal Claude can't find it, so the question appears inline in Alex's chat. Alex answers "Carbon fiber, please. We need high-resolution scans." The answer is released to that thread, and Ridgeline quotes $325 in a message.
 4. Northlake's representative consults: "Can we compression-test 12 coupons before Nov 6? The public calendar is full until Nov 10."
    - Northlake's internal Claude reads the calendar and Raj's reserve-block note through its tools, and drafts a yes using the Wed Nov 4 block.
    - The sharing check fails, because reserve slots aren't in Northlake's sharing description, so the item goes to Helen with that reason.

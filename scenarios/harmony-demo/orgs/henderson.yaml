@@ -74,7 +74,7 @@ knowledge:
       Henderson Frame Lab, Dept. of Mechanical Engineering, Northlake University; PI Prof.
       Maya Henderson. Research on 3D-printed titanium lattice structures for lighter
       bike frames. Metal 3D-printing time available on request. Shipping address:
-      Henderson Frame Lab, Bldg 4, Northlake campus.
+      Henderson Frame Lab, Mechanical Engineering, Northlake campus.
   - slug: project-ltc-12
     title: Project LTC-12
     kind: project
@@ -89,9 +89,9 @@ knowledge:
     author: alex
     body: >-
       The 12 LTC-12 coupons are 20 mm titanium cubes, each engraved with its ID. We and
-      the characterization core are both on Northlake campus, so Alex drops them off at
-      the core himself: no courier. They're ready now, and he can bring them any
-      weekday, as early as the core needs them. Contact:
+      the characterization core are both on Northlake campus, so we drop them off at the
+      core's front desk ourselves: no courier. They're ready now, and we can bring them
+      any weekday, as early as the core needs them. Contact:
       alex.chen@henderson-lab.example.
   - slug: ct-holder
     title: LTC-12 CT holder
@@ -100,8 +100,8 @@ knowledge:
     body: >-
       We have no holder that stacks coupons for CT. We need one stacked holder for the
       characterization core's Zeiss Xradia 620 Versa, with a carbon-fiber tube, because
-      we scan at 3 µm voxels to see strut defects, delivered to the core: Room 112,
-      Physical Sciences Building, Northlake campus. One holder is enough: it carries
+      we need high-resolution scans to see strut defects, delivered to the core's front
+      desk: Room 112, Engineering Hall, Northlake campus. One holder is enough: it carries
       all 12 coupons through one scan session. A listed holder that fits the Versa is
       what we want, not a custom design, so we have no drawings or dimensions of our
       own. The compression tests need nothing from us: the core tests the coupons

@@ -525,7 +525,7 @@ function pacificThread({ at }: Clock): ThreadRecord {
         2,
         northlake,
         "agent",
-        "Scouting scans run about a week from receipt. Four nodes would be $480 at list price ($120 each). Do you want them scanned at 10 µm and 3 µm voxels?",
+        "Scouting scans run about a week from receipt. Four nodes would be $480 at list price ($120 each). Do you want overview scans, high-resolution scans or both?",
         at(93),
         "4",
       ),
@@ -817,7 +817,7 @@ export function checking(world: RequestsWorld, threadId: string): RequestsWorld 
   record.detail.state = "awaiting_principal";
   record.detail.side_to_move = "responder";
   record.workspace.consults.push(
-    consult(id("9c9"), "Can we hold CT time the week of Nov 16 for four nodes, at 10 µm and 3 µm?", at(0), {}),
+    consult(id("9c9"), "Can we hold CT time the week of Nov 16 for four nodes, overview and high-resolution?", at(0), {}),
   );
   return world;
 }
