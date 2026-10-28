@@ -2,7 +2,7 @@
 nothing, *Auto* only a draft the answerer would release that passes the sharing check,
 *Skip* any draft the answerer would release; a draft from a member's earlier answer is
 checked in every mode; a trusted organization's mode and sharing description apply to
-that counterparty only."""
+that counterparty only. Demo controls' Skip approvals asks nobody in any mode."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 
 from harmony.agents import context, release
 from harmony.agents.consult import ConsultDraft, SharingCheck
-from harmony.agents.release import NeedsHuman, Release
+from harmony.agents.release import Decline, NeedsHuman, Release
 from harmony.db.models import Consult, RepPolicy, TrustedOrganization
 from harmony.db.models.choices import Autonomy
 
@@ -84,6 +84,32 @@ def test_skip_releases_what_the_answerer_would_and_nothing_else(
     held = release.decide("skip", draft(answer, needs_human=True, reason=reason), check)
     assert isinstance(held, NeedsHuman)
     assert held.reason == "needs_human"
+
+
+@given(
+    mode=st.sampled_from(MODES),
+    answer=ANSWERS,
+    needs_human=st.booleans(),
+    reused=st.booleans(),
+    check=CHECKS,
+)
+def test_skip_approvals_asks_nobody_and_checks_every_draft(
+    mode: Autonomy, answer: str, needs_human: bool, reused: bool, check: SharingCheck
+) -> None:
+    """Demo controls' Skip approvals skips the people, never the check: a draft that
+    passes goes out even when the answerer flagged it, and one that fails is declined."""
+    proposed = draft(answer, needs_human=needs_human)
+    assert release.needs_sharing_check(mode, proposed, reused=reused, skip_people=True)
+    decided = release.decide(mode, proposed, check, reused=reused, skip_people=True)
+    if check.within_sharing:
+        assert decided == Release(answer=answer)
+    else:
+        assert decided == Decline(detail=check.reason)
+
+
+def test_skip_approvals_needs_the_verdict() -> None:
+    with pytest.raises(ValueError, match="sharing check"):
+        release.decide("skip", draft(), None, skip_people=True)
 
 
 def test_auto_needs_the_verdict() -> None:

@@ -6,14 +6,16 @@ import { budgetLine } from "../chat/failureCopy";
 import { Button, Modal, ModalList, Spark, Toggle } from "../shell/ui";
 import { useUnavailable } from "../shell/unavailable";
 import { useEnterDemo } from "./accounts";
+import { useSetSkipApprovals } from "./approvals";
 import { closeDemoControls, openResetConfirm, setWalkthroughPref, useDemoState } from "./store";
 import { formatWorldDate, useWorldDate } from "./worldClock";
 
 /**
  * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens on the
- * first visit, and from the demo bar and the account menu: the walkthrough switches, the
- * world (reset, replay), and which models run and what this session has spent. "Try the
- * suggested request" starts the demo, or switches back to the story's member.
+ * first visit, and from the demo bar and the account menu: the walkthrough switches, Skip
+ * approvals, the world (reset, replay), and which models run and what this session has
+ * spent. "Try the suggested request" starts the demo, or switches back to the story's
+ * member.
  */
 export function DemoControls({ session }: { session: SessionView | null }) {
   const open = useDemoState((state) => state.controlsOpen);
@@ -27,7 +29,7 @@ export function DemoControls({ session }: { session: SessionView | null }) {
       width={580}
       icon={<Spark size={26} />}
       title="Demo controls"
-      description="Every organization on the network has its own Claude. When one needs something, Claude finds who can help and their representatives work it out, within what each organization chooses to share, asking a person when they should."
+      description="Every organization on the network has its own Claude. When one needs something, Claude finds out who can help, and their two Claude representatives look to collaborate."
       footer={
         <>
           <Button variant="secondary" onClick={closeDemoControls}>
@@ -61,6 +63,7 @@ function Controls({ session }: { session: SessionView | null }) {
   const highlightRecipients = useDemoState((state) => state.highlightSuggestedRecipients);
   const unavailable = useUnavailable();
   const worldDate = useWorldDate(session?.world);
+  const skipApprovals = useSetSkipApprovals();
 
   return (
     <>
@@ -82,6 +85,21 @@ function Controls({ session }: { session: SessionView | null }) {
             checked={highlightRecipients}
             onChange={(value) => {
               setWalkthroughPref("highlightSuggestedRecipients", value);
+            }}
+          />
+        </ModalList>
+      </Section>
+
+      <Section title="Approvals">
+        <ModalList>
+          <ToggleRow
+            id="demo-skip-approvals"
+            title="Dangerously skip approvals"
+            body="Nobody in this world is asked: every organization's Claude sends its answers, messages and requests as it writes them. The sharing check still runs, and an answer it stops is declined. Items already waiting still wait."
+            checked={session?.world.skip_approvals ?? false}
+            disabled={session === null}
+            onChange={(value) => {
+              skipApprovals.mutate(value);
             }}
           />
         </ModalList>
@@ -189,12 +207,14 @@ function ToggleRow({
   title,
   body,
   checked,
+  disabled,
   onChange,
 }: {
   id: string;
   title: string;
   body: string;
   checked: boolean;
+  disabled?: boolean;
   onChange: (value: boolean) => void;
 }) {
   return (
@@ -203,7 +223,7 @@ function ToggleRow({
         <span className="text-sm leading-5 font-medium text-ink">{title}</span>
         <span className="text-[13px] leading-[18px] text-muted">{body}</span>
       </label>
-      <Toggle id={id} checked={checked} onCheckedChange={onChange} />
+      <Toggle id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
     </div>
   );
 }

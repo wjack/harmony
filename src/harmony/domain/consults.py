@@ -238,11 +238,20 @@ async def mark_needs_human(uow: UnitOfWork, consult_id: UUID) -> Consult:
     return consult
 
 
-async def decline(uow: UnitOfWork, consult_id: UUID, *, text: str, member_id: UUID) -> Consult:
-    """`needs_human` (or still `answering`) → `declined` by the member `member_id`.
-    `text` is the tool result the representative receives (what it may say, if
-    anything): kept as `released_text`, like a release, since it reached the
-    representative. The caller owes it. Idempotent once declined."""
+async def decline(
+    uow: UnitOfWork,
+    consult_id: UUID,
+    *,
+    text: str,
+    released_by: ReleasedBy = "member",
+    member_id: UUID | None = None,
+) -> Consult:
+    """`needs_human` (or still `answering`) → `declined` by the member `member_id`, or by
+    code (`auto`, under Skip approvals). `text` is the tool result the representative
+    receives (what it may say, if anything): kept as `released_text`, like a release,
+    since it reached the representative. The caller owes it. Idempotent once declined."""
+    if (released_by == "member") != (member_id is not None):
+        raise ValueError("a member decline names the member, and only a member decline does")
     consult = await _locked(uow, consult_id)
     if consult.status == "declined":
         return consult
@@ -250,7 +259,7 @@ async def decline(uow: UnitOfWork, consult_id: UUID, *, text: str, member_id: UU
         raise ConsultNotOpen(consult_id, consult.status)
     consult.status = "declined"
     consult.released_text = text
-    consult.released_by = "member"
+    consult.released_by = released_by
     consult.released_by_member_id = member_id
     consult.released_at = datetime.now(UTC)
     await uow.session.flush()

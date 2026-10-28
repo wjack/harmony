@@ -207,6 +207,7 @@ Ref: [Export data modal](https://mobbin.com/screens/bbabc6b5-8534-45d8-bdca-a19c
   - Account (persona switcher);
   - World (reset; replaying the recorded big run arrives with the network world in P3);
   - Walkthrough (show suggested message, highlight suggested recipients);
+  - Approvals: one switch, "Dangerously skip approvals", so no one in the world is asked (ARCHITECTURE §11.4);
   - Model and spend, read-only: which model each role runs on, and the session's live budget. Nothing here switches models.
 - **Passcode page** (before the app loads; served by the server, so it isn't a Claude screen): the canvas color, a serif "Harmony" heading, one password field, an "Open" button, and inline errors: "That passcode isn't right." / "Too many attempts. Try again in N minutes."
 - **Toast:** a small white pill at top right with an ⓘ icon, text and ×. Use it for "Northlake replied", "Switched to Dr. Helen Ward" and "Demo reset". When another tab switches account, this tab follows in place; if that dropped unsaved Customize edits here, the toast says so ("Your unsaved Customize changes were dropped when you switched to Raj Patel in another tab.").

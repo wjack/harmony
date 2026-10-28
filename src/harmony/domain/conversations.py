@@ -100,6 +100,7 @@ from harmony.db.models.choices import CardRejectedWith
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards as cards_domain
 from harmony.domain import consults, escalations, records, requests
+from harmony.domain.settings import skips_approvals
 from harmony.domain.threads import TERMINAL_STATES
 from harmony.events.schemas import EntitySnapshot, EventScope
 from harmony.llm.wire import canonical_json
@@ -299,7 +300,10 @@ async def send_mode(session: AsyncSession, conversation: Conversation) -> SendMo
 
 
 async def effective_send_mode(session: AsyncSession, conversation: Conversation) -> bool:
-    """Whether the chat sends Harmony Network Requests without the member's review."""
+    """Whether the chat sends Harmony Network Requests without the member's review: its
+    send mode, or always while the world skips approvals (§11.4)."""
+    if await skips_approvals(session, conversation.world_id):
+        return True
     return (await send_mode(session, conversation)).effective
 
 

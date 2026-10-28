@@ -115,3 +115,20 @@ it("hides the suggestion chip and the recipient rings when their walkthrough swi
 
   dispatcher.stop();
 });
+
+it("turns Skip approvals on for the world from Demo controls", async () => {
+  const dispatcher = renderNewChat();
+  await act(() => dispatcher.start());
+
+  fireEvent.click(await screen.findByRole("button", { name: "Demo controls" }));
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
+  const skip = await within(controls).findByRole("switch", { name: /Dangerously skip approvals/ });
+  expect(skip.getAttribute("aria-checked")).toBe("false");
+
+  fireEvent.click(skip);
+  await waitFor(() => {
+    expect(skip.getAttribute("aria-checked")).toBe("true");
+  });
+
+  dispatcher.stop();
+});

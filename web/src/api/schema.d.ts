@@ -588,6 +588,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Approvals
+         * @description Turn Skip approvals on or off. Anyone in the world may: it's the demo's switch.
+         */
+        put: operations["put_approvals_api_demo_approvals_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/gate": {
         parameters: {
             query?: never;
@@ -1078,6 +1098,11 @@ export interface components {
              * Format: date-time
              */
             delivered_at: string;
+        };
+        /** DemoApprovals */
+        DemoApprovals: {
+            /** Skip */
+            skip: boolean;
         };
         /** DemoPerson */
         DemoPerson: {
@@ -2790,6 +2815,8 @@ export interface components {
             created_at: string;
             /** Ff Offset S */
             ff_offset_s: number;
+            /** Skip Approvals */
+            skip_approvals: boolean;
         };
         /**
          * DemoNeedsHuman
@@ -5201,6 +5228,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_approvals_api_demo_approvals_put: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DemoApprovals"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoApprovals"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
             /** @description Validation Error */

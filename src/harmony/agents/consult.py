@@ -78,6 +78,7 @@ from harmony.db.models import (
 from harmony.db.models.choices import Autonomy
 from harmony.db.uow import UnitOfWork
 from harmony.domain import clock, consults, escalations, routing, steers, threads
+from harmony.domain.settings import skips_approvals
 from harmony.llm import CallKey, ModelRequest
 from harmony.llm.requests import Tier, build_request
 from harmony.llm.wire import JsonObject, as_object, as_str, objects
@@ -388,6 +389,8 @@ class _Parties:
     counterparty: Org
     policy: RepPolicy | None
     trusted: TrustedOrganization | None
+    # The world's Skip approvals (`release.decide`'s `skip_people`), read now.
+    skip_people: bool
 
     @property
     def tier(self) -> Tier:
@@ -431,7 +434,7 @@ async def answer_inputs(
         # The prompt is rendered for each consult, so the date never stales a cache.
         "today": context.world_date_notice(await clock.today(session, consult.world_id)),
         "sharing": _sharing_text(parties),
-        "review": _REDRAFT_REVIEW if draft_rev > 1 and reuse is None else _REVIEW[parties.mode()],
+        "review": _review_text(parties, redraft=draft_rev > 1 and reuse is None),
         "instructions": settings.instructions.strip() or "None.",
         "member_profiles": _members_text(members),
         "routing_prompt": _routing_text(parties.policy, members),
@@ -467,6 +470,7 @@ async def _parties(session: AsyncSession, consult: Consult) -> _Parties:
         counterparty=await repo.get_required(session, Org, world_id, counterparty_id),
         policy=await session.get(RepPolicy, (world_id, consult.org_id)),
         trusted=await session.get(TrustedOrganization, (world_id, consult.org_id, counterparty_id)),
+        skip_people=await skips_approvals(session, world_id),
     )
 
 
@@ -509,11 +513,26 @@ _REVIEW: Final[Mapping[Autonomy, str]] = {
         "give, and set `needs_human` when that goes beyond this description."
     ),
 }
+# Under Skip approvals, whatever the mode: nobody reviews, and the check declines.
+_SKIP_PEOPLE_REVIEW: Final = (
+    "Nobody on your side reviews answers right now. Every answer is checked against this "
+    "description: one that fits goes to the representative as you write it, even when you "
+    "set `needs_human`, and one that doesn't is declined. Draft the answer it should give, "
+    "within the description."
+)
 _REDRAFT_REVIEW: Final = (
     "A teammate asked for this redraft and reviews it: nothing reaches the representative "
     "until they release it. Draft the answer the representative should give, even when it "
     "goes beyond this description."
 )
+
+
+def _review_text(parties: _Parties, *, redraft: bool) -> str:
+    """How the answer will be released, for the answerer's prompt. A redraft is a
+    teammate's, even under Skip approvals: they asked for it."""
+    if redraft:
+        return _REDRAFT_REVIEW
+    return _SKIP_PEOPLE_REVIEW if parties.skip_people else _REVIEW[parties.mode()]
 
 
 async def _request_text(
@@ -890,27 +909,41 @@ async def settle(
             assignee_ids=escalations.assignee_ids(escalation),
             reason=release.why_needed(consult, current.held_reason if current else None),
         )
+    parties = await _parties(session, consult)
     if isinstance(outcome, AnswerFailed):
         log.info("consult %s has no draft: %s: %s", consult_id, outcome.reason, outcome.detail)
         consult = await consults.record_draft(
             uow, consult_id, None, answer_turn_id=keys.consult_turn_id(consult_id)
         )
+        if parties.skip_people:
+            return await _decline(uow, consult_id, outcome.detail)
         return await _escalate(uow, consult, None, draft_rev)
 
     draft = outcome.draft
     consult = await consults.record_draft(uow, consult_id, draft, answer_turn_id=outcome.turn_id)
-    mode = (await _parties(session, consult)).mode()
+    mode, skip_people = parties.mode(), parties.skip_people
     check: SharingCheck | None = None
-    if release.needs_sharing_check(mode, draft):
+    if release.needs_sharing_check(mode, draft, skip_people=skip_people):
         check = sharing or SharingCheck(within_sharing=False, reason=UNCHECKED)
         consult = await consults.record_sharing_check(uow, consult_id, check)
-    match release.decide(mode, draft, check):
+    match release.decide(mode, draft, check, skip_people=skip_people):
         case release.Release(answer=text):
             released = result_text("approve", text)
             await consults.release(uow, consult_id, text=released, released_by="auto")
             return Answered(consult_id=consult_id, result_text=released)
+        case release.Decline(detail=detail):
+            return await _decline(uow, consult_id, detail)
         case release.NeedsHuman():
             return await _escalate(uow, consult, outcome, draft_rev)
+
+
+async def _decline(uow: UnitOfWork, consult_id: UUID, why: str) -> Answered:
+    """Under Skip approvals, a consult nobody may release: declined by code, so the
+    representative is told its side declined and no person is asked."""
+    log.info("consult %s declined under Skip approvals: %s", consult_id, why)
+    declined = result_text("decline", "")
+    await consults.decline(uow, consult_id, text=declined, released_by="auto")
+    return Answered(consult_id=consult_id, result_text=declined)
 
 
 async def _settle_reused(
@@ -928,12 +961,14 @@ async def _settle_reused(
     closes with no member; held, the rev carries why (`held_reason`)."""
     draft = outcome.draft
     consult = await consults.record_drafted_from(uow, consult.id, reused_from)
+    # The item is already a person's: under Skip approvals too, a rev the check stops
+    # waits for them (it was opened before the switch, or it would never have opened).
     mode = (await _parties(uow.session, consult)).mode()
     check: SharingCheck | None = None
     if release.needs_sharing_check(mode, draft, reused=True):
         check = sharing or SharingCheck(within_sharing=False, reason=UNCHECKED)
     decision = release.decide(mode, draft, check, reused=True)
-    held = decision.detail if isinstance(decision, release.NeedsHuman) else None
+    held = None if isinstance(decision, release.Release) else decision.detail
     await escalations.add_draft(
         uow, escalation.id, draft, turn_id=outcome.turn_id, draft_rev=draft_rev, held_reason=held
     )

@@ -513,6 +513,7 @@ class FakeStory:
                 status="live",
                 created_at=datetime.now(UTC) - self.world_age,
                 ff_offset_s=0,
+                skip_approvals=False,
             ),
             member=member_view(self.acting),
             internal_model=InternalModelView(

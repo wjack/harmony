@@ -1397,6 +1397,22 @@ async def test_the_demo_names_every_account_with_an_open_item(
         ] == [("helen", "northlake", 1)]
 
 
+async def test_skip_approvals_is_the_worlds_switch(app: FastAPI) -> None:
+    async with visitor(app) as v:
+        await _world(v)
+        await v.act_as("alex")
+        assert (await v.session())["world"]["skip_approvals"] is False
+
+        on = await v.json("PUT", "/demo/approvals", json={"skip": True})
+        await v.act_as("helen")
+
+        assert on == {"skip": True}
+        # Anyone in the world sees it: it's the demo's switch, not an org's setting.
+        assert (await v.session())["world"]["skip_approvals"] is True
+        await v.json("PUT", "/demo/approvals", json={"skip": False})
+        assert (await v.session())["world"]["skip_approvals"] is False
+
+
 class Unreachable:
     """A Temporal client whose every workflow start fails, as when the server is down."""
 

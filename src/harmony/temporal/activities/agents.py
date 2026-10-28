@@ -117,7 +117,7 @@ from harmony.db.uow import UnitOfWork, unit_of_work
 from harmony.domain import agent_turns, clock, consults, conversations, escalations, steers
 from harmony.domain import threads as thread_domain
 from harmony.domain.conversations import NO_MEMBER_MESSAGE
-from harmony.domain.settings import mode_toward
+from harmony.domain.settings import mode_toward, skips_approvals
 from harmony.events.bus import StreamPublisher
 from harmony.events.schemas import DemoNotice, EventScope
 from harmony.events.stream import TYPING_HEARTBEAT_S, ChatStream, TurnStream, org_streams_tokens
@@ -777,8 +777,9 @@ class AgentActivities:
     ) -> SharingCheck | None:
         """The sharing check's verdict when the release decision needs one: a draft the
         answerer would release, under *Auto* toward this counterparty (read live), or
-        drafted from a member's earlier answer (`reused`) in any mode. Any other redraft
-        is a person's to release, so it is never checked."""
+        drafted from a member's earlier answer (`reused`) in any mode, and every first
+        draft while the world skips approvals. Any other redraft is a person's to
+        release, so it is never checked."""
         if not isinstance(drafted, DraftReady) or (consult.draft_rev != 1 and not reused):
             return None
         async with self._sessionmaker() as session:
@@ -789,7 +790,10 @@ class AgentActivities:
                 org_id=consult.org_id,
                 counterparty_org_id=thread_domain.org_of(thread, thread_domain.other(consult.side)),
             )
-        if not release.needs_sharing_check(mode, drafted.draft, reused=reused):
+            skip_people = not reused and await skips_approvals(session, consult.world_id)
+        if not release.needs_sharing_check(
+            mode, drafted.draft, reused=reused, skip_people=skip_people
+        ):
             return None
         return await answerer.check_sharing(
             self._sessionmaker,

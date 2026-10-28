@@ -726,6 +726,60 @@ async def test_a_failed_answer_goes_to_the_default_assignee_without_a_draft(
     assert result.reason == "Claude couldn't draft an answer."
 
 
+async def skip_approvals(sm: Sessionmaker, world_id: UUID) -> None:
+    """Demo controls' Skip approvals, on (§11.4)."""
+    async with unit_of_work(sm, world_id) as uow:
+        await org_settings.set_skip_approvals(uow, True)
+        await uow.commit()
+
+
+@pytest.mark.parametrize("mode", ["auto", "skip", "ask"])
+async def test_skip_approvals_releases_what_passes_the_check_and_declines_the_rest(
+    db_sessionmaker: Sessionmaker, world: UUID, mode: Autonomy
+) -> None:
+    """Nobody is asked in any mode: a flagged draft that passes the check goes out, and
+    one outside sharing, or no draft at all, is declined by code."""
+    sm = db_sessionmaker
+    await set_mode(sm, world, mode)
+    await skip_approvals(sm, world)
+    passed, failed, undrafted = [await open_thread(sm, world) for _ in range(3)]
+    passed_id, failed_id, undrafted_id = [
+        await open_consult(sm, opened) for opened in (passed, failed, undrafted)
+    ]
+
+    released = await settled(
+        sm,
+        passed,
+        passed_id,
+        ready(draft(needs_human=True, reason="Helen's call.")),
+        sharing=SharingCheck(within_sharing=True, reason=""),
+    )
+    declined = await settled(
+        sm,
+        failed,
+        failed_id,
+        ready(draft()),
+        sharing=SharingCheck(within_sharing=False, reason="It names Voltaic."),
+    )
+    nothing = await settled(
+        sm, undrafted, undrafted_id, AnswerFailed(reason="refusal", detail="no")
+    )
+
+    assert isinstance(released, Answered)
+    assert released.result_text.startswith("Your side answered:")
+    for result, consult_id in ((declined, failed_id), (nothing, undrafted_id)):
+        assert isinstance(result, Answered)
+        assert result.result_text == "Your side declined to answer."
+        row = await consult_row(sm, world, consult_id)
+        assert (row.status, row.released_by, row.released_by_member_id) == (
+            "declined",
+            "auto",
+            None,
+        )
+    async with sm() as session:
+        assert await repo.list_in_world(session, Escalation, world) == []
+
+
 async def test_a_trusted_organizations_mode_applies_to_its_threads_only(
     db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
 ) -> None:
@@ -1179,6 +1233,23 @@ async def test_ask_mode_holds_a_message_for_a_teammate(
     assert escalations.assignee_ids(escalation) == [HELEN]
     assert thread is not None
     assert thread.state == "awaiting_principal"
+
+
+async def test_skip_approvals_sends_what_ask_mode_would_hold(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    sm = db_sessionmaker
+    await set_mode(sm, world, "ask")
+    await skip_approvals(sm, world)
+    await to_move(sm, opened, "responder")
+    await freeze(sm, opened, "responder")
+
+    sent = await rep(sm, opened, "responder").execute(
+        call("send_message", text="We can take this on."), step_idx=0
+    )
+
+    assert isinstance(sent.effect, MessageSent)
+    assert [m.body for m in await messages(sm, opened)] == ["We can take this on."]
 
 
 async def steered(sm: Sessionmaker, opened: Opened, side: Side) -> None:
@@ -1998,6 +2069,23 @@ async def test_without_review_a_request_goes_to_its_suggested_screened_organizat
         (calder, False),
     ]
     assert payload.auto_send_recipients == [RIDGELINE, VANTAGE]
+
+
+async def test_skip_approvals_sends_a_request_without_review(
+    db_sessionmaker: Sessionmaker, world: UUID, opened: Opened
+) -> None:
+    """The chat is still set to review first, but nobody in the world is asked."""
+    sm = db_sessionmaker
+    await searched(sm, opened, {RIDGELINE: "strong"})
+    await skip_approvals(sm, world)
+    executor, _ = internal(sm, opened)
+
+    raised = await executor.execute(request_call(recipient("ridgeline")), step_idx=0)
+
+    assert isinstance(raised.effect, CardRaised)
+    assert raised.effect.auto
+    (card,) = await chat_cards(sm, opened)
+    assert OutreachCardPayload.model_validate(card.payload).auto_send_recipients == [RIDGELINE]
 
 
 async def test_without_review_a_request_outside_the_guards_is_not_sent(

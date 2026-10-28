@@ -30,12 +30,21 @@ from typing import Final, NamedTuple
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents import context
 from harmony.agents.release import mode_for
 from harmony.db import repo
-from harmony.db.models import Member, Org, RepPolicy, RepSettings, Thread, TrustedOrganization
+from harmony.db.models import (
+    Member,
+    Org,
+    RepPolicy,
+    RepSettings,
+    Thread,
+    TrustedOrganization,
+    World,
+)
 from harmony.db.models.choices import Autonomy, DirectoryVisibility, Side
 from harmony.db.uow import UnitOfWork
 from harmony.domain import threads
@@ -148,6 +157,20 @@ async def mode_toward(
         return "ask"
     trusted = await session.get(TrustedOrganization, (world_id, org_id, counterparty_org_id))
     return mode_for(policy, trusted)
+
+
+async def skips_approvals(session: AsyncSession, world_id: UUID) -> bool:
+    """Demo controls' Skip approvals (§11.4): whether nobody in the world is asked to
+    approve an answer, a message or a request. Read live at each decision, like the mode."""
+    return bool(await session.scalar(select(World.skip_approvals).where(World.id == world_id)))
+
+
+async def set_skip_approvals(uow: UnitOfWork, skip: bool) -> None:
+    """Turn Skip approvals on or off for the unit's world. Items already waiting for a
+    person keep waiting: the switch applies to decisions made after it."""
+    world = await uow.session.get_one(World, uow.world_id, with_for_update=True)
+    world.skip_approvals = skip
+    await uow.session.flush()
 
 
 async def trusted_organizations(
@@ -437,7 +460,9 @@ __all__ = [
     "mode_notice",
     "mode_toward",
     "remove_trusted",
+    "set_skip_approvals",
     "sharing_notice",
+    "skips_approvals",
     "trusted_organizations",
     "update",
     "update_trusted",

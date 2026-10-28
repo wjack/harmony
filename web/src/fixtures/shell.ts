@@ -108,6 +108,7 @@ export function sessionAs(actingAs: MemberView, epoch = 1, worldId = WORLD_ID): 
       status: "live",
       created_at: FIXTURE_WORLD_CREATED,
       ff_offset_s: 0,
+      skip_approvals: false,
     },
     member: actingAs,
     internal_model: internalModel(actingAs),
@@ -284,6 +285,11 @@ export function shellRoutes(actingAs: MemberView = members.alex): FixtureRoutes 
     "GET /api/demo/story": story,
     "GET /api/budget": budgets.ok,
     "GET /api/demo/waiting": { accounts: [] },
+    "PUT /api/demo/approvals": ({ body }) => {
+      const { skip } = body as { skip: boolean };
+      session = { ...session, world: { ...session.world, skip_approvals: skip } };
+      return { skip };
+    },
   };
 }
 

@@ -8,6 +8,8 @@
 - GET /api/demo/waiting: every account in the world with an open item assigned to it,
   and how many, for the demo bar's Network view badge. Demo chrome: who and how many,
   never what
+- PUT /api/demo/approvals: turn Skip approvals on or off for the session's world (demo
+  controls, §11.4); the session's world view carries the current value
 
 Read from the world's scenario (`scenarios/<name>/story.yaml`, E5): the suggested
 opening message for the composer (for the story's sender), the recipients the story
@@ -34,12 +36,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents.models import MemberRef
 from harmony.api.deps import SessionmakerDep
-from harmony.api.routes.problems import invalid, member_ref, not_found, problems
+from harmony.api.routes.problems import (
+    invalid,
+    member_ref,
+    not_found,
+    problems,
+    world_retired,
+)
 from harmony.auth.session import Actor, ActorDep
 from harmony.auth.views import OrgRef, member_rows, org_ref
 from harmony.db import repo
 from harmony.db.models import Conversation, Escalation, Member, Org, Thread, ThreadAccess, World
-from harmony.domain import clock
+from harmony.db.uow import unit_of_work
+from harmony.domain import clock, settings
+from harmony.errors import WorldRetired
 from harmony.seeds.dates import render_dates
 from harmony.seeds.loader import ScenarioNotFound, load_scenario
 from harmony.seeds.schema import ScenarioError, StorySpec
@@ -193,6 +203,29 @@ async def get_waiting(actor: ActorDep, sessionmaker: SessionmakerDep) -> DemoWai
             for member, org in rows
         ]
     )
+
+
+class DemoApprovals(_View):
+    # Nobody in the world is asked to approve (`settings.skips_approvals`).
+    skip: bool
+
+
+@router.put(
+    "/demo/approvals",
+    response_model=DemoApprovals,
+    responses=problems(status.HTTP_409_CONFLICT),
+)
+async def put_approvals(
+    body: DemoApprovals, actor: ActorDep, sessionmaker: SessionmakerDep
+) -> DemoApprovals:
+    """Turn Skip approvals on or off. Anyone in the world may: it's the demo's switch."""
+    try:
+        async with unit_of_work(sessionmaker, actor.world_id) as uow:
+            await settings.set_skip_approvals(uow, body.skip)
+            await uow.commit()
+    except WorldRetired:
+        raise world_retired() from None
+    return DemoApprovals(skip=body.skip)
 
 
 @cache
