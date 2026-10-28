@@ -299,6 +299,7 @@ export function OrgPanel({
                   ) : (
                     <Button
                       size="sm"
+                      aria-label={`Act as ${member.name}`}
                       disabled={actingAs}
                       onClick={() => {
                         onActAs(member, "/");
