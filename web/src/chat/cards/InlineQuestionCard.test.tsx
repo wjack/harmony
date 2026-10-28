@@ -68,6 +68,20 @@ function show(item: Partial<InlineQuestionItem>, onAnswer: (body: ResolveEscalat
   );
 }
 
+it("leads with a long question's first paragraph and sets off each paragraph's label", () => {
+  show({
+    question:
+      "Northlake replied with a quote. Please advise what to reply.\n\nSchedule: XRD is booked until Nov 10.\n\nThey ask us to confirm 12 samples. Can we?",
+  });
+  const lead = screen.getByText("Northlake replied with a quote. Please advise what to reply.");
+  expect(lead.className).toContain("text-ui-title");
+  const label = screen.getByText("Schedule:");
+  expect(label.className).toContain("font-medium");
+  expect(label.parentElement?.textContent).toBe("Schedule: XRD is booked until Nov 10.");
+  // A paragraph that opens with a sentence has no label.
+  expect(screen.getByText("They ask us to confirm 12 samples. Can we?").children).toHaveLength(0);
+});
+
 it("says how a settled question was settled, not 'Answered' for every one", () => {
   show({ status: "resolved", action: "approve", answer: "About $2,000." });
   expect(screen.getByText("Answered")).toBeTruthy();

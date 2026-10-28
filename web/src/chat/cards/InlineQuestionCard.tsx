@@ -20,6 +20,36 @@ export interface InlineQuestionCardProps {
   onAnswer: (body: ResolveEscalation) => void;
 }
 
+// A paragraph's opening label, as in "Schedule: XRD is booked until Nov 10": short, and no sentence.
+const LABEL = /^([^.:\n]{1,40}):\s+/;
+
+/**
+ * The question as the representative wrote it: the first paragraph leads, and any
+ * others read as body text, each opening label set off so a long question scans.
+ */
+function Question({ text }: { text: string }) {
+  const [lead = "", ...rest] = text.trim().split(/\n\s*\n/);
+  return (
+    <div className="px-4 pt-2.5">
+      <p className="text-ui-title whitespace-pre-line text-ink">{lead}</p>
+      {rest.map((paragraph, index) => {
+        const label = LABEL.exec(paragraph);
+        return (
+          <p key={index} className="mt-2 text-ui leading-[22px] whitespace-pre-line text-secondary">
+            {label === null ? (
+              paragraph
+            ) : (
+              <>
+                <span className="font-medium text-ink">{label[1]}:</span> {paragraph.slice(label[0].length)}
+              </>
+            )}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 /** How a settled item reads: what the member did, and what the words under it are. */
 interface Settled {
   pill: string;
@@ -86,7 +116,7 @@ export function InlineQuestionCard({ item, us, busy, blocked, error, onAnswer }:
           <Pill tone="muted">No longer needed</Pill>
         )}
       </header>
-      <p className="px-4 pt-2.5 text-ui-title text-ink">{item.question}</p>
+      <Question text={item.question} />
       {open ? (
         <AnswerBox item={item} us={us} busy={busy} blocked={blocked} error={error} onAnswer={onAnswer} />
       ) : (
