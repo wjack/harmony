@@ -232,12 +232,12 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect(page.getByRole("button", { name: /Northlake needs a human/ })).toBeVisible(TURNS);
   });
 
-  await test.step("the network view rings the suggested recipients and shows who waits on a person", async () => {
+  await test.step("the network view rings the suggested recipients, and keeps Northlake's escalation Northlake's", async () => {
     await openFromSidebar(page, "Network");
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) {
       await expect(networkNode(page, org)).toContainText("Suggested");
     }
-    await expect(networkNode(page, NORTHLAKE)).toContainText("Needs human", TURNS);
+    await expect(networkNode(page, NORTHLAKE)).not.toContainText("Needs human");
     await expect(networkNode(page, CALDER)).toContainText("Screened");
     expect(await nameFits(page, NORTHLAKE)).toBe(true);
     await expect(page.locator("[data-edge-label]").first()).toBeVisible();

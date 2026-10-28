@@ -454,6 +454,17 @@ def side_of(thread: Thread, org_id: UUID) -> Side:
     raise ValueError(f"org {org_id} is not a party to thread {thread.id}")
 
 
+def state_for(thread: Thread, org_id: UUID | None) -> ThreadState:
+    """The thread's state as `org_id` may know it (None: the network lens, which sees
+    every side). A side checking with its own team is that side's business: to anyone
+    else its `awaiting_principal` reads `active`."""
+    if org_id is None or thread.state != "awaiting_principal":
+        return thread.state
+    if org_id in parties(thread) and side_of(thread, org_id) == thread.side_to_move:
+        return thread.state
+    return "active"
+
+
 def org_of(thread: Thread, side: Side) -> UUID:
     return thread.requester_org_id if side == "requester" else thread.responder_org_id
 
@@ -547,6 +558,7 @@ __all__ = [
     "set_state",
     "side_of",
     "snapshot",
+    "state_for",
     "store_close_summary",
     "thread_title",
 ]

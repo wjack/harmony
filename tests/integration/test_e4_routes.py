@@ -1183,11 +1183,12 @@ async def test_the_network_view_focuses_the_latest_request(
         assert network["request_id"] == str(outreach.request_id)
         nodes = {node["org"]["slug"]: node for node in network["nodes"]}
         assert nodes["henderson"]["role"] == "requester"
+        # Northlake's escalation is Northlake's business: Alex sees a thread it hasn't
+        # written on yet, and not who (or that anyone) it waits on.
         assert (nodes["northlake"]["role"], nodes["northlake"]["participant"]) == (
             "recipient",
-            "needs_human",
+            "messaged",
         )
-        # Who Northlake waits on is Northlake's to know.
         assert nodes["northlake"]["waiting_on"] is None
         assert (nodes["calder"]["participant"], nodes["calder"]["fit"]) == ("screened", "strong")
         assert nodes["ridgeline"]["role"] == "bystander"
@@ -1198,6 +1199,7 @@ async def test_the_network_view_focuses_the_latest_request(
         }
         (edge,) = network["edges"]
         assert edge["thread_id"] == str(thread_id)
+        assert edge["state"] == "active"
         assert edge["turn_count"] == 0
         assert network["counts"] == {
             "orgs": len(nodes),
@@ -1209,7 +1211,9 @@ async def test_the_network_view_focuses_the_latest_request(
         await v.act_as("helen")
         network = await v.json("GET", "/network", params={"request": str(outreach.request_id)})
         nodes = {node["org"]["slug"]: node for node in network["nodes"]}
+        assert nodes["northlake"]["participant"] == "needs_human"
         assert nodes["northlake"]["waiting_on"]["member"]["slug"] == "helen"
+        assert network["edges"][0]["state"] == "awaiting_principal"
         await v.request("GET", "/network", params={"request": str(uuid4())}, expect=404)
 
 
