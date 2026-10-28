@@ -169,7 +169,7 @@ function Budget() {
         type="button"
         title="This session's live-model budget"
         onClick={() => {
-          openDemoControls("controls");
+          openDemoControls();
         }}
         className={cx(
           "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 transition-colors hover:bg-demo-surface",

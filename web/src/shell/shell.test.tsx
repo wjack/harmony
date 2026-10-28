@@ -38,7 +38,7 @@ beforeEach(() => {
     },
   );
   window.localStorage.clear();
-  demoStore.setState({ welcomed: false, controlsOpen: false, controlsTab: "overview", resetConfirmOpen: false });
+  demoStore.setState({ welcomed: false, controlsOpen: false, resetConfirmOpen: false });
   sidebarStore.setState({ collapsed: false });
   toastStore.setState({ toasts: [] });
   clearAllAlerts();
@@ -58,7 +58,7 @@ it("introduces the demo, starts it as Alex and switches accounts over a fresh st
   // First visit, no session: the landing, with the demo controls open over it.
   // (The open modal hides the page from the accessibility tree, so find it by text.)
   expect(screen.getByText("Welcome to Harmony")).toBeTruthy();
-  const controls = await screen.findByRole("dialog", { name: "The Harmony demo" });
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
   expect(sources.opened).toHaveLength(0);
 
   fireEvent.click(within(controls).getByRole("button", { name: "Try the suggested request" }));
@@ -66,7 +66,7 @@ it("introduces the demo, starts it as Alex and switches accounts over a fresh st
   // Starting creates the session; the shell comes up as Alex with Recents.
   await screen.findByRole("button", { name: "Account: Alex Chen" });
   expect(await screen.findByText(RECENT)).toBeTruthy();
-  expect(screen.queryByRole("dialog", { name: "The Harmony demo" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "Demo controls" })).toBeNull();
   expect(demoStore.getState().welcomed).toBe(true);
   expect(sources.opened.map((source) => source.url)).toEqual(["/api/events?after=7&epoch=1"]);
   act(() => {
@@ -250,12 +250,12 @@ it("switches to Alex for the suggested request the way every switch does", async
   const { dispatcher } = await renderLive(sessionAs(members.helen, 1), { path: `/requests/${THREAD(1)}` });
 
   fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
-  const controls = await screen.findByRole("dialog", { name: "The Harmony demo" });
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
   fireEvent.click(within(controls).getByRole("button", { name: "Try the suggested request" }));
 
   await screen.findByRole("button", { name: "Account: Alex Chen" });
   await waitFor(() => {
-    expect(screen.queryByRole("dialog", { name: "The Harmony demo" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Demo controls" })).toBeNull();
   });
   expect(await screen.findByText("Home at /")).toBeTruthy();
   expect(screen.getByRole("status").textContent).toContain("Switched to Alex Chen");

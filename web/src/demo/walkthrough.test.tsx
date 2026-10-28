@@ -75,7 +75,6 @@ beforeEach(() => {
   demoStore.setState({
     welcomed: true,
     controlsOpen: false,
-    controlsTab: "overview",
     showSuggestedMessage: true,
     highlightSuggestedRecipients: true,
   });
@@ -95,8 +94,7 @@ it("hides the suggestion chip and the recipient rings when their walkthrough swi
   expect(await screen.findByText("Rings: northlake, ridgeline, calder")).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
-  const controls = await screen.findByRole("dialog", { name: "The Harmony demo" });
-  fireEvent.click(within(controls).getByRole("radio", { name: "Controls" }));
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
 
   // (The open modal hides the page from role queries, so look for the chip by its title.)
   fireEvent.click(within(controls).getByRole("switch", { name: /Show the suggested message/ }));

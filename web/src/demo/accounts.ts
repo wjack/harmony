@@ -304,11 +304,10 @@ function afterRebuild(dispatcher: RealtimeDispatcher, then: () => void): void {
   });
 }
 
-export type DemoEntry = "suggested" | "explore" | "network";
-
 /**
- * The demo controls' three ways in (§11.4). Each starts the visitor's session if there
- * isn't one yet (worlds are created on first interaction, never on page view).
+ * Demo controls' "Try the suggested request" (§11.4): starts the visitor's session if
+ * there isn't one yet (worlds are created on first interaction, never on page view),
+ * acts as the story's member and opens a new chat.
  */
 export function useEnterDemo() {
   const api = useApi();
@@ -319,24 +318,23 @@ export function useEnterDemo() {
   const { switchTo } = useSwitchAccount();
 
   const enter = useMutation({
-    /** Resolves to null when the switch to the story's member failed (its toast says why). */
-    mutationFn: async (entry: DemoEntry): Promise<DemoEntry | null> => {
+    /** Resolves to false when the switch to the story's member failed (its toast says why). */
+    mutationFn: async (): Promise<boolean> => {
       const current: SessionView = session.data ?? (await start.mutateAsync());
-      if (entry === "suggested" && current.member.slug !== STORY_MEMBER_SLUG) {
+      if (current.member.slug !== STORY_MEMBER_SLUG) {
         const directory = await queryClient.query({
           queryKey: queryKeys.members,
           queryFn: () => unwrap(api.GET("/api/members")),
         });
         const storyMember = findMember(directory, STORY_MEMBER_SLUG);
-        if (storyMember !== null && !(await switchTo(storyMember, { to: "/" }))) return null;
+        if (storyMember !== null && !(await switchTo(storyMember, { to: "/" }))) return false;
       }
-      return entry;
+      return true;
     },
-    onSuccess: (entry) => {
-      if (entry === null) return;
+    onSuccess: (entered) => {
+      if (!entered) return;
       closeDemoControls();
-      if (entry === "suggested") void navigate("/");
-      if (entry === "network") void navigate("/network");
+      void navigate("/");
     },
   });
   return enter;

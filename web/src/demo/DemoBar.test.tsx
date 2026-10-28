@@ -19,7 +19,7 @@ beforeEach(() => {
       disconnect(): void {}
     },
   );
-  demoStore.setState({ welcomed: true, controlsOpen: false, controlsTab: "overview", resetConfirmOpen: false });
+  demoStore.setState({ welcomed: true, controlsOpen: false, resetConfirmOpen: false });
   clearAllAlerts();
 });
 

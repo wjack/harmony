@@ -33,7 +33,7 @@ export function AppLayout() {
 
   // The demo controls introduce the demo on a visitor's first visit.
   useEffect(() => {
-    if (!welcomed && (status === "no-session" || status === "open")) openDemoControls("overview");
+    if (!welcomed && (status === "no-session" || status === "open")) openDemoControls();
   }, [welcomed, status]);
 
   // Once this tab has shown the landing, keep it up while the session starts, rather

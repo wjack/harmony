@@ -1,38 +1,22 @@
-import { ArrowRight, Check, Compass, Waypoints, Sparkles, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import type { MemberView, SessionView } from "../api/types";
+import type { SessionView } from "../api/types";
 import { useBudget, type BudgetView } from "../app/budget";
-import { useMembers } from "../app/queries";
 import { budgetLine } from "../chat/failureCopy";
-import { Avatar, Button, Modal, ModalList, Segmented, Spark, Toggle, cx } from "../shell/ui";
+import { Button, Modal, ModalList, Spark, Toggle } from "../shell/ui";
 import { useUnavailable } from "../shell/unavailable";
-import { useEnterDemo, useSwitchAccount, type DemoEntry } from "./accounts";
-import { castLine } from "./cast";
-import {
-  closeDemoControls,
-  openResetConfirm,
-  setDemoControlsTab,
-  setWalkthroughPref,
-  useDemoState,
-  type DemoControlsTab,
-} from "./store";
+import { useEnterDemo } from "./accounts";
+import { closeDemoControls, openResetConfirm, setWalkthroughPref, useDemoState } from "./store";
 import { formatWorldDate, useWorldDate } from "./worldClock";
 
-const TABS = [
-  { value: "overview", label: "Overview" },
-  { value: "controls", label: "Controls" },
-] as const;
-
 /**
- * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens on
- * the first visit: the network in thirty seconds, the cast, and three ways in. Its
- * Controls tab holds the walkthrough switches, the world (reset, replay), and which
- * models run and what this session has spent.
+ * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens on the
+ * first visit, and from the demo bar and the account menu: the walkthrough switches, the
+ * world (reset, replay), and which models run and what this session has spent. "Try the
+ * suggested request" starts the demo, or switches back to the story's member.
  */
 export function DemoControls({ session }: { session: SessionView | null }) {
   const open = useDemoState((state) => state.controlsOpen);
-  const tab = useDemoState((state) => state.controlsTab);
 
   return (
     <Modal
@@ -42,27 +26,18 @@ export function DemoControls({ session }: { session: SessionView | null }) {
       }}
       width={580}
       icon={<Spark size={26} />}
-      title="The Harmony demo"
+      title="Demo controls"
       description="Every organization on the network has its own Claude. When one needs something, Claude finds who can help and their representatives work it out, within what each organization chooses to share, asking a person when they should."
       footer={
         <>
           <Button variant="secondary" onClick={closeDemoControls}>
             Close
           </Button>
-          <EnterButton entry="suggested" variant="primary">
-            Try the suggested request
-          </EnterButton>
+          <EnterButton variant="primary">Try the suggested request</EnterButton>
         </>
       }
     >
-      <Segmented<DemoControlsTab>
-        label="Demo controls sections"
-        value={tab}
-        options={TABS}
-        onChange={setDemoControlsTab}
-        className="mb-5"
-      />
-      {tab === "overview" ? <Overview session={session} /> : <Controls session={session} />}
+      <Controls session={session} />
     </Modal>
   );
 }
@@ -76,158 +51,6 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
       </div>
       {children}
     </section>
-  );
-}
-
-// --- Overview -----------------------------------------------------------------------
-
-const ENTRIES: readonly { entry: DemoEntry; Icon: LucideIcon; title: string; body: string }[] = [
-  {
-    entry: "suggested",
-    Icon: Sparkles,
-    title: "Try the suggested request",
-    body: "As Alex Chen, ask Claude to find XRD and SEM time for 12 air-sensitive samples.",
-  },
-  {
-    entry: "explore",
-    Icon: Compass,
-    title: "Explore freely",
-    body: "Look around the app as anyone on the network.",
-  },
-  {
-    entry: "network",
-    Icon: Waypoints,
-    title: "Network view",
-    body: "Watch each organization's Claude work your requests, and who needs a human.",
-  },
-];
-
-function Overview({ session }: { session: SessionView | null }) {
-  const enter = useEnterDemo();
-  return (
-    <>
-      <Section title="Start here">
-        <ModalList>
-          {ENTRIES.map(({ entry, Icon, title, body }) => (
-            <button
-              key={entry}
-              type="button"
-              disabled={enter.isPending}
-              onClick={() => {
-                enter.mutate(entry);
-              }}
-              className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-hover disabled:opacity-60"
-            >
-              <Icon size={18} strokeWidth={1.5} className="shrink-0 text-secondary" aria-hidden />
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="text-sm leading-5 font-medium text-ink">{title}</span>
-                <span className="text-[13px] leading-[18px] text-muted">{body}</span>
-              </span>
-              <ArrowRight
-                size={16}
-                strokeWidth={1.5}
-                className="shrink-0 text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-ink"
-                aria-hidden
-              />
-            </button>
-          ))}
-        </ModalList>
-        {enter.error !== null && (
-          <p role="alert" className="mt-2 text-[13px] text-danger">
-            {enter.error.message}
-          </p>
-        )}
-      </Section>
-      <Section title="The cast" aside={session === null ? "Start the demo to switch" : "Click to act as anyone"}>
-        <Cast session={session} />
-      </Section>
-    </>
-  );
-}
-
-function Cast({ session }: { session: SessionView | null }) {
-  const members = useMembers();
-  const { switchTo, pending } = useSwitchAccount();
-  if (session === null) return <StaticCast />;
-  const featured = members.data?.featured ?? [];
-  return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {featured.map((member) => (
-        <PersonaCard
-          key={member.id}
-          member={member}
-          active={member.id === session.member.id}
-          disabled={pending}
-          onSelect={() => {
-            if (member.id !== session.member.id) void switchTo(member);
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Before a session exists there is no member directory to read; introduce the story's
-// people from the scenario instead.
-const STATIC_CAST: readonly { name: string; seed: string; role: string; line: string }[] = [
-  { name: "Alex Chen", seed: "henderson", role: "PhD student · Henderson Lab", line: "Needs XRD and SEM time by Nov 6, and a sealed holder." },
-  { name: "Dr. Helen Ward", seed: "northlake", role: "Core director · Northlake", line: "Runs Northlake's scheduling and pricing exceptions." },
-  { name: "Raj Patel", seed: "northlake", role: "Staff scientist · Northlake", line: "Runs the instruments and holds a reserve XRD block." },
-  { name: "Dana Okafor", seed: "ridgeline", role: "Operations lead · Ridgeline", line: "Quotes sealed holders, given the seal material." },
-];
-
-function StaticCast() {
-  return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {STATIC_CAST.map((person) => (
-        <div key={person.name} className="flex gap-2.5 rounded-control border border-border px-3 py-2.5">
-          <Avatar name={person.name} seed={person.seed} size={28} />
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate text-[13.5px] leading-[18px] font-medium">{person.name}</span>
-            <span className="truncate text-xs leading-4 text-muted">{person.role}</span>
-            <span className="mt-1 text-xs leading-4 text-secondary">{person.line}</span>
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function PersonaCard({
-  member,
-  active,
-  disabled,
-  onSelect,
-}: {
-  member: MemberView;
-  active: boolean;
-  disabled: boolean;
-  onSelect: () => void;
-}) {
-  const line = castLine(member);
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled}
-      aria-pressed={active}
-      className={cx(
-        "flex gap-2.5 rounded-control border px-3 py-2.5 text-left transition-colors disabled:opacity-70",
-        active ? "border-ink bg-surface" : "border-border hover:border-border-strong hover:bg-hover",
-      )}
-    >
-      <Avatar name={member.name} seed={member.org.slug} size={28} />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-[13.5px] leading-[18px] font-medium text-ink">{member.name}</span>
-          {active && <Check size={14} strokeWidth={2} className="shrink-0 text-ink" aria-label="Acting as" />}
-        </span>
-        <span className="truncate text-xs leading-4 text-muted">
-          {member.title ?? member.role} · {member.org.name}
-        </span>
-        {line !== null && <span className="mt-1 text-xs leading-4 text-secondary">{line}</span>}
-      </span>
-    </button>
   );
 }
 
@@ -286,14 +109,6 @@ function Controls({ session }: { session: SessionView | null }) {
             }}
           >
             Replay the big run
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              unavailable("Forking a world");
-            }}
-          >
-            Fork this world
           </Button>
         </div>
         <p className="mt-2 text-xs leading-4 text-muted">
@@ -393,22 +208,14 @@ function ToggleRow({
   );
 }
 
-function EnterButton({
-  entry,
-  variant,
-  children,
-}: {
-  entry: DemoEntry;
-  variant: "primary" | "secondary";
-  children: ReactNode;
-}) {
+function EnterButton({ variant, children }: { variant: "primary" | "secondary"; children: ReactNode }) {
   const enter = useEnterDemo();
   return (
     <Button
       variant={variant}
       disabled={enter.isPending}
       onClick={() => {
-        enter.mutate(entry);
+        enter.mutate();
       }}
     >
       {enter.isPending ? "Starting…" : children}

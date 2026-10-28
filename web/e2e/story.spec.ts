@@ -175,7 +175,8 @@ async function clippedValues(details: Locator): Promise<string[]> {
 test("before any request is in flight, the network view's note sits clear of every card", async ({ page }) => {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: /^Network view/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
   await expect(page).toHaveURL(/\/network/);
   const note = page.locator("[data-no-request]");
   await expect(note).toContainText(/No requests yet|Nothing in flight/);

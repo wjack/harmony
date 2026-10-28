@@ -95,20 +95,8 @@ function ControlsLauncher() {
   const session = useSession();
   return (
     <div className="flex flex-wrap gap-2">
-      <Button
-        variant="primary"
-        onClick={() => {
-          openDemoControls("overview");
-        }}
-      >
+      <Button variant="primary" onClick={openDemoControls}>
         Open demo controls
-      </Button>
-      <Button
-        onClick={() => {
-          openDemoControls("controls");
-        }}
-      >
-        Open the Controls tab
       </Button>
       <Button onClick={openResetConfirm}>Reset demo…</Button>
       <DemoControls session={session.data ?? null} />

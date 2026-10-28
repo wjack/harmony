@@ -18,7 +18,7 @@ export function Landing() {
         size="lg"
         className="mt-6"
         onClick={() => {
-          openDemoControls("overview");
+          openDemoControls();
         }}
       >
         Start the demo
