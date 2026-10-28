@@ -7,7 +7,8 @@ rules or as drafted (`--interactive` asks instead, `--approve all` approves ever
 recipient). `--message TEXT` sends that instead, as `--as` or the story's member, and
 follows whatever requests come of it to their end (the 10-org sim: `--message ... --as
 <member> --approve all`). `--send-without-confirmation` starts the chat sending without
-review. `--edit ORG:COUNTERPARTY:N:TEXT` has a member of ORG tell its Claude TEXT (an
+review, and `--skip-approvals` turns Demo controls' Skip approvals on, so nobody is
+asked. `--edit ORG:COUNTERPARTY:N:TEXT` has a member of ORG tell its Claude TEXT (an
 Edit) once ORG's thread with COUNTERPARTY has N messages, and the report's
 `guidance_followed` shows what that side sent next (EDIT.md §9). Prints each beat as it
 is seen, waits for the requests to close and Claude's summary, then prints the
@@ -89,6 +90,7 @@ class RunOptions:
     message: str | None = None
     approve: ApproveChoice = "story"
     send_without_confirmation: bool = False
+    skip_approvals: bool = False
     # `--edit` as typed: `planned_edits` reads them once the scenario is loaded.
     edits: tuple[str, ...] = ()
 
@@ -132,6 +134,13 @@ def run(
             help="Start the chat sending requests without review.",
         ),
     ] = False,
+    skip_approvals: Annotated[
+        bool,
+        typer.Option(
+            "--skip-approvals",
+            help="Turn Demo controls' Skip approvals on: nobody in the world is asked.",
+        ),
+    ] = False,
     edit: Annotated[
         list[str] | None,
         typer.Option(
@@ -172,6 +181,7 @@ def run(
         message=message,
         approve="all" if approve == "all" else "story",
         send_without_confirmation=send_without_confirmation,
+        skip_approvals=skip_approvals,
         edits=tuple(edit or ()),
     )
     try:
@@ -304,6 +314,7 @@ async def _run(
                     worker=worker.serving if worker is not None else None,
                     failures=worker.log.failures if worker is not None else None,
                     send_without_review=options.send_without_confirmation,
+                    skip_approvals=options.skip_approvals,
                     on_poll=meter.sample,
                     edits=edits,
                 )
