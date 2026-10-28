@@ -47,8 +47,8 @@ policy:
   autonomy: auto
   sharing_description: >-
     Our external academic price list and its published terms, what is open on the
-    public instrument calendar, sample-prep and air-free handling requirements, and
-    typical turnaround. Not: other clients or their bookings, staff notes, or off-list
+    public instrument calendar, sample-prep, air-free handling and delivery
+    requirements, and typical turnaround. Not: other clients or their bookings, staff notes, or off-list
     pricing.
   routing_prompt: >-
     Instrument scheduling and off-list pricing exceptions go to Helen. Sample-prep and
@@ -76,7 +76,8 @@ knowledge:
     kind: price-list
     body: >-
       Powder XRD $45 per sample. SEM/EDS $60 per sample. Air-free transfer and handling
-      $150 flat per batch. Standard report included. Published terms for academic
+      $150 flat per batch: one fee for samples delivered together, whatever the
+      techniques. Standard report included. Published terms for academic
       users: 10 or more samples on one technique get 10% off that technique, applied
       automatically, and a priority XRD block is a $150 flat fee. Quotes valid 14 days.
   - slug: public-calendar
@@ -85,7 +86,9 @@ knowledge:
     body: >-
       Next standard XRD block: Tue Nov 10, with reports by Fri Nov 13. Priority XRD
       block open: Wed Nov 4, 09:00–13:00, for up to 14 powders, with reports by Thu
-      Nov 5. SEM open from Tue Nov 3, except Thursday afternoons through December.
+      Nov 5. SEM/EDS open from Tue Nov 3, except Thursday afternoons through December:
+      a session takes up to 16 powders on one stub, with reports two business days
+      after it (a session on Wed Nov 4 reports by Fri Nov 6).
   - slug: air-free-handling
     title: Air-free handling, XRD
     kind: procedure
@@ -98,8 +101,18 @@ knowledge:
     body: >-
       We mount air-sensitive powders on carbon tape in the glovebox and move them to
       the Apreo 2 in a sealed transfer holder that fits its airlock. We don't supply
-      holders; Ridgeline Fabrication makes ones that fit. Vials hand-delivered on
-      campus are opened in our glovebox.
+      holders; Ridgeline Fabrication's listed Apreo 2 holder fits as delivered. Vials
+      hand-delivered on campus are opened in our glovebox.
+  - slug: glovebox-receiving
+    title: Glovebox and receiving
+    kind: procedure
+    body: >-
+      Our glovebox runs on argon, with O2 and H2O held below 0.5 ppm and logged
+      continuously. Air-sensitive samples stay under argon from receipt to
+      measurement: vials are opened only in the glovebox, XRD runs in sealed dome
+      holders, and SEM stubs go to the Apreo 2 in a sealed transfer holder. Hand
+      deliveries on campus: Room 112, Physical Sciences Building, weekdays 9:00–17:00,
+      for Raj. Samples for a session must be in by 17:00 the business day before.
   - slug: apreo-airlock
     title: Apreo 2 airlock, holder fit
     kind: spec

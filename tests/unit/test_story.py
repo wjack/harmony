@@ -180,9 +180,9 @@ def test_northlake_shares_its_published_terms_but_not_other_clients() -> None:
     northlake = _org(load_scenario("harmony-demo"), "northlake")
     assert _flat(northlake.policy.sharing_description) == (
         "Our external academic price list and its published terms, what is open on the "
-        "public instrument calendar, sample-prep and air-free handling requirements, and "
-        "typical turnaround. Not: other clients or their bookings, staff notes, or "
-        "off-list pricing."
+        "public instrument calendar, sample-prep, air-free handling and delivery "
+        "requirements, and typical turnaround. Not: other clients or their bookings, "
+        "staff notes, or off-list pricing."
     )
 
 
@@ -215,18 +215,23 @@ def test_the_records_hold_what_the_story_turns_on() -> None:
     assert "worth up to about $200 extra" in dates
     assert "About $2,000 discretionary" in henderson["budget"]
     assert "Alex reviews any single order over $1,000" in henderson["budget"]
+    assert "ready now" in henderson["samples-handling"]
+    assert "One holder is enough" in henderson["transfer-holder"]
 
     northlake = _records(scenario, "northlake")
     calendar = northlake["public-calendar"]
     assert "Next standard XRD block: Tue Nov 10, with reports by Fri Nov 13." in calendar
     priority = "Wed Nov 4, 09:00–13:00, for up to 14 powders, with reports by Thu Nov 5"
     assert priority in calendar
+    assert "a session on Wed Nov 4 reports by Fri Nov 6" in calendar
     prices = northlake["price-list"]
     assert "Powder XRD $45 per sample. SEM/EDS $60 per sample." in prices
-    assert "Air-free transfer and handling $150 flat per batch." in prices
+    assert "Air-free transfer and handling $150 flat per batch: one fee" in prices
     assert "10 or more samples on one technique get 10% off that technique" in prices
     assert "a priority XRD block is a $150 flat fee" in prices
     assert "Helen decides only off-list exceptions." in northlake["pricing-policy"]
+    assert "O2 and H2O held below 0.5 ppm" in northlake["glovebox-receiving"]
+    assert "Room 112, Physical Sciences Building" in northlake["glovebox-receiving"]
     # Who freed the Nov 4 block: a client, so it stays out of every answer.
     assert "Voltaic" in northlake["nov-4-xrd-block"]
     standard = (12 * 45 + 12 * 60) * 9 // 10 + 150
@@ -234,7 +239,7 @@ def test_the_records_hold_what_the_story_turns_on() -> None:
     assert standard + 150 == 1_434
 
     ridgeline = _records(scenario, "ridgeline")["price-list"]
-    assert "Apreo 2 airlock, aluminum body: $240, ready in 4 business days" in ridgeline
+    assert "carries one standard SEM stub (any number of powder mounts on it): $240" in ridgeline
     assert "Kalrez seal in its place +$85" in ridgeline
     assert "Free delivery on Northlake campus the next business day" in ridgeline
     assert 240 + 85 == 325

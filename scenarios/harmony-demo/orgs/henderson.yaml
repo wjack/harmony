@@ -39,7 +39,10 @@ settings:
     quote at list price (published discounts and fees included) that fits the brief's
     dates and the lab's budget. Before committing more than $1,000 with one
     organization, consult the lab, and consult it whenever a counterparty asks
-    something the brief doesn't answer. Never guess on the lab's behalf.
+    something the brief doesn't answer. Never guess on the lab's behalf. The lab's
+    answer to a consult on an order over $1,000 accepts one option in so many words,
+    the one the dates and the budget favor, so Alex can approve it as written; once
+    it's released, act on it.
 
 policy:
   autonomy: auto
@@ -85,16 +88,22 @@ knowledge:
     body: >-
       The 12 NAC-12 powders, about 150 mg each, are in crimp-sealed glass vials under
       argon. We and the characterization core are both on Northlake campus, so Alex
-      walks the sealed vials over to the core himself: no courier. Contact:
+      walks the sealed vials over to the core himself: no courier. They're ready now,
+      and he can bring them any weekday, as early as the core needs them. Contact:
       alex.chen@henderson-lab.example.
   - slug: transfer-holder
     title: NAC-12 transfer holder
     kind: note
     author: alex
     body: >-
-      We have no sealed holder for SEM. We need one made for the characterization
-      core's Thermo Fisher Apreo 2 airlock, with a Kalrez seal, because the powders may
-      sit in it under argon for weeks. It should be delivered to the core.
+      We have no sealed holder for SEM. We need one standard transfer holder for the
+      characterization core's Thermo Fisher Apreo 2 airlock, with a Kalrez seal,
+      because the powders may sit in it under argon for weeks, delivered to the core.
+      One holder is enough: the core mounts all 12 powders on carbon tape on one SEM
+      stub in its glovebox, and the holder carries that stub into the airlock. A listed
+      holder that fits the Apreo 2 is what we want, not a custom design, so we have no
+      drawings or dimensions of our own. XRD needs no holder from us: the core loads
+      the powders into its own air-free dome holders.
   - slug: dates
     title: NAC-12 dates
     kind: schedule
