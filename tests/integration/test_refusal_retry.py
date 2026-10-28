@@ -46,6 +46,7 @@ DRAFT: Final = {
     "rationale": "From the records.",
 }
 EDITED: Final = "Yes: they're sodium layered oxides. No compositions."
+REWORDED: Final = "Which sample class are the powders in, for the mounting plan?"
 WITHIN: Final = {"within_sharing": True, "reason": "The sample class is shared."}
 
 
@@ -182,6 +183,29 @@ async def test_a_declined_answer_is_retried_as_a_new_draft(db_sessionmaker: Sess
     await _answer(sm, model, asked, draft_rev=2, retry=True)
     assert await _drafts(sm, asked) == {2: DRAFT["answer"]}
     assert await _declined(sm, asked) is None
+
+
+async def test_a_declined_answer_is_retried_on_the_members_rewording(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    sm = db_sessionmaker
+    model = ScriptedModel(
+        _declines("answerer", 0, "bio")
+        | _says("answerer", keys.answerer_step(2, 0), DRAFT)
+        | _says("sharing_check", 1, WITHIN)
+    )
+    asked = await _ask(sm)
+    await _answer(sm, model, asked)
+
+    # The answerer drafts on the rewording, which the item shows from then on.
+    await _answer(sm, model, asked, draft_rev=2, retry=True, question=REWORDED)
+    [drafted] = _sent(model, "answerer", keys.answerer_step(2, 0))
+    assert REWORDED in drafted
+    assert QUESTION not in drafted
+    async with sm() as session:
+        row = await consults.get(session, world_id=asked.world_id, consult_id=asked.consult_id)
+    assert row.question == REWORDED
+    assert await _drafts(sm, asked) == {2: DRAFT["answer"]}
 
 
 def _call(world_id: UUID, turn_id: UUID, step_idx: int, message: Mapping[str, Any]) -> ModelCall:

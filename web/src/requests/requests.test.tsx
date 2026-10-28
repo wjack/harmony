@@ -629,7 +629,9 @@ describe("the decision card", () => {
     await waitFor(() => {
       expect(within(decision).queryByText(/^Claude declined/)).toBeNull();
     });
-    expect(writes).toEqual([{ route: retryRoute(ESCALATION.henderson), body: { draft_text: "Yes, Wednesday." } }]);
+    expect(writes).toEqual([
+      { route: retryRoute(ESCALATION.henderson), body: { draft_text: "Yes, Wednesday.", question: null } },
+    ]);
     // The checked rev is the draft now, with nothing to page back to.
     expect(draft(decision).value).toBe("Yes, Wednesday.");
   });
@@ -645,8 +647,33 @@ describe("the decision card", () => {
     await waitFor(() => {
       expect(draft(decision).value).toBe(HENDERSON_ANSWER);
     });
-    expect(writes).toEqual([{ route: retryRoute(ESCALATION.henderson), body: { draft_text: null } }]);
+    expect(writes).toEqual([{ route: retryRoute(ESCALATION.henderson), body: { draft_text: null, question: null } }]);
     expect(within(decision).queryByText(/^Claude declined/)).toBeNull();
+  });
+
+  it("asks again in the member's words: Edit question opens the question, and Retry drafts on the rewording", async () => {
+    const world = declined(requestsWorld(), THREAD.henderson, "answer", null);
+    const { writes } = renderRequests(THREAD.henderson, { world });
+    const decision = await card();
+    fireEvent.click(button(decision, "Edit question"));
+    const editor = within(decision).getByRole("textbox", { name: "Question for Claude" });
+    if (!(editor instanceof HTMLTextAreaElement)) throw new Error("expected a textarea");
+    expect(editor.value).not.toBe("");
+    // Escape puts the note back as it was.
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(within(decision).queryByRole("textbox", { name: "Question for Claude" })).toBeNull();
+
+    fireEvent.click(button(decision, "Edit question"));
+    const reworded = within(decision).getByRole("textbox", { name: "Question for Claude" });
+    fireEvent.change(reworded, { target: { value: "Which day suits them?" } });
+    fireEvent.keyDown(reworded, { key: "Enter" });
+    await waitFor(() => {
+      expect(draft(decision).value).toBe(HENDERSON_ANSWER);
+    });
+    expect(writes).toEqual([
+      { route: retryRoute(ESCALATION.henderson), body: { draft_text: null, question: "Which day suits them?" } },
+    ]);
+    expect(within(decision).queryByRole("textbox", { name: "Question for Claude" })).toBeNull();
   });
 
   it("holds Approve while the retried step runs", async () => {

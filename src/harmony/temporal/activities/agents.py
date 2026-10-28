@@ -271,9 +271,11 @@ class AnswerConsultInput(_Payload):
     reuse_from: UUID | None = None
     # A rev the `retry_answer` Update reserved (`draft_rev` > 1): the step Claude
     # declined, again. With a draft on the item, only the sharing check runs, on that
-    # draft or on `draft_text`, the member's edit of it.
+    # draft or on `draft_text`, the member's edit of it; with none, the answerer drafts,
+    # on `question`, the member's rewording of the question, when given.
     retry: bool = False
     draft_text: str | None = None
+    question: str | None = None
 
 
 # --- a steer's parts -----------------------------------------------------------------
@@ -678,6 +680,10 @@ class AgentActivities:
                 drafted: DraftReady | AnswerFailed | None = (
                     await _draft_to_check(session, consult) if consult.retry else None
                 )
+            if drafted is None and consult.retry and consult.question is not None:
+                async with unit_of_work(self._sessionmaker, consult.world_id) as uow:
+                    await consults.rephrase(uow, consult.consult_id, consult.question)
+                    await uow.commit()
             try:
                 drafted = drafted or await answerer.answer(
                     self._sessionmaker,

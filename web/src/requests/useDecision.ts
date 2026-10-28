@@ -64,8 +64,12 @@ export interface Decision {
   refusal: Refusal | null;
   /** A Retry reserved a rev that hasn't landed (or been declined): Approve waits. */
   retrying: boolean;
-  /** Run the declined step again: on the member's edit of the shown draft, if any. */
-  retry: () => void;
+  /**
+   * Run the declined step again: on the member's edit of the shown draft, if any, or, when
+   * Claude declined to draft an answer, on their rewording of the question (`question`).
+   * `onSent` runs once the Retry is under way.
+   */
+  retry: (question: string | null, onSent?: () => void) => void;
   /** An Edit of ours reserved `rev` for this item. */
   awaitRewrite: (rev: number, steerId: string) => void;
   /** A resolve or Retry call is in flight. */
@@ -259,7 +263,7 @@ export function useDecision(
     unchanged,
     refusal: retrying ? null : declined,
     retrying,
-    retry: () => {
+    retry: (question, onSent) => {
       if (busy || retrying || blocked !== null || declined === null) return;
       // An answer Claude declined to draft has no draft to send; one it declined to check is checked as shown.
       const draftText = rev !== null && isEdited(rev, edits) ? shownAnswer(rev, edits).trim() : null;
@@ -269,10 +273,11 @@ export function useDecision(
       }
       update({ notice: null });
       retryCall.mutate(
-        { draft_text: draftText },
+        { draft_text: draftText, question: declined.step === "answer" ? question : null },
         {
           onSuccess: ({ draft_rev }) => {
             update({ retryRev: draft_rev, revIndex: null });
+            onSent?.();
           },
           onError: fail,
         },

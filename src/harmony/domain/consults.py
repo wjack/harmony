@@ -277,6 +277,18 @@ async def record_same_as(uow: UnitOfWork, consult_id: UUID, card_id: UUID) -> Co
     return consult
 
 
+async def rephrase(uow: UnitOfWork, consult_id: UUID, question: str) -> Consult:
+    """A member's rewording of the question, for a Retry of an answer Claude declined to
+    draft: the answerer, and the item, read it from then on. Clipped as `open` clips."""
+    consult = await _locked(uow, consult_id)
+    question = _clip(question.strip())
+    if question and consult.question != question:
+        consult.question = question
+        await uow.session.flush()
+        _queue(uow, consult)
+    return consult
+
+
 async def record_drafted_from(uow: UnitOfWork, consult_id: UUID, escalation_id: UUID) -> Consult:
     """Store the item whose member answer this consult's draft started from. The first
     write wins."""
@@ -496,4 +508,5 @@ __all__ = [
     "record_same_as",
     "record_sharing_check",
     "release",
+    "rephrase",
 ]

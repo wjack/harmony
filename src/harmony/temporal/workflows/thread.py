@@ -76,8 +76,9 @@ waits for a person like any other. Runs from before this refuse it.
 Retry: the Update `retry_answer` runs an open consult item's declined step again (a
 refusal left it with no draft, or with a sharing check that couldn't run), the same
 way: it reserves the next rev, the answerer drafts it afresh with the first draft's
-prompt, or the sharing check runs again on the draft (or the member's edit of it), and
-the rev is released or held under the mode as a first draft would be.
+prompt (on the member's rewording of the question, when given), or the sharing check
+runs again on the draft (or the member's edit of it), and the rev is released or held
+under the mode as a first draft would be.
 
 Rep turn ids are `ids.turn_id_for(world, thread, org, side turn)`, as P0's turns are.
 
@@ -526,7 +527,9 @@ class ThreadWorkflow:
         rev = self._reserve(item)
         assert rev is not None
         item.redraft_task = self._spawn(
-            self._draft_rev(item, rev, retry=True, draft_text=retry.draft_text)
+            self._draft_rev(
+                item, rev, retry=True, draft_text=retry.draft_text, question=retry.question
+            )
         )
         return AnswerUsed(escalation_id=item.escalation_id, draft_rev=rev)
 
@@ -1030,9 +1033,11 @@ class ThreadWorkflow:
         reuse_from: UUID | None = None,
         retry: bool = False,
         draft_text: str | None = None,
+        question: str | None = None,
     ) -> SteerFailure | None:
         """Write rev `rev` of the item from the member's answer to `reuse_from`, or as a
-        Retry of its declined step (`retry`). Released, the item is settled, and the
+        Retry of its declined step (`retry`, with the member's edit of the draft or their
+        rewording of the question). Released, the item is settled, and the
         side moves on with the answer as after a resolution; held, the rev waits for a
         person. A failed draft leaves the item as it was, open."""
         thread = self._input
@@ -1052,6 +1057,7 @@ class ThreadWorkflow:
                     reuse_from=reuse_from,
                     retry=retry,
                     draft_text=draft_text,
+                    question=question,
                 ),
                 **model_activity_options(),
             )

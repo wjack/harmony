@@ -721,6 +721,9 @@ async def test_a_question_is_retried_only_while_claude_declined_its_step(
         workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
         [item] = [e for e in workspace["escalations"] if e["id"] == str(escalation_id)]
         assert item["refusal"] == {"step": "sharing_check", "category": "bio", "draft_rev": 1}
+        # The question is reworded only for an answer Claude declined to draft.
+        problem = await v.json("POST", path, json={"question": "Which day?"}, expect=422)
+        assert problem["code"] == "invalid"
         # Now it goes to the workflow, which has ended: the item isn't open any more.
         problem = await v.json("POST", path, json={"draft_text": "Yes, Nov 4."}, expect=409)
         assert problem["code"] == "escalation_not_open"

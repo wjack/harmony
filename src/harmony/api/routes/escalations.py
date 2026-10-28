@@ -100,6 +100,9 @@ class RetryEscalation(BaseModel):
     # The member's edit of the draft, which the sharing check runs on; omitted runs it
     # on the draft as it stands. Ignored while the item has no draft.
     draft_text: str | None = Field(default=None, min_length=1, max_length=20_000)
+    # The member's rewording of the question, which the answerer drafts on, when Claude
+    # declined to draft an answer; it replaces the stored question. Only then.
+    question: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,8 +207,13 @@ async def retry_escalation(
         raise problem(
             status.HTTP_409_CONFLICT, "nothing_to_retry", "Claude didn't decline this question"
         )
+    if body.question is not None and declined[consult_id].step != "answer":
+        raise invalid("the question can be reworded only when Claude declined to answer it")
     retry = RetryAnswer(
-        escalation_id=escalation.id, org_id=actor.org_id, draft_text=body.draft_text
+        escalation_id=escalation.id,
+        org_id=actor.org_id,
+        draft_text=body.draft_text,
+        question=body.question,
     )
     return await _update(services, actor, escalation, "retry_answer", retry, AnswerUsed)
 

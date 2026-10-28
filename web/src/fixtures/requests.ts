@@ -899,7 +899,10 @@ export function declined(
  * checked, as the member's edit of the draft if they sent one (else the draft as it was,
  * or Henderson's answer when there was none).
  */
-function applyRetry(record: ThreadRecord, item: EscalationView, draftText: string | null, at: string): AnswerUsed {
+function applyRetry(record: ThreadRecord, item: EscalationView, body: RetryEscalation, at: string): AnswerUsed {
+  const draftText = body.draft_text ?? null;
+  const asked = record.workspace.consults.find((consult) => consult.id === item.consult_id);
+  if (asked !== undefined && body.question != null) asked.question = body.question;
   const latest = item.drafts.at(-1);
   const rev = Math.max(latest?.draft_rev ?? 0, item.refusal?.draft_rev ?? 0) + 1;
   const base = latest ?? hendersonDraft(at);
@@ -1349,8 +1352,7 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
       if (found === null) return problem(404, "not_found", "Escalation not found.");
       if (found.item.status !== "open") return notOpen(found.item.resolved_by);
       if (found.item.refusal == null) return problem(409, "nothing_to_retry", "Claude didn't decline this question.");
-      const draftText = bodyOf<RetryEscalation>(body).draft_text ?? null;
-      return applyRetry(found.record, found.item, draftText, new Date().toISOString());
+      return applyRetry(found.record, found.item, bodyOf<RetryEscalation>(body), new Date().toISOString());
     },
 
     "POST /api/escalations/{escalation_id}/reassign": ({ params, body }) => {

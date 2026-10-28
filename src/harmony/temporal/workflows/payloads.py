@@ -84,6 +84,8 @@ BUDGET_FAILURES: Final[Mapping[BudgetKind, FailureReason]] = MappingProxyType(
 # unsaved draft wording it carries at most `steers.draft_text`'s CHECK.
 STEER_BODY_MAX_CHARS: Final = 4000
 DRAFT_TEXT_MAX_CHARS: Final = 20_000
+# A member's rewording of a question is as long as a stored one (`consults.QUESTION_MAX_CHARS`).
+QUESTION_MAX_CHARS: Final = 2000
 
 # A conversation workflow continues as new after this many turns, and exits after
 # this long without a message, an update or a pending card.
@@ -447,12 +449,14 @@ class UseAnswer(_Payload):
 
 class RetryAnswer(_Payload):
     """Update `retry_answer`: run the item's declined step again as its next rev (the
-    answerer when it has no draft, else the sharing check), with the member's edit of
-    the draft (`draft_text`). The API has checked that the member may act on it."""
+    answerer when it has no draft, on the member's rewording of the question when given:
+    `question`; else the sharing check, on the member's edit of the draft when given:
+    `draft_text`). The API has checked that the member may act on it."""
 
     escalation_id: UUID
     org_id: UUID
     draft_text: str | None = Field(default=None, min_length=1, max_length=DRAFT_TEXT_MAX_CHARS)
+    question: str | None = Field(default=None, min_length=1, max_length=QUESTION_MAX_CHARS)
 
 
 class AnswerUsed(_Payload):

@@ -2267,6 +2267,8 @@ export interface components {
         RetryEscalation: {
             /** Draft Text */
             draft_text?: string | null;
+            /** Question */
+            question?: string | null;
         };
         /** RetryMessage */
         RetryMessage: {

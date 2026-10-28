@@ -18,6 +18,7 @@ import { sharingPath } from "../customize/sections";
 import { Button, cx } from "../shell/ui";
 import { DraftedFrom } from "./EventRow";
 import { ReassignMenu } from "./ReassignMenu";
+import { RetryEditor } from "./RetryEditor";
 import {
   ANSWER_MAX_CHARS,
   AUTONOMY_PATH,
@@ -172,12 +173,13 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
 
 /**
  * In the reason's place: Claude declined the step the item waits on (drafting the answer,
- * or checking the draft against what we share), with Retry. The draft above the foot is
- * where the member edits what goes in: an answer Claude declined to draft can be written
- * and approved, and one it declined to check is checked as the member left it.
+ * or checking the draft against what we share), with Retry. An answer Claude declined to
+ * draft can be asked again in the member's words (Edit), or written in the draft box and
+ * approved; one it declined to check is checked as the member left the draft.
  */
 function RefusalNote({ decision }: { decision: Decision }) {
-  const { refusal, retrying, busy, blocked, edited } = decision;
+  const { refusal, retrying, busy, blocked, edited, consult } = decision;
+  const [rewording, setRewording] = useState(false);
   if (retrying || refusal === null) {
     return (
       <p role="status" className="flex items-center gap-1.5 text-ui-sm text-link">
@@ -186,20 +188,56 @@ function RefusalNote({ decision }: { decision: Decision }) {
       </p>
     );
   }
+  const stopped = busy || blocked !== null;
   const withEdits = refusal.step === "sharing_check" && edited;
+  const question = refusal.step === "answer" ? (consult?.question ?? null) : null;
   return (
-    <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-      <CardHint>{refusalLine(refusal)}</CardHint>
-      <Button
-        variant="ghost"
-        size="sm"
-        icon={<RotateCcw size={13} strokeWidth={1.75} />}
-        disabled={busy || blocked !== null}
-        title={blocked ?? undefined}
-        onClick={decision.retry}
-      >
-        {withEdits ? "Retry with your edits" : "Retry"}
-      </Button>
+    <div>
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+        <CardHint>{refusalLine(refusal)}</CardHint>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<RotateCcw size={13} strokeWidth={1.75} />}
+          disabled={stopped || rewording}
+          title={blocked ?? undefined}
+          onClick={() => {
+            decision.retry(null);
+          }}
+        >
+          {withEdits ? "Retry with your edits" : "Retry"}
+        </Button>
+        {question !== null && (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Pencil size={13} strokeWidth={1.75} />}
+            disabled={busy || rewording}
+            onClick={() => {
+              decision.clearNotice();
+              setRewording(true);
+            }}
+          >
+            Edit question
+          </Button>
+        )}
+      </div>
+      {rewording && question !== null && (
+        <RetryEditor
+          label="Question for Claude"
+          initial={question}
+          submitLabel="Retry"
+          disabled={stopped}
+          onCancel={() => {
+            setRewording(false);
+          }}
+          onSubmit={(text) => {
+            decision.retry(text === question.trim() ? null : text, () => {
+              setRewording(false);
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
