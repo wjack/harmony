@@ -1,19 +1,23 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider } from "react-router";
+import { useEffect } from "react";
+import { createMemoryRouter, RouterProvider, useLocation, type RouteObject } from "react-router";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { createApiClient } from "../api/client";
 import { createQueryClient } from "../api/queryClient";
 import type { SessionView } from "../api/types";
 import { AppProviders } from "../app/AppProviders";
+import { useSession } from "../app/queries";
 import { fetchStreamSnapshot } from "../app/snapshot";
 import { json } from "../fixtures";
 import { conversations, members, SESSION_ID, sessionAs, WORLD_ID } from "../fixtures/shell";
 import { RealtimeDispatcher, TAB_CHANNEL, type MemberChangedMessage } from "../realtime/dispatcher";
 import { ChannelHub, EventSources } from "../realtime/testing";
+import { AppLayout } from "../shell/AppLayout";
+import { RootLayout } from "../shell/RootLayout";
 import { toastStore } from "../shell/toasts";
-import { FakeServer, openAccountMenu, testRoutes } from "../test/shellHarness";
+import { FakeServer, Gate, openAccountMenu, Page, testRoutes } from "../test/shellHarness";
 import { clearAllAlerts } from "./alerts";
 import { memberChangedEnvelope } from "./fixtures";
 import { demoStore } from "./store";
@@ -39,7 +43,7 @@ afterEach(() => {
 });
 
 /** One tab as Alex on his chat, recording where it goes and every toast it raises. */
-async function openTab() {
+async function openTab(routes: RouteObject[] = testRoutes) {
   const server = new FakeServer(sessionAs(members.alex, 1));
   const api = createApiClient({ baseUrl: "http://harmony.test", fetch: server.fetch });
   const queryClient = createQueryClient();
@@ -52,7 +56,7 @@ async function openTab() {
     openChannel: hub.open,
     reload,
   });
-  const router = createMemoryRouter(testRoutes, { initialEntries: [ALEX_CHAT] });
+  const router = createMemoryRouter(routes, { initialEntries: [ALEX_CHAT] });
   const visits: string[] = [];
   let key = router.state.location.key;
   router.subscribe((state) => {
@@ -157,5 +161,54 @@ it("follows another tab's switch in place, off the previous member's chat, and s
   expect(raised(SWITCHED)).toBe(0);
   expect(unsavedSources()).toEqual([]);
   expect(reload).not.toHaveBeenCalled();
+  dispatcher.stop();
+});
+
+it("never shows the previous member's chat to the new member, however late the way off it lands", async () => {
+  // The way off Alex's chat (New chat) is a lazy route that loads only when the test
+  // says, so the new snapshot lands while the tab is still on his chat.
+  const offChat = new Gate();
+  const chatsOpened: string[] = [];
+  function Chat() {
+    const member = useSession().data?.member.name;
+    const { pathname } = useLocation();
+    useEffect(() => {
+      chatsOpened.push(`${member ?? "nobody"} at ${pathname}`);
+    }, [member, pathname]);
+    return <Page name="Chat" />;
+  }
+  const routes: RouteObject[] = [
+    {
+      element: <RootLayout />,
+      children: [
+        {
+          element: <AppLayout />,
+          children: [
+            {
+              index: true,
+              lazy: async () => {
+                await offChat.promise;
+                return { element: <Page name="Home" /> };
+              },
+            },
+            { path: "chat/:id", element: <Chat /> },
+          ],
+        },
+      ],
+    },
+  ];
+  const { server, dispatcher, visits } = await openTab(routes);
+
+  server.session = sessionAs(members.helen, 2, WORLD_ID);
+  act(() => {
+    hub.open(TAB_CHANNEL).postMessage(toHelen);
+  });
+  await screen.findByRole("button", { name: "Account: Dr. Helen Ward" });
+  expect(screen.queryByText(/^Chat at /)).toBeNull();
+
+  offChat.open();
+  expect(await screen.findByText("Home at /")).toBeTruthy();
+  expect(visits).toEqual(["REPLACE /"]);
+  expect(chatsOpened).toEqual([`Alex Chen at ${ALEX_CHAT}`]);
   dispatcher.stop();
 });

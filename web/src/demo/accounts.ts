@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { matchPath, useLocation, useNavigate, type NavigateFunction } from "react-router";
+import { createStore, useStore } from "zustand";
 
 import { describeError, unwrap } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
@@ -56,6 +57,19 @@ export function sectionForMemberPage(pathname: string): string | null {
     if (matchPath(pattern, pathname) !== null) return section;
   }
   return null;
+}
+
+/**
+ * The member page (its location key) a switch is taking this tab off, until it has left.
+ * The way off can land after the new member's frame mounts (a lazy route loads, then the
+ * router commits in a transition), so the frame shows nothing there meanwhile: the
+ * previous member's item, fetched as the new member, would be a 404.
+ */
+const leavingStore = createStore<{ key: string | null }>(() => ({ key: null }));
+
+/** Whether a switch is taking this tab off the page at `key`. */
+export function useLeaving(key: string): boolean {
+  return useStore(leavingStore, (state) => state.key === key);
 }
 
 interface SwitchOptions {
@@ -225,30 +239,37 @@ export function useResetDemo() {
  *
  * This tab's own switch lands where it asked. Any other (another tab's switch or
  * reset, the storyrun CLI) leaves the previous member's own item for its section,
- * replacing the URL, so the new member never meets it; then, once the new member's
- * session is in, it settles the cues they or the new world made stale and says if
- * unsaved Customize edits went with the old frame.
+ * replacing the URL, so the new member never meets it (`useLeaving` holds the page back
+ * until the URL has changed); then, once the new member's session is in, it settles the
+ * cues they or the new world made stale and says if unsaved Customize edits went with
+ * the old frame.
  */
 export function useFollowSwitch(): void {
   const dispatcher = useDispatcher();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const pathnameRef = useRef(pathname);
+  const location = useLocation();
+  const locationRef = useRef(location);
 
   useEffect(() => {
-    pathnameRef.current = pathname;
-  }, [pathname]);
+    locationRef.current = location;
+    const { key } = leavingStore.getState();
+    if (key !== null && key !== location.key) leavingStore.setState({ key: null });
+  }, [location]);
 
   useEffect(
     () =>
       dispatcher.onMemberChanged((change) => {
+        const { pathname, key } = locationRef.current;
+        const section = sectionForMemberPage(pathname);
         const pending = intentFor(change);
+        // Every switch leaves the previous member's own page (to its section, or where
+        // this tab's switch asked to go).
+        if (section !== null && pending?.to !== null) leavingStore.setState({ key });
         if (pending !== null) {
           land(pending, navigate);
           return;
         }
-        const section = sectionForMemberPage(pathnameRef.current);
         if (section !== null) void navigate(section, { replace: true });
         const dropped = unsavedSources().length > 0;
         clearUnsaved();

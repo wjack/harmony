@@ -4,6 +4,7 @@ import { Outlet, useLocation } from "react-router";
 import type { SessionView } from "../api/types";
 import { useRealtime } from "../app/context";
 import { useSession } from "../app/queries";
+import { useLeaving } from "../demo/accounts";
 import { DemoBar } from "../demo/DemoBar";
 import { DemoControls } from "../demo/DemoControls";
 import { ResetDemoDialog } from "../demo/ResetDemoDialog";
@@ -92,13 +93,15 @@ function LiveShell() {
   const failing = useRealtime((state) => state.failures > 0);
   const streamDown = useStreamDown();
   const current = session.data ?? null;
-  // A switch leaves the previous member's own item before the new member's frame mounts.
-  // A page this frame first meets then would fetch as them after the server has moved
-  // on (a 404 for their organization's settings), so it waits for the new frame.
+  // A switch leaves the previous member's own item. A page this frame first meets
+  // mid-switch would fetch as the previous member after the server has moved on (a 404
+  // for their organization's settings), so it waits for the new frame. And the new
+  // frame can mount before the way off lands: it shows nothing on the page being left.
   const { key } = useLocation();
   const [shownKey, setShownKey] = useState(key);
   if (!resetting && shownKey !== key) setShownKey(key);
-  const leaving = resetting && shownKey !== key;
+  const left = useLeaving(key);
+  const leaving = resetting ? shownKey !== key : left;
   return (
     <ShellFrame
       session={current}
