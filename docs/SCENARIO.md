@@ -78,7 +78,7 @@ The orgs' records answer what each counterparty is likely to ask, within what th
   - *LTC-12 CT holder*: the lab has no holder that stacks coupons for CT and needs one for the core's Zeiss Xradia 620 Versa, with a carbon-fiber tube because it needs high-resolution scans, delivered to the core's front desk (Room 112, Engineering Hall). One is enough (it carries all 12 through one scan session), a listed holder rather than a custom design (so the lab has no drawings), and the compression tests need nothing from the lab
   - *LTC-12 dates*: results by Fri Nov 6 for the Mon Nov 9 group meeting; Fri Nov 13 still works for the quarterly report; making Nov 6 is worth up to about $200 extra
   - *Lattice designs*: cell sizes, strut thicknesses and print settings; unpublished
-  - *Spending*: about $2,000 discretionary this month. Alex reviews any single order over $1,000; below that the representative accepts list-price orders on its own, without asking anyone; Maya decides above the budget.
+  - *Spending*: about $2,000 discretionary this month. Alex reviews any single order over $1,000; a list-price order of $1,000 or less needs nobody's approval, so the representative accepts it on its own; Maya decides above the budget.
 
 ### Northlake Characterization Core (`northlake`), the main responder
 
