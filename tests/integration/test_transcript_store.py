@@ -175,7 +175,7 @@ async def test_a_refused_turn_is_taken_back_only_while_nothing_answered_it(
     await store.append(chat, [user("Find an XRD lab"), RESPONSE], turn_id=answered, position=0)
     await store.append(chat, [user("one"), user("two")], turn_id=refused, position=0)
 
-    # A turn holding a response stays; the refused tail turn's input goes, at once.
+    # A turn with a response stays; the refused tail turn's input goes, at once.
     assert not await take_back(chat, answered)
     assert await take_back(chat, refused)
     assert [m.turn_id for m in await store.load(chat)] == [answered, answered]
