@@ -479,7 +479,7 @@ class FakeStory:
         ]
         ours = next((e for e in open_here if e.org == "henderson"), None)
         state = self.ended.get(slug, "active")
-        participant = "closed" if slug in self.ended else "needs_human" if open_here else "replied"
+        participant = "closed" if slug in self.ended else "needs_human" if ours else "replied"
         return RecipientStatus(
             org=org_ref(slug),
             fit=CARD_FITS[slug],

@@ -766,16 +766,18 @@ async def test_request_status_follows_each_recipient(db_sessionmaker: Sessionmak
         lens = await requests.status(session, request, waiting_of="any")
         northlake = await requests.status(session, request, waiting_of=NORTHLAKE)
     by_org = {row.org.id: row for row in own.recipients}
-    assert by_org[NORTHLAKE].participant == "needs_human"
+    # Northlake's escalation is Northlake's business: the requester sees a reply.
+    assert by_org[NORTHLAKE].participant == "replied"
     assert by_org[NORTHLAKE].thread_id == thread_id
     # Calder's thread hasn't opened: it was screened.
     assert (by_org[CALDER].participant, by_org[CALDER].thread_id) == ("screened", None)
     # Who holds up the other side is theirs to know.
     assert by_org[NORTHLAKE].waiting_on is None
     for view in (lens, northlake):
-        waiting = {row.org.id: row for row in view.recipients}[NORTHLAKE].waiting_on
-        assert waiting is not None
-        assert waiting.member.id == HELEN
+        row = {row.org.id: row for row in view.recipients}[NORTHLAKE]
+        assert row.participant == "needs_human"
+        assert row.waiting_on is not None
+        assert row.waiting_on.member.id == HELEN
 
 
 async def test_request_status_shows_the_latest_line_and_only_the_requesters_summary(

@@ -291,17 +291,18 @@ class StoryPlayer:
     # --- Other members' inboxes -------------------------------------------------------
 
     def _inboxes(self, status: RequestStatusView) -> list[MemberView]:
-        """Whose inboxes to read. `waiting_on` names only the requester's own assignees
-        (who the other side waits on is that side's to know), so every member is read
-        of a recipient whose thread needs a human. The story's `humans` rules decide
-        what to do, not whom to read. The story's member answers in the chat instead."""
+        """Whose inboxes to read. `waiting_on` and `needs_human` cover only the requester's
+        own escalations (whether the other side waits on a person is that side's to
+        know), so every member is read of a recipient whose thread is still open. The
+        story's `humans` rules decide what to do, not whom to read. The story's member
+        answers in the chat instead."""
         wanted: dict[UUID, MemberView] = {}
         for recipient in status.recipients:
             waiting = recipient.waiting_on
             view = self._members.get(waiting.member.slug) if waiting is not None else None
             if view is not None:
                 wanted[view.id] = view
-            if recipient.participant == "needs_human":
+            if recipient.participant in ("messaged", "replied", "needs_human"):
                 for member in self._org_members(recipient.org.slug):
                     wanted.setdefault(member.id, member)
         wanted.pop(self.member.id, None)

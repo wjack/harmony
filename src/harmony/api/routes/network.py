@@ -344,6 +344,7 @@ async def _edges(
             lines,
             summaries,
             party=actor.org_id in threads.parties(row),
+            viewer=None if actor.lens == "network" else actor.org_id,
         )
         for row in rows
     ]
@@ -375,12 +376,13 @@ def _edge(
     summaries: Mapping[UUID, str],
     *,
     party: bool,
+    viewer: UUID | None,
 ) -> NetworkEdge:
     return NetworkEdge(
         thread_id=thread.id,
         from_org_id=thread.requester_org_id,
         to_org_id=thread.responder_org_id,
-        state=thread.state,
+        state=threads.state_for(thread, viewer),
         stop_reason=thread.stop_reason,
         end_reason=thread.end_reason,
         closed_by=thread.closed_by if party else None,
