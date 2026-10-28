@@ -16,7 +16,11 @@ sharing check per draft rev, and each screener call in `AgentScreen`.
   card (`awaiting_card`: the workflow resumes the same `turn_id` at `next_step` with
   the card's outcome; `card_auto` when the chat sends it without review). A new turn
   is told when the chat's send mode changed (`send_mode.send_mode_notice`). Its text
-  streams to the chat's owner in every org.
+  streams to the chat's owner in every org. An update look (`look`) runs under its own
+  cassette thread (`keys.look_key`) and number, and calls no model when no counterparty
+  wrote and no conversation ended since Claude last wrote or looked (`skipped`).
+  Otherwise it opens with `transcript.look_note`, may end without a word, and can't
+  search or send.
 - `rep_turn`: one representative turn on a thread side, with `RepToolExecutor`: a tool
   loop that opens with the owed tool results, the counterparty's new messages and any
   queued notices, and runs until the model stops calling tools, consults, closes, or
@@ -25,7 +29,12 @@ sharing check per draft rev, and each screener call in `AgentScreen`.
   loop (`agents.consult.answer`); for the first draft, the sharing check runs when the
   mode toward this counterparty asks for it (`release.needs_sharing_check`), and
   `agents.consult.settle` releases the answer or escalates it to a person. A later rev
-  is a steer's rewrite of the waiting draft, with the member's instruction.
+  is a steer's rewrite of the waiting draft, with the member's instruction, or a rev
+  drafted from a member's answer to another item on its card (`reuse_from`, the
+  `use_answer` Update). Before a requester-side first draft, the matcher
+  (`agents.consult.match_question`) says whether it asks one of the request's cards
+  again while that card waits for its answer; the draft is still its own. A draft from
+  a member's earlier answer is checked at any rev, in any mode.
 - `write_guidance`: a steer's guidance call (`agents.steer.write_guidance`), stored as
   the side's next guidance version, or as why it was rejected (docs/design/EDIT.md
   §3.3). Idempotent per steer.
@@ -54,7 +63,7 @@ import time
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Final, Literal
 from uuid import UUID
 
@@ -86,13 +95,17 @@ from harmony.agents.transcript import (
     ConversationTranscript,
     RepSideTranscript,
     SqlTranscriptStore,
+    look_note,
 )
 from harmony.db import repo
 from harmony.db.models import (
     Card,
     ChatMessage,
+    Conversation,
     Escalation,
     EscalationDraft,
+    Member,
+    ModelCall,
     Org,
     Steer,
     Thread,
@@ -101,10 +114,10 @@ from harmony.db.models import (
 )
 from harmony.db.models.choices import Side, SteerGuidanceOutcome
 from harmony.db.uow import UnitOfWork, unit_of_work
-from harmony.domain import agent_turns, clock, consults, escalations, steers
+from harmony.domain import agent_turns, clock, consults, conversations, escalations, steers
 from harmony.domain import threads as thread_domain
 from harmony.domain.conversations import NO_MEMBER_MESSAGE
-from harmony.domain.settings import mode_toward
+from harmony.domain.settings import mode_toward, skips_approvals
 from harmony.events.bus import StreamPublisher
 from harmony.events.schemas import DemoNotice, EventScope
 from harmony.events.stream import TYPING_HEARTBEAT_S, ChatStream, TurnStream, org_streams_tokens
@@ -173,6 +186,8 @@ class InternalTurnInput(_Payload):
     messages: list[MemberMessage] = []
     network_updates: list[NetworkUpdate] = []
     card: CardOutcome | None = None
+    # An update look: `turn` is the chat's look number, never a chat turn number.
+    look: bool = False
 
 
 class InternalTurnResult(_Payload):
@@ -185,6 +200,9 @@ class InternalTurnResult(_Payload):
     card_tool_use_id: str | None = None
     # The card is sent without confirmation: the workflow approves it itself.
     card_auto: bool = False
+    # An update look with no news since Claude last wrote or looked: no model call,
+    # nothing stored.
+    skipped: bool = False
 
 
 # --- rep_turn ------------------------------------------------------------------------
@@ -246,6 +264,9 @@ class AnswerConsultInput(_Payload):
     instruction: str | None = None
     base_text: str | None = None
     member_name: str | None = None
+    # A rev the `use_answer` Update reserved (`draft_rev` > 1): the item whose member
+    # answer it is drafted from.
+    reuse_from: UUID | None = None
 
 
 # --- a steer's parts -----------------------------------------------------------------
@@ -354,6 +375,11 @@ class AgentActivities:
             domain_errors(),
         ):
             async with self._sessionmaker() as session:
+                look = await _look(session, turn) if turn.look else None
+                if turn.look and look is None:
+                    return InternalTurnResult(
+                        turn_id=turn.turn_id, stop="end_turn", next_step=0, effects=[], skipped=True
+                    )
                 world = await repo_world(session, turn.world_id)
                 org = await repo.get_required(session, Org, turn.world_id, turn.org_id)
                 built = await context.build_internal_context(
@@ -369,7 +395,14 @@ class AgentActivities:
                 )
                 card_sent = await _card_sent(session, turn)
                 updates = await _unstored_updates(session, turn)
-            notices = internal_notices(turn, today, updates=updates, send_mode=send_mode)
+            notices = (
+                internal_notices(turn, today, updates=updates, send_mode=send_mode)
+                if look is None
+                else None
+            )
+            cassette_thread = (
+                turn.cassette_thread if look is None else keys.look_key(turn.cassette_thread)
+            )
             model = self._checkpointed(turn.world_id)
             screen = AgentScreen(
                 self._sessionmaker,
@@ -387,7 +420,10 @@ class AgentActivities:
                     member_id=turn.owner_member_id,
                     turn_id=turn.turn_id,
                     turn=turn.turn,
-                    cassette_thread=turn.cassette_thread,
+                    cassette_thread=cassette_thread,
+                    look=look is not None,
+                    wrote_at=look.wrote_at if look is not None else None,
+                    member_spoke=bool(turn.messages),
                 ),
                 screen,
             )
@@ -400,19 +436,20 @@ class AgentActivities:
                 tier=_tier(org),
                 turn_id=turn.turn_id,
                 turn=turn.turn,
-                cassette_thread=turn.cassette_thread,
+                cassette_thread=cassette_thread,
                 transcript=ConversationTranscript(
                     world_id=turn.world_id, conversation_id=turn.conversation_id
                 ),
                 system=built.system,
                 tools=built.tools,
-                opening=internal_opening(turn),
+                opening=[text_block(look.note)] if look is not None else internal_opening(turn),
                 notices=notices,
                 first_step=turn.first_step,
                 # Resumed, the opening is the card's own result: once the request went
                 # out (approved, or sent without review) it needs no answer, and Claude
                 # says in a sentence that it's out (3.13 E1b, FEEDBACK_R2_PLAN decision 7).
-                quiet_opening=card_sent and notices is None,
+                # A look speaks only when the news changes the member's picture.
+                quiet_opening=look is not None or (card_sent and notices is None),
                 # The chat's owner watches every reply, in any org.
                 stream_to_ui=True,
                 model_override=self._model_override,
@@ -622,13 +659,14 @@ class AgentActivities:
             self._budget_refusals(consult.world_id),
             domain_errors(),
         ):
+            model = self._checkpointed(consult.world_id)
+            attempt = activity.info().attempt
+            started = time.monotonic()
+            reuse = await self._reuse(consult, model, attempt=attempt)
             async with self._sessionmaker() as session:
                 row = await consults.get(
                     session, world_id=consult.world_id, consult_id=consult.consult_id
                 )
-            model = self._checkpointed(consult.world_id)
-            attempt = activity.info().attempt
-            started = time.monotonic()
             try:
                 drafted = await answerer.answer(
                     self._sessionmaker,
@@ -639,6 +677,7 @@ class AgentActivities:
                     instruction=consult.instruction,
                     base_text=consult.base_text,
                     member_name=consult.member_name,
+                    reuse=reuse,
                     attempt=attempt,
                     model_override=self._model_override,
                     cassette_thread=consult.cassette_thread,
@@ -653,7 +692,9 @@ class AgentActivities:
             answered_ms = _elapsed_ms(started)
             started = time.monotonic()
             try:
-                sharing = await self._sharing_check(consult, drafted, model, attempt=attempt)
+                sharing = await self._sharing_check(
+                    consult, drafted, model, attempt=attempt, reused=reuse is not None
+                )
             except _CALL_FAILURES as failed:
                 if not _last_attempt(failed):
                     raise
@@ -666,6 +707,7 @@ class AgentActivities:
                     outcome=drafted,
                     draft_rev=consult.draft_rev,
                     sharing=sharing,
+                    reused_from=reuse.escalation_id if reuse is not None else None,
                 )
                 await _record_consult_turns(
                     uow, consult, answered_ms, checked_ms if sharing is not None else None
@@ -685,6 +727,45 @@ class AgentActivities:
                     assignee_ids=outcome.assignee_ids,
                 )
 
+    async def _reuse(
+        self, consult: AnswerConsultInput, model: CheckpointedClient, *, attempt: int
+    ) -> answerer.Reuse | None:
+        """The member's answer this draft starts from: the item `reuse_from` names, if
+        any. A requester-side first draft starts from none, but the matcher first says
+        which open card it asks again (stored as `same_as_id`, so a retry doesn't ask
+        twice). A matcher call that fails on the last attempt is no match."""
+        world_id = consult.world_id
+        if consult.reuse_from is not None:
+            async with self._sessionmaker() as session:
+                return await answerer.reuse_of(session, world_id, consult.reuse_from)
+        if consult.draft_rev != 1 or consult.side != "requester":
+            return None
+        async with self._sessionmaker() as session:
+            row = await consults.get(session, world_id=world_id, consult_id=consult.consult_id)
+        if row.same_as_id is None and row.status == "answering":
+            started = time.monotonic()
+            try:
+                card_id = await answerer.match_question(
+                    self._sessionmaker,
+                    model,
+                    world_id=world_id,
+                    consult_id=consult.consult_id,
+                    attempt=attempt,
+                    model_override=self._model_override,
+                    cassette_thread=consult.cassette_thread,
+                    consult_turn=consult.consult_turn,
+                )
+            except _CALL_FAILURES as failed:
+                if not _last_attempt(failed):
+                    raise
+                card_id = None
+            async with unit_of_work(self._sessionmaker, world_id) as uow:
+                if card_id is not None:
+                    await consults.record_same_as(uow, consult.consult_id, card_id)
+                await _record_match_turn(uow, consult, _elapsed_ms(started))
+                await uow.commit()
+        return None
+
     async def _sharing_check(
         self,
         consult: AnswerConsultInput,
@@ -692,11 +773,14 @@ class AgentActivities:
         model: CheckpointedClient,
         *,
         attempt: int,
+        reused: bool,
     ) -> SharingCheck | None:
-        """The sharing check's verdict when the release decision needs one: a first
-        draft the answerer would release, under *Auto* toward this counterparty (read
-        live). A redraft is a person's to release, so it is never checked."""
-        if consult.draft_rev != 1 or not isinstance(drafted, DraftReady):
+        """The sharing check's verdict when the release decision needs one: a draft the
+        answerer would release, under *Auto* toward this counterparty (read live), or
+        drafted from a member's earlier answer (`reused`) in any mode, and every first
+        draft while the world skips approvals. Any other redraft is a person's to
+        release, so it is never checked."""
+        if not isinstance(drafted, DraftReady) or (consult.draft_rev != 1 and not reused):
             return None
         async with self._sessionmaker() as session:
             thread = await repo.get_required(session, Thread, consult.world_id, consult.thread_id)
@@ -706,7 +790,10 @@ class AgentActivities:
                 org_id=consult.org_id,
                 counterparty_org_id=thread_domain.org_of(thread, thread_domain.other(consult.side)),
             )
-        if not release.needs_sharing_check(mode, drafted.draft):
+            skip_people = not reused and await skips_approvals(session, consult.world_id)
+        if not release.needs_sharing_check(
+            mode, drafted.draft, reused=reused, skip_people=skip_people
+        ):
             return None
         return await answerer.check_sharing(
             self._sessionmaker,
@@ -715,6 +802,7 @@ class AgentActivities:
             consult_id=consult.consult_id,
             draft=drafted.draft,
             draft_rev=consult.draft_rev,
+            reused=reused,
             attempt=attempt,
             model_override=self._model_override,
             cassette_thread=consult.cassette_thread,
@@ -894,6 +982,25 @@ async def _record_consult_turns(
     )
 
 
+async def _record_match_turn(uow: UnitOfWork, consult: AnswerConsultInput, latency_ms: int) -> None:
+    """The matcher's `agent_turns` row: the cost of its one call, if it made one."""
+    turn_id = keys.match_turn_id(consult.consult_id)
+    called = await uow.session.scalar(
+        select(ModelCall.turn_id).where(ModelCall.turn_id == turn_id).limit(1)
+    )
+    if called is None:
+        return
+    await agent_turns.record(
+        uow,
+        turn_id=turn_id,
+        role="screener",
+        org_id=consult.org_id,
+        thread_id=consult.thread_id,
+        side=consult.side,
+        latency_ms=latency_ms,
+    )
+
+
 def _last_attempt(failed: Exception) -> bool:
     """Whether Temporal gives up on this activity after `failed`: its type isn't
     retried, or this is the last attempt the retry policy allows."""
@@ -965,6 +1072,35 @@ async def _unstored_updates(session: AsyncSession, turn: InternalTurnInput) -> l
         for update in turn.network_updates
         if not any(network_note(update) in text for text in stored)
     ]
+
+
+@dataclass(frozen=True, slots=True)
+class _Look:
+    """An update look that has news to check: its opening note, and when Claude last
+    wrote in the chat (`get_request_status` shows the messages since)."""
+
+    note: str
+    wrote_at: datetime | None
+
+
+async def _look(session: AsyncSession, turn: InternalTurnInput) -> _Look | None:
+    """The look's note, naming the chat's requests where a counterparty wrote or a
+    conversation ended since Claude last wrote or looked, and quoting the answers the
+    chat's owner gave meanwhile that the request's other open conversations haven't had
+    (`conversations.answers_to_pass_on`); None when there are none. The look's own rows
+    don't count, so a retried look finds what it found the first time."""
+    conversation = await repo.get_required(
+        session, Conversation, turn.world_id, turn.conversation_id
+    )
+    wrote_at = await conversations.last_wrote_at(session, conversation, besides=turn.turn_id)
+    looked_at = await conversations.last_looked_at(session, conversation, besides=turn.turn_id)
+    since = max((at for at in (wrote_at, looked_at) if at is not None), default=None)
+    news = await conversations.requests_with_news(session, conversation, since=since)
+    answers = await conversations.answers_to_pass_on(session, conversation, since=since)
+    if not news and not answers:
+        return None
+    owner = await repo.get_required(session, Member, turn.world_id, conversation.owner_member_id)
+    return _Look(note=look_note(owner.name, news, answers), wrote_at=wrote_at)
 
 
 async def _card_sent(session: AsyncSession, turn: InternalTurnInput) -> bool:

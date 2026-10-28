@@ -1,9 +1,9 @@
 /**
  * The request view's box below the transcript, as state the view shares: its mode
  * (Comment for the team, or Edit to tell our Claude what to do differently) and its
- * text. The decision card reads it to say an instruction isn't sent yet, and the rows
- * above can put text back into Edit: an Edit's Try again, or a reopen that found the
- * conversation open already.
+ * text. The decision card reads it to mark the draft an unsent Edit will rewrite, and
+ * the rows above can put text back into Edit: an Edit's Try again, or a reopen that
+ * found the conversation open already.
  */
 import { useState } from "react";
 

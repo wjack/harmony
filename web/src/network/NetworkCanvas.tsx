@@ -38,7 +38,7 @@ interface NodeOverride {
 
 export interface NetworkCanvasProps {
   view: NetworkView;
-  /** Ringed and tagged "Suggested" (the walkthrough's picks, desk world only). */
+  /** Ringed (the walkthrough's picks, desk world only). */
   suggestedOrgIds?: ReadonlySet<string>;
   /** Per org id, who its thread waits on (waiting.ts). */
   waits?: ReadonlyMap<string, Wait>;
@@ -51,6 +51,8 @@ export interface NetworkCanvasProps {
   now: number;
   /** The live-model budget's state now, which a stopped thread's line reads by. */
   budget: BudgetState;
+  /** Space kept clear at the top for a note floating over the canvas, in px. */
+  topInset?: number;
 }
 
 function Canvas({
@@ -63,6 +65,7 @@ function Canvas({
   onSelectOrg,
   now,
   budget,
+  topInset = 0,
 }: NetworkCanvasProps) {
   const flow = useReactFlow<FlowNode, ThreadFlowEdge>();
   const [overrides, setOverrides] = useState<ReadonlyMap<string, NodeOverride>>(new Map());
@@ -83,9 +86,9 @@ function Canvas({
           ...(node.type === "org" ? cardSize(node.data.placed.tier) : { width: 0, height: 16 }),
         }),
       );
-      void flow.setViewport(readableFrame(boundsOf(rects), width, height), { duration });
+      void flow.setViewport(readableFrame(boundsOf(rects), width, height, topInset), { duration });
     },
-    [flow, width, height],
+    [flow, width, height, topInset],
   );
 
   // Reframe when the canvas resizes (the side panel opening) or a different set of
@@ -235,7 +238,7 @@ function Canvas({
       aria-label="Network graph"
     >
       <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} />
-      <CanvasControls onAutoLayout={autoLayout} />
+      <CanvasControls onAutoLayout={autoLayout} topInset={topInset} />
     </ReactFlow>
   );
 }

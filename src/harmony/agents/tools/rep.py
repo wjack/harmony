@@ -2,7 +2,8 @@
 
 - `send_message(text)`: commits a `thread_messages` row (provenance `agent`), and the
   turn goes on: a turn may send several messages. In *Ask* (the side's mode toward the
-  counterparty, read live at each call) the message is held instead:
+  counterparty, read live at each call) the message is held instead, unless the world
+  skips approvals (demo controls, §11.4):
   an `outbound_review` escalation whose draft is the message; the thread waits
   `awaiting_principal`, the turn stops, and the message goes out (provenance
   `agent_approved`, id `escalations.held_message_id`) once a teammate approves it.
@@ -111,7 +112,9 @@ CONSULT_TOOL: Final[ToolDefinition] = {
                 "type": "string",
                 "description": (
                     "A self-contained question: what you need and why, with the details "
-                    "of the conversation that matter."
+                    "of the conversation that matter. A person may read it, so lay it "
+                    "out: a one-line lead saying what you need, then short paragraphs, "
+                    "with each separate question on its own line."
                 ),
             }
         },
@@ -382,7 +385,7 @@ class RepToolExecutor:
 
     async def _send(self, uow: UnitOfWork, text: str, message_id: UUID) -> ToolExecution:
         """Send, or hold for a person: after a mid-turn Edit, or in *Ask* (module
-        docstring)."""
+        docstring) unless the world skips approvals."""
         scope = self._scope
         session = uow.session
         if await self._steered_since_start(session):
@@ -392,7 +395,9 @@ class RepToolExecutor:
                 refusal = STEERED_NOT_SENT.format(counterparty=await self._counterparty(session))
                 raise _Refused(refusal)
             return await self._hold(uow, text, message_id, reason=STEERED_HOLD)
-        if await self._mode(session) == "ask":
+        if await self._mode(session) == "ask" and not await settings.skips_approvals(
+            session, scope.world_id
+        ):
             return await self._hold(uow, text, message_id, reason=_ASK_HOLD)
         message = await threads.append_message(
             uow,

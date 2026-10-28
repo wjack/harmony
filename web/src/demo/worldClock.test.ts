@@ -12,6 +12,7 @@ const world: WorldView = {
   status: "live",
   created_at: "2026-03-02T15:00:00Z",
   ff_offset_s: 0,
+  skip_approvals: false,
 };
 
 describe("worldDate", () => {

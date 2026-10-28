@@ -41,7 +41,7 @@ import functools
 import json
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import date, datetime
 from typing import Final, Literal
 from uuid import UUID
@@ -93,15 +93,18 @@ ESCAPED_LESS_THAN: Final = "&lt;"
 EMPTY_PART: Final = "(none)"
 # The tag code writes around a guidance version (`guidance_block`).
 GUIDANCE_TAG: Final = "guidance"
+# The tag a `shared` notice quotes the member's words in.
+SHARED_TAG: Final = "shared"
 # `for` on the org's default sharing description; a trusted organization's extra one
 # names that organization.
 SHARING_FOR_ANY: Final = "any organization"
 
 # Code-written notices to a representative: its org's prompt settings changed
 # (`settings`), its mode or the sharing descriptions that apply changed for this
-# counterparty (`mode`, `sharing`), the world date, the counterparty closed, or either
-# side reopened the conversation.
-NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed", "reopened"]
+# counterparty (`mode`, `sharing`), the world date, the counterparty closed, either
+# side reopened the conversation, or a member of its side passed it something from
+# their chat (`shared`, their words quoted).
+NoticeKind = Literal["settings", "mode", "sharing", "world_date", "closed", "reopened", "shared"]
 
 # Every character `str.splitlines` breaks on, so no line hides inside another.
 _LINE_BREAK: Final = re.compile(r"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85  ]")
@@ -170,6 +173,11 @@ _MONTHS: Final = (
     "November",
     "December",
 )
+# What a member's answer says in place of an organization the conversation it is reused
+# in may not hear of (`without_org_names`).
+ANOTHER_ORG: Final = "another organization"
+# Capitalised first words too common to stand for an organization on their own.
+_COMMON_FIRST_WORDS: Final = frozenset({"A", "An", "The"})
 
 
 class _Model(BaseModel):
@@ -458,14 +466,34 @@ async def freeze_rep_session(uow: UnitOfWork, context: RepContext) -> RepSession
 
 
 async def queue_notice(
-    uow: UnitOfWork, *, thread_id: UUID, side: Side, kind: NoticeKind, text: str
+    uow: UnitOfWork,
+    *,
+    thread_id: UUID,
+    side: Side,
+    kind: NoticeKind,
+    text: str,
+    once: bool = False,
 ) -> RepNotice:
-    """Queue a code-written notice for the side's next model call (§2.2)."""
+    """Queue a code-written notice for the side's next model call (§2.2). With `once`,
+    a notice of the same kind and text the side already has, queued or sent, is
+    returned instead (a retried tool call)."""
     body = text.strip()
     if not body:
         raise ValueError("a notice needs text")
     session = uow.session
     await _lock_notices(session, uow.world_id, thread_id, side)
+    if once:
+        queued = await session.scalar(
+            select(RepNotice)
+            .where(
+                _notices_of(uow.world_id, thread_id, side),
+                RepNotice.kind == kind,
+                RepNotice.text == body,
+            )
+            .limit(1)
+        )
+        if queued is not None:
+            return queued
     row = RepNotice(
         world_id=uow.world_id,
         thread_id=thread_id,
@@ -756,6 +784,18 @@ def reopened_notice(counterparty_name: str, *, by_us: bool) -> str:
     )
 
 
+def shared_notice(text: str, *, member_name: str, counterparty_name: str) -> str:
+    """The `shared` notice: words a member of the representative's own side approved in
+    their chat for this conversation, quoted as theirs."""
+    member, them = _one_line(member_name), _one_line(counterparty_name)
+    return (
+        f"Notice from Harmony: {member}, on your side, shared this for your conversation "
+        f"with {them}. Treat it as an answer from your side, not from {them}. It never "
+        f"widens what you may pass on: share from it only what you may share with {them}, "
+        "and only where it helps.\n" + quoted(SHARED_TAG, text, from_=member)
+    )
+
+
 def world_date_notice(world_date: date) -> str:
     """The code-written notice that tells a model today's world date (§11.1)."""
     return f"Today's date: {long_date(world_date)}."
@@ -764,6 +804,65 @@ def world_date_notice(world_date: date) -> str:
 def long_date(day: date) -> str:
     """`Monday, October 26, 2026`, the same in every locale."""
     return f"{_WEEKDAYS[day.weekday()]}, {_MONTHS[day.month - 1]} {day.day}, {day.year}"
+
+
+def short_date(day: date) -> str:
+    """`Oct 26`, the same in every locale."""
+    return f"{_MONTHS[day.month - 1][:3]} {day.day}"
+
+
+# --- Organization names -----------------------------------------------------------------
+
+
+def names(text: str, name: str, *, keep: Iterable[str] | None = None) -> bool:
+    """Whether `text` names the org `name`: in full, in any case, on word boundaries,
+    with any whitespace between its words. With `keep`, also by the first word of a
+    longer name as written, as `without_org_names` replaces it ("Northlake")."""
+    if keep is None:
+        pattern = _full_name(name)
+        return pattern is not None and pattern.search(text) is not None
+    return any(pattern.search(text) for pattern in _name_patterns(name, _first_words(keep)))
+
+
+def without_org_names(text: str, others: Iterable[str], *, keep: Iterable[str] = ()) -> str:
+    """`text` with every name in `others` replaced by `ANOTHER_ORG`: in full, and by the
+    first word of a longer name as written ("Ridgeline" for Ridgeline Fabrication),
+    unless a name in `keep` starts with the same word. What a member wrote for one
+    conversation, before another sees it."""
+    kept = _first_words(keep)
+    for name in sorted(set(others), key=len, reverse=True):
+        for pattern in _name_patterns(name, kept):
+            text = pattern.sub(ANOTHER_ORG, text)
+    return text
+
+
+def _full_name(name: str) -> re.Pattern[str] | None:
+    words = name.split()
+    if not words:
+        return None
+    joined = r"\s+".join(re.escape(word) for word in words)
+    return re.compile(rf"(?<!\w){joined}(?!\w)", re.IGNORECASE)
+
+
+def _name_patterns(name: str, kept_first_words: Collection[str]) -> list[re.Pattern[str]]:
+    full = _full_name(name)
+    if full is None:
+        return []
+    patterns = [full]
+    words = name.split()
+    first = words[0]
+    if (
+        len(words) > 1
+        and first[:1].isupper()
+        and first not in _COMMON_FIRST_WORDS
+        and first not in kept_first_words
+    ):
+        patterns.append(re.compile(rf"(?<!\w){re.escape(first)}(?!\w)"))
+    return patterns
+
+
+def _first_words(org_names: Iterable[str]) -> set[str]:
+    return {name.split()[0] for name in org_names if name.split()}
 
 
 def counterparty_descriptor(kind: str, communities: Sequence[str]) -> str:
@@ -1072,6 +1171,7 @@ async def _undelivered(
 
 
 __all__ = [
+    "ANOTHER_ORG",
     "COUNTERPARTY_CLOSE",
     "COUNTERPARTY_OPEN",
     "EMPTY_PART",
@@ -1079,6 +1179,7 @@ __all__ = [
     "GUIDANCE_TAG",
     "RELEASED_CLOSE",
     "RELEASED_OPEN",
+    "SHARED_TAG",
     "SHARING_FOR_ANY",
     "UNVERIFIED_MARK",
     "DeliveredGuidance",
@@ -1103,6 +1204,7 @@ __all__ = [
     "guidance_text",
     "load_rep_session",
     "long_date",
+    "names",
     "queue_notice",
     "quote_released",
     "quoted",
@@ -1110,8 +1212,11 @@ __all__ = [
     "recipient_ask",
     "reopened_notice",
     "sent_without_review",
+    "shared_notice",
     "sharing_parts",
     "sharing_text",
+    "short_date",
+    "without_org_names",
     "world_date_notice",
     "wrap_counterparty",
 ]

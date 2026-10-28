@@ -57,7 +57,7 @@ export interface PlacedOrg {
   tier: Tier;
   x: number;
   y: number;
-  /** Ringed and tagged "Suggested" (the walkthrough's recipients). */
+  /** Ringed (the walkthrough's recipients). */
   suggested: boolean;
 }
 

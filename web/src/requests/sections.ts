@@ -1,10 +1,10 @@
 /**
  * How requests are listed (LIVE_DEMO_PLAN 3.9): the inbox's sections, the search and
- * direction filter on `/requests`, the sidebar's Recent requests, and where a row opens.
+ * direction filter on `/requests`, and where a row opens.
  * Pure, so the grouping and the links are unit-tested.
  */
 import { escalationPath } from "../shell/escalationPlace";
-import type { Inbox, InboxItem, InboxSection } from "./types";
+import type { InboxItem, InboxSection } from "./types";
 
 export const SECTIONS: readonly { key: InboxSection; label: string }[] = [
   { key: "needs_you", label: "Needs you" },
@@ -29,23 +29,6 @@ export function matches(item: InboxItem, query: string, direction: Direction): b
   const needle = query.trim().toLowerCase();
   if (needle === "") return true;
   return item.title.toLowerCase().includes(needle) || item.counterparty.name.toLowerCase().includes(needle);
-}
-
-/** How many Recent requests the sidebar lists; the chats below them must stay in reach. */
-export const MAX_RECENT_REQUESTS = 10;
-
-/** The sidebar's Recent requests: every thread not waiting on the viewer, newest activity first. */
-export function recentRequests(inbox: Inbox): InboxItem[] {
-  const waiting = new Set(inbox.needs_you.map((item) => item.thread_id));
-  const seen = new Set<string>();
-  return [...inbox.with_your_team, ...inbox.claude_handling, ...inbox.shared_with_you, ...inbox.done]
-    .sort((a, b) => Date.parse(b.last_activity_at) - Date.parse(a.last_activity_at))
-    .filter((item) => {
-      if (waiting.has(item.thread_id) || seen.has(item.thread_id)) return false;
-      seen.add(item.thread_id);
-      return true;
-    })
-    .slice(0, MAX_RECENT_REQUESTS);
 }
 
 /**

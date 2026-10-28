@@ -7,6 +7,14 @@ without a person (REVISION_UNSTRUCTURED.md §4.4).
 | *Auto* (default) | the answerer says no human is needed and the sharing check passes |
 | *Skip* | the answerer says no human is needed (no sharing check) |
 
+A draft from a member's answer to an earlier question (`reused`) goes to a counterparty
+that answer wasn't written for, so it is checked in every mode: the check's verdict
+counts in *Skip* too.
+
+Demo controls' *Skip approvals* (`skip_people`, a world switch, §11.4) skips the people,
+never the check: every draft is checked whatever the mode; one that passes is released
+even when the answerer asked for a person, and one that fails is declined.
+
 The mode and the sharing descriptions are per counterparty: a trusted organization's
 own mode, when set, replaces the org default, and its extra description is added to
 the default one (§3). Policy is read live at each decision, so callers pass the rows
@@ -45,6 +53,15 @@ class Release(_Model):
     answer: str
 
 
+class Decline(_Model):
+    """Under *Skip approvals*: the draft failed the sharing check, so the representative
+    is told its side declined, and nobody is asked."""
+
+    kind: Literal["decline"] = "decline"
+    # The check's reason, for the log.
+    detail: str
+
+
 class NeedsHuman(_Model):
     kind: Literal["needs_human"] = "needs_human"
     reason: NeedsHumanReason
@@ -52,7 +69,7 @@ class NeedsHuman(_Model):
     detail: str
 
 
-ReleaseDecision = Annotated[Release | NeedsHuman, Field(discriminator="kind")]
+ReleaseDecision = Annotated[Release | Decline | NeedsHuman, Field(discriminator="kind")]
 
 
 def mode_for(policy: RepPolicy, trusted: TrustedOrganization | None) -> Autonomy:
@@ -63,24 +80,39 @@ def mode_for(policy: RepPolicy, trusted: TrustedOrganization | None) -> Autonomy
     return policy.autonomy
 
 
-def needs_sharing_check(mode: Autonomy, draft: ConsultDraft) -> bool:
-    """Whether the decision needs the sharing check: only *Auto* uses it, and only on a
-    draft the answerer would release."""
-    return mode == "auto" and not draft.needs_human
+def needs_sharing_check(
+    mode: Autonomy, draft: ConsultDraft, *, reused: bool = False, skip_people: bool = False
+) -> bool:
+    """Whether the decision needs the sharing check: *Auto* uses it, and so does a
+    `reused` draft in any mode, but only on a draft the answerer would release. Under
+    `skip_people` every draft is checked."""
+    return skip_people or ((mode == "auto" or reused) and not draft.needs_human)
 
 
 def decide(
-    mode: Autonomy, draft: ConsultDraft, sharing: SharingCheck | None
-) -> Release | NeedsHuman:
+    mode: Autonomy,
+    draft: ConsultDraft,
+    sharing: SharingCheck | None,
+    *,
+    reused: bool = False,
+    skip_people: bool = False,
+) -> Release | Decline | NeedsHuman:
     """Apply the table above. `sharing` is the check's verdict, required when
     `needs_sharing_check`. A check that couldn't run counts as failed: the caller stores
     `SharingCheck(within_sharing=False, reason=...)` and passes it, so `why_needed`
-    reads the same reason back."""
+    reads the same reason back. Only `skip_people` declines, and only it never needs a
+    person."""
+    if skip_people:
+        if sharing is None:
+            raise ValueError("Skip approvals needs the sharing check's verdict")
+        if not sharing.within_sharing:
+            return Decline(detail=sharing.reason)
+        return Release(answer=draft.answer)
     if draft.needs_human:
         return NeedsHuman(reason="needs_human", detail=_answerer_reason(draft.needs_human_reason))
-    if mode == "auto":
+    if mode == "auto" or reused:
         if sharing is None:
-            raise ValueError("Auto mode needs the sharing check's verdict")
+            raise ValueError("Auto mode and a reused answer need the sharing check's verdict")
         if not sharing.within_sharing:
             return NeedsHuman(reason="sharing_check", detail=sharing.reason)
     if mode == "ask":
@@ -88,9 +120,12 @@ def decide(
     return Release(answer=draft.answer)
 
 
-def why_needed(consult: Consult) -> str:
-    """ "Why this needs you" for a consult waiting on a person, read back from its row
-    in the order `decide` applies."""
+def why_needed(consult: Consult, held_reason: str | None = None) -> str:
+    """ "Why this needs you" for a consult waiting on a person: the current draft's own
+    reason when it has one (`held_reason`, a rev drafted from a member's earlier answer),
+    else read back from the consult's row in the order `decide` applies."""
+    if held_reason:
+        return held_reason
     if consult.answer is None:
         return _NO_DRAFT
     if consult.needs_human:
@@ -106,6 +141,7 @@ def _answerer_reason(reason: str | None) -> str:
 
 
 __all__ = [
+    "Decline",
     "NeedsHuman",
     "NeedsHumanReason",
     "Release",

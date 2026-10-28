@@ -9,7 +9,6 @@ import { demoStore } from "../demo/store";
 import { problem } from "../fixtures";
 import { alexInbox, conversations, FIXTURE_NOW, members, sessionAs } from "../fixtures/shell";
 import { needsHuman } from "../realtime/testing";
-import { MAX_RECENT_REQUESTS } from "../requests/sections";
 import {
   demoBar,
   FakeServer,
@@ -39,7 +38,7 @@ beforeEach(() => {
     },
   );
   window.localStorage.clear();
-  demoStore.setState({ welcomed: false, controlsOpen: false, controlsTab: "overview", resetConfirmOpen: false });
+  demoStore.setState({ welcomed: false, controlsOpen: false, resetConfirmOpen: false });
   sidebarStore.setState({ collapsed: false });
   toastStore.setState({ toasts: [] });
   clearAllAlerts();
@@ -59,7 +58,7 @@ it("introduces the demo, starts it as Alex and switches accounts over a fresh st
   // First visit, no session: the landing, with the demo controls open over it.
   // (The open modal hides the page from the accessibility tree, so find it by text.)
   expect(screen.getByText("Welcome to Harmony")).toBeTruthy();
-  const controls = await screen.findByRole("dialog", { name: "The Harmony demo" });
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
   expect(sources.opened).toHaveLength(0);
 
   fireEvent.click(within(controls).getByRole("button", { name: "Try the suggested request" }));
@@ -67,7 +66,7 @@ it("introduces the demo, starts it as Alex and switches accounts over a fresh st
   // Starting creates the session; the shell comes up as Alex with Recents.
   await screen.findByRole("button", { name: "Account: Alex Chen" });
   expect(await screen.findByText(RECENT)).toBeTruthy();
-  expect(screen.queryByRole("dialog", { name: "The Harmony demo" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "Demo controls" })).toBeNull();
   expect(demoStore.getState().welcomed).toBe(true);
   expect(sources.opened.map((source) => source.url)).toEqual(["/api/events?after=7&epoch=1"]);
   act(() => {
@@ -251,12 +250,12 @@ it("switches to Alex for the suggested request the way every switch does", async
   const { dispatcher } = await renderLive(sessionAs(members.helen, 1), { path: `/requests/${THREAD(1)}` });
 
   fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
-  const controls = await screen.findByRole("dialog", { name: "The Harmony demo" });
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
   fireEvent.click(within(controls).getByRole("button", { name: "Try the suggested request" }));
 
   await screen.findByRole("button", { name: "Account: Alex Chen" });
   await waitFor(() => {
-    expect(screen.queryByRole("dialog", { name: "The Harmony demo" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Demo controls" })).toBeNull();
   });
   expect(await screen.findByText("Home at /")).toBeTruthy();
   expect(screen.getByRole("status").textContent).toContain("Switched to Alex Chen");
@@ -368,6 +367,14 @@ it("keeps the full sidebar from a 900px window", async () => {
   dispatcher.stop();
 });
 
+it("opens the network view from the demo bar, not the sidebar", async () => {
+  const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
+  expect(screen.queryByRole("link", { name: "Network" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Network view" }));
+  expect(await screen.findByText("Network at /network")).toBeTruthy();
+  dispatcher.stop();
+});
+
 it("below 900px, shows the rail and opens the sidebar over the page until a link or Escape closes it", async () => {
   windowWidth(899);
   const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
@@ -378,8 +385,8 @@ it("below 900px, shows the rail and opens the sidebar over the page until a link
 
   fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
   expect(await screen.findByText(RECENT)).toBeTruthy();
-  fireEvent.click(screen.getByRole("link", { name: "Network" }));
-  expect(await screen.findByText("Network at /network")).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: /^Requests/ }));
+  expect(await screen.findByText("Requests at /requests")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Open sidebar" })).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
@@ -467,32 +474,26 @@ function settled(index: number): InboxItem {
   };
 }
 
-it("lists what needs the member, then ten recent requests and All requests, above Recents in one scroll area", async () => {
+it("lists only what needs the member and All requests above Recents, in one scroll area", async () => {
   const { server, dispatcher, queryClient } = await renderLive(sessionAs(members.alex, 1));
   server.alexInbox = { ...alexInbox, done: Array.from({ length: 12 }, (_, index) => settled(index)) };
   await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.inbox }));
 
-  const recent = await screen.findByRole("region", { name: "Recent requests" });
-  const needs = screen.getByRole("region", { name: "Needs you" });
+  const needs = await screen.findByRole("region", { name: "Needs you" });
   const chats = screen.getByRole("region", { name: "Recents" });
-  expect(needs.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(recent.compareDocumentPosition(chats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(needs.compareDocumentPosition(chats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const scroller = needs.closest(".overflow-y-auto");
   expect(scroller).not.toBeNull();
   expect(chats.closest(".overflow-y-auto")).toBe(scroller);
 
-  const rows = within(recent).getAllByRole("link");
-  expect(rows).toHaveLength(MAX_RECENT_REQUESTS + 1);
-  expect(rows.at(-1)?.textContent).toBe("All requests");
-  expect(rows.at(-1)?.getAttribute("href")).toBe("/requests");
-  expect(within(recent).queryByText("Settled request 10")).toBeNull();
+  // Settled requests live on the Requests page, not in the sidebar.
+  expect(screen.queryByRole("region", { name: "Recent requests" })).toBeNull();
+  expect(screen.queryByText("Settled request 0")).toBeNull();
+  expect(within(needs).getAllByRole("link").at(-1)?.getAttribute("href")).toBe("/requests");
 
   // Alex's own side asked this one: he answers it in the chat that sent the request.
   const asked = within(needs).getByRole("link", { name: /XRD and SEM for 12 Na-ion cathode powders/ });
   expect(asked.getAttribute("href")).toBe(`/chat/${QUESTION_CHAT}`);
-  // Settled, the same kind of question opens its thread.
-  const done = within(recent).getByRole("link", { name: "Settled request 0, with Ridgeline Fabrication" });
-  expect(done.getAttribute("href")).toBe(`/requests/${settled(0).thread_id}`);
 
   fireEvent.click(asked);
   expect(await screen.findByText(`Chat at /chat/${QUESTION_CHAT}`)).toBeTruthy();
@@ -503,7 +504,7 @@ it("lists what needs the member, then ten recent requests and All requests, abov
 it("opens Helen's items in Requests, and leaves only the badge on the rail", async () => {
   const { dispatcher } = await renderLive(sessionAs(members.helen, 1));
   const needs = await screen.findByRole("region", { name: "Needs you" });
-  // Nothing else of hers to list: All requests sits under what needs her.
+  // All requests sits under what needs her.
   expect(within(needs).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
     `/requests/${THREAD(1)}`,
     `/requests/${THREAD(2)}`,

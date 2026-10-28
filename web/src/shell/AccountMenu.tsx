@@ -214,7 +214,7 @@ export function AccountMenuContent({
       <MenuItem
         icon={<SlidersHorizontal {...ICON} />}
         onSelect={() => {
-          openDemoControls("controls");
+          openDemoControls();
         }}
       >
         Demo controls

@@ -27,6 +27,8 @@ export type OutreachCardItem = Schemas["OutreachCardItem"];
 export type CardRejectedWith = NonNullable<OutreachCardItem["rejected_with"]>;
 export type RequestStatusItem = Schemas["RequestStatusItem"];
 export type InlineQuestionItem = Schemas["InlineQuestionItem"];
+export type QuestionAsker = Schemas["QuestionAsker"];
+export type QuestionDelivery = Schemas["QuestionDelivery"];
 export type CardStatus = OutreachCardItem["status"];
 
 export type CardRecipient = Schemas["CardRecipient"];

@@ -2,9 +2,10 @@
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DemoWaiting, MemberView } from "../api/types";
 import type { BudgetView } from "../app/budget";
 import { budgets, members, sessionAs } from "../fixtures/shell";
-import { demoNotice } from "../realtime/testing";
+import { demoNotice, needsHuman } from "../realtime/testing";
 import { demoBar, FakeServer, renderShell } from "../test/shellHarness";
 import { clearAllAlerts } from "./alerts";
 import { demoStore } from "./store";
@@ -18,7 +19,7 @@ beforeEach(() => {
       disconnect(): void {}
     },
   );
-  demoStore.setState({ welcomed: true, controlsOpen: false, controlsTab: "overview", resetConfirmOpen: false });
+  demoStore.setState({ welcomed: true, controlsOpen: false, resetConfirmOpen: false });
   clearAllAlerts();
 });
 
@@ -102,6 +103,50 @@ describe("the demo bar's budget", () => {
 
     await within(demoBar()).findByRole("button", { name: "Session budget used up" });
     expect(server.count("GET /api/budget")).toBe(2);
+  });
+});
+
+describe("the network view's badge", () => {
+  function waitingOn(...people: MemberView[]): DemoWaiting {
+    return {
+      accounts: people.map((person) => ({
+        member: { id: person.id, slug: person.slug, name: person.name },
+        org: person.org,
+        items: 1,
+      })),
+    };
+  }
+
+  it("counts the other accounts an item waits on, and reads them again on a cue", async () => {
+    const server = new FakeServer(sessionAs(members.alex));
+    server.waiting = waitingOn(members.alex, members.helen);
+    const { dispatcher, sources } = renderShell(server);
+    await act(() => dispatcher.start());
+    const network = await within(demoBar()).findByRole("button", { name: "Network view" });
+    // Alex's own item isn't counted: his Requests already say so.
+    await waitFor(() => {
+      expect(network.querySelector("[data-badge]")?.textContent).toBe("1");
+    });
+    expect(network.getAttribute("title")).toBe("1 other account needs a human");
+
+    server.waiting = waitingOn(members.alex, members.helen, members.raj);
+    act(() => {
+      sources.latest.accept();
+      sources.latest.send(needsHuman(8, "raj", "e-raj"));
+    });
+    await waitFor(() => {
+      expect(network.querySelector("[data-badge]")?.textContent).toBe("2");
+    });
+    expect(network.getAttribute("title")).toBe("2 other accounts need a human");
+
+    server.waiting = waitingOn(members.alex);
+    act(() => {
+      sources.latest.send(needsHuman(9, "alex", "e-alex", "henderson"));
+    });
+    await waitFor(() => {
+      expect(network.querySelector("[data-badge]")).toBeNull();
+    });
+    expect(network.getAttribute("title")).toBeNull();
   });
 });
 

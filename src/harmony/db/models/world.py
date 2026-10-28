@@ -33,6 +33,8 @@ class World(CreatedAt, Base):
     budget_lineage: Mapped[UUID]
     # World clock: anchor + (now - created_at) + ff_offset_s (§11.1).
     ff_offset_s: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # Demo controls' Skip approvals (§11.4): nobody in the world is asked to approve.
+    skip_approvals: Mapped[bool] = mapped_column(server_default=text("false"))
     retired_at: Mapped[datetime | None]
 
 

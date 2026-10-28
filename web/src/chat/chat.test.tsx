@@ -321,7 +321,10 @@ it("answers a counterparty's question inline", async () => {
 
   await screen.findByText("Answered");
   expect(writes).toEqual([
-    { route: `POST /api/escalations/${SEAL_QUESTION_ID}/resolve`, body: { action: "approve", text: "Kalrez, please." } },
+    {
+      route: `POST /api/escalations/${SEAL_QUESTION_ID}/resolve`,
+      body: { action: "approve", text: "Kalrez, please.", also_for: [] },
+    },
   ]);
 });
 
@@ -375,10 +378,13 @@ it("answers go-aheads on proposed terms, and sums up once both threads close", a
 
   expect(await screen.findByText(/inside your \$2,000 budget/)).toBeTruthy();
   expect(writes).toEqual([
-    { route: `POST /api/escalations/${NORTHLAKE_GO_AHEAD_ID}/resolve`, body: { action: "approve", text: "Yes, go ahead." } },
+    {
+      route: `POST /api/escalations/${NORTHLAKE_GO_AHEAD_ID}/resolve`,
+      body: { action: "approve", text: "Yes, go ahead.", also_for: [] },
+    },
     {
       route: `POST /api/escalations/${RIDGELINE_GO_AHEAD_ID}/resolve`,
-      body: { action: "approve", text: "Yes, with the Kalrez seal." },
+      body: { action: "approve", text: "Yes, with the Kalrez seal.", also_for: [] },
     },
   ]);
 });
@@ -760,11 +766,11 @@ it("shows a closed thread's summary when nothing stopped it", async () => {
   expect(within(card).getByText(SUMMARIES.henderson.ridgeline)).toBeTruthy();
 });
 
-it("counts only the organizations the request went to", async () => {
+it("lists only the organizations the request went to", async () => {
   const card = await statusCard(requestAt(initialState("sent")));
-  expect(within(card).getByText("Sent to 2 · 1 not sent")).toBeTruthy();
-  const calder = within(card).getByText("Calder Computational").closest("li");
-  expect(calder === null ? null : within(calder).getByText("Not sent")).toBeTruthy();
+  expect(within(card).getByText("Sent to 2")).toBeTruthy();
+  expect(within(card).queryByText("Calder Computational")).toBeNull();
+  expect(within(card).queryByText("Not sent")).toBeNull();
   expect(within(card).queryByText("Screened")).toBeNull();
 });
 

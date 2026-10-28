@@ -3,21 +3,6 @@ import type { DemoStory, MemberDirectory, MemberView } from "../api/types";
 /** "Try the suggested request" acts as the scenario's default member (scenario.yaml). */
 export const STORY_MEMBER_SLUG = "alex";
 
-// One line per featured persona for the demo controls' cast list (docs/SCENARIO.md).
-// Members without a line show their title and org instead.
-const CAST_LINES: Readonly<Record<string, string>> = {
-  "henderson/alex": "Needs XRD and SEM time by Nov 6, and a sealed holder.",
-  "henderson/maya": "Alex's PI, who leads Henderson Lab.",
-  "northlake/helen": "Runs Northlake's scheduling and pricing exceptions.",
-  "northlake/raj": "Runs the instruments and holds a reserve XRD block.",
-  "ridgeline/dana": "Quotes sealed holders, given the seal material.",
-  "calder/priya": "Runs DFT screening for battery materials; no lab instruments.",
-};
-
-export function castLine(member: MemberView): string | null {
-  return CAST_LINES[`${member.org.slug}/${member.slug}`] ?? null;
-}
-
 export function allMembers(directory: MemberDirectory | undefined): MemberView[] {
   return directory === undefined ? [] : [...directory.featured, ...directory.all];
 }

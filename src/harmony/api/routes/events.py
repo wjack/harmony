@@ -79,9 +79,8 @@ async def stream_events(
     lens: Annotated[
         Literal["network"] | None,
         Query(
-            description="`network`: the network view's demo lens, which sees every event. "
-            "Honoured in the network world only; in a desk world the stream is the acting "
-            "member's."
+            description="`network`: the network view's demo lens, which sees every event "
+            "in the world (the view is a demo tool, opened from the demo bar)."
         ),
     ] = None,
     last_event_id: Annotated[
@@ -113,9 +112,8 @@ async def stream_events(
         member_id=actor.member_id,
         org_id=actor.org_id,
         role=actor.role,
-        # The demo lens is the network world's, as the network view's REST read is: in a
-        # desk world the stream stays the acting member's.
-        lens=lens == "network" and actor.lens == "network",
+        # The network view's demo lens sees every event, as its REST read does.
+        lens=lens == "network",
     )
     stream = EventStream(
         sessionmaker=sessionmaker,

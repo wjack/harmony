@@ -568,6 +568,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo/waiting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Waiting
+         * @description Every account with an open item assigned to it, the acting member's included.
+         */
+        get: operations["get_waiting_api_demo_waiting_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Approvals
+         * @description Turn Skip approvals on or off. Anyone in the world may: it's the demo's switch.
+         */
+        put: operations["put_approvals_api_demo_approvals_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/gate": {
         parameters: {
             query?: never;
@@ -938,6 +978,8 @@ export interface components {
             released_at: string | null;
             /** Version */
             version: number;
+            /** Drafted From */
+            drafted_from?: string | null;
         };
         /**
          * ContextPart
@@ -986,6 +1028,8 @@ export interface components {
             queued_message_ids: string[];
             /** Turn In Flight */
             turn_in_flight: boolean;
+            /** Looking */
+            looking: boolean;
             /** Turn Failure */
             turn_failure: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
             send_mode: components["schemas"]["SendMode"];
@@ -1046,7 +1090,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "settings" | "mode" | "sharing" | "world_date" | "closed" | "reopened";
+            kind: "settings" | "mode" | "sharing" | "world_date" | "closed" | "reopened" | "shared";
             /** Text */
             text: string;
             /**
@@ -1054,6 +1098,11 @@ export interface components {
              * Format: date-time
              */
             delivered_at: string;
+        };
+        /** DemoApprovals */
+        DemoApprovals: {
+            /** Skip */
+            skip: boolean;
         };
         /** DemoPerson */
         DemoPerson: {
@@ -1081,6 +1130,18 @@ export interface components {
             suggested_recipients: components["schemas"]["OrgRef"][];
             /** Steps */
             steps: components["schemas"]["StoryStep"][];
+        };
+        /** DemoWaiting */
+        DemoWaiting: {
+            /** Accounts */
+            accounts: components["schemas"]["DemoWaitingAccount"][];
+        };
+        /** DemoWaitingAccount */
+        DemoWaitingAccount: {
+            member: components["schemas"]["MemberRef"];
+            org: components["schemas"]["OrgRef"];
+            /** Items */
+            items: number;
         };
         /**
          * DemoWhose
@@ -1442,6 +1503,13 @@ export interface components {
          *     resolved one carries how it was settled (`action`) and the words that went with it
          *     (`answer`): the member's own, else the draft rev they approved as written. An item
          *     cancelled because its thread ended stays, as no longer needed.
+         *
+         *     A card groups the request's items that ask the same question and are routed to the
+         *     chat's owner. The one shown (`escalation_id`, `question`, `from_org`) is the item a
+         *     member answered, else the oldest open one; the rest are `askers`. The answer goes to
+         *     the one shown and the askers the member keeps ticked, never to another conversation.
+         *     Answered, it lists one `deliveries` row per asker, and who answered (`answered_by`,
+         *     `answered_at`).
          */
         InlineQuestionItem: {
             /** Id */
@@ -1478,6 +1546,24 @@ export interface components {
             action: ("approve" | "decline" | "take_over") | null;
             /** Answer */
             answer: string | null;
+            /**
+             * Askers
+             * @default []
+             */
+            askers: components["schemas"]["QuestionAsker"][];
+            /**
+             * Recipients
+             * @default []
+             */
+            recipients: components["schemas"]["OrgRef"][];
+            /**
+             * Deliveries
+             * @default []
+             */
+            deliveries: components["schemas"]["QuestionDelivery"][];
+            answered_by: components["schemas"]["MemberRef"] | null;
+            /** Answered At */
+            answered_at: string | null;
         };
         /**
          * InternalModelView
@@ -1795,6 +1881,52 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * QuestionAsker
+         * @description Another conversation on the request whose representative asked the card's
+         *     question, routed to the chat's owner ("How each asked").
+         */
+        QuestionAsker: {
+            /**
+             * Escalation Id
+             * Format: uuid
+             */
+            escalation_id: string;
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            from_org: components["schemas"]["OrgRef"];
+            /** Question */
+            question: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "cancelled";
+        };
+        /**
+         * QuestionDelivery
+         * @description One row under an answered card: what became of the answer in one conversation.
+         */
+        QuestionDelivery: {
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            org: components["schemas"]["OrgRef"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "as_written" | "fitted" | "drafting" | "held" | "not_sent" | "ended";
+            /** At */
+            at: string | null;
+            /** Reason */
+            reason: string | null;
+        };
         /** ReassignEscalation */
         ReassignEscalation: {
             /**
@@ -2031,6 +2163,8 @@ export interface components {
             text?: string | null;
             /** Draft Rev */
             draft_rev?: number | null;
+            /** Also For */
+            also_for?: string[];
         };
         /**
          * RewrittenBy
@@ -2681,6 +2815,8 @@ export interface components {
             created_at: string;
             /** Ff Offset S */
             ff_offset_s: number;
+            /** Skip Approvals */
+            skip_approvals: boolean;
         };
         /**
          * DemoNeedsHuman
@@ -3684,7 +3820,7 @@ export interface operations {
                 after?: number | null;
                 /** @description The session epoch of the snapshot the client opens from; a stream for any other epoch is refused with 409. */
                 epoch?: number | null;
-                /** @description `network`: the network view's demo lens, which sees every event. Honoured in the network world only; in a desk world the stream is the acting member's. */
+                /** @description `network`: the network view's demo lens, which sees every event in the world (the view is a demo tool, opened from the demo bar). */
                 lens?: "network" | null;
                 world?: "desk" | "network";
             };
@@ -5047,6 +5183,99 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_waiting_api_demo_waiting_get: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoWaiting"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_approvals_api_demo_approvals_put: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DemoApprovals"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoApprovals"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

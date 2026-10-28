@@ -34,6 +34,8 @@ class Consult(CreatedAt, VersionedEntity, Base):
         world_fk("thread_id", "threads"),
         world_fk("org_id", "orgs"),
         world_fk("released_by_member_id", "members"),
+        world_fk("same_as_id", "consults"),
+        world_fk("drafted_from_id", "escalations", cycle=True),
         UniqueConstraint("world_id", "dedupe_key"),
         Index(None, "world_id", "thread_id"),
         one_of("side", Side),
@@ -72,6 +74,15 @@ class Consult(CreatedAt, VersionedEntity, Base):
     released_by: Mapped[ReleasedBy | None]
     released_by_member_id: Mapped[UUID | None]
     released_at: Mapped[datetime | None]
+    # The earlier consult on the request that Claude judged asks the same question:
+    # always the group's first, the card the chat shows. NULL when none did.
+    same_as_id: Mapped[UUID | None]
+    # On a card: the organizations of the askers its answer went to, as org id strings,
+    # added when the chat's owner answers (the shown asker and the ones kept ticked).
+    goes_to_org_ids: Mapped[JsonArray] = mapped_column(server_default=text("'[]'::jsonb"))
+    # The escalation whose member answer this consult's draft started from (a reused
+    # answer); NULL for a draft of its own.
+    drafted_from_id: Mapped[UUID | None]
 
 
 class Escalation(CreatedAt, VersionedEntity, Base):
@@ -131,3 +142,7 @@ class EscalationDraft(CreatedAt, WorldScoped, Base):
     short_question: Mapped[str | None]
     # The turn that wrote it: for a consult, the answerer's (what it looked at).
     turn_id: Mapped[UUID | None]
+    # Why a rev drafted from a member's earlier answer waits for a person: the sharing
+    # check's reason, or the answerer's own. The consult's `needs_human_reason` and
+    # `sharing_check` are rev 1's only.
+    held_reason: Mapped[str | None]

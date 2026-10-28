@@ -86,6 +86,12 @@ DRAFT_TEXT_MAX_CHARS: Final = 20_000
 # this long without a message, an update or a pending card.
 CONVERSATION_TURNS_PER_RUN: Final = 50
 CONVERSATION_IDLE: Final = timedelta(hours=1)
+# An update look (`ConversationWorkflow`) waits for this long a lull after the latest
+# counterparty news, runs at most once per `LOOK_EVERY`, and never later than
+# `LOOK_LATEST` after the first news it hasn't looked at.
+LOOK_LULL: Final = timedelta(seconds=30)
+LOOK_EVERY: Final = timedelta(seconds=60)
+LOOK_LATEST: Final = timedelta(minutes=3)
 
 
 def conversation_workflow_id(world_id: UUID, conversation_id: UUID) -> str:
@@ -154,6 +160,18 @@ class NetworkUpdate(_Payload):
     round: int = Field(default=1, ge=1)
 
 
+class NetworkNews(_Payload):
+    """Signal `network_news`: a counterparty wrote on one of this chat's requests, or a
+    conversation on one ended (`NetworkActivities.nudge_chat`), or the chat's owner
+    answered their own representative's question on one (the resolve route), all by
+    signal-with-start. It arms an update look and never starts a turn itself."""
+
+    request_id: UUID
+    # The owner answered: the look is due at once, so Claude can ask about passing part
+    # of the answer on.
+    answered: bool = False
+
+
 class ConversationCarry(_Payload):
     """What a conversation run hands to the next one on continue-as-new."""
 
@@ -170,6 +188,16 @@ class ConversationCarry(_Payload):
     undelivered_updates: list[NetworkUpdate] = []
     # Why the last turn failed, if it did and no turn has run since.
     turn_failure: FailureReason | None = None
+    # Update looks taken (their cassette turn number continues from here; a look never
+    # takes a chat turn number).
+    looks: int = Field(default=0, ge=0)
+    # The armed look: the first and the latest news it hasn't looked at.
+    news_first_at: datetime | None = None
+    news_latest_at: datetime | None = None
+    # When the last look ran.
+    looked_at: datetime | None = None
+    # The armed look follows an answer of the owner's, so it is due at once.
+    news_answered: bool = False
 
 
 class ConversationInput(_Payload):
@@ -209,6 +237,8 @@ class ConversationPending(_Payload):
     turns: int
     # Why the last turn failed (Claude couldn't reply), if no turn has run since.
     turn_failure: FailureReason | None = None
+    # An update look is running: Claude is checking the news, and may say nothing.
+    looking: bool = False
 
 
 # --- NetworkRequestWorkflow ----------------------------------------------------------
@@ -370,6 +400,22 @@ class SteerStarted(_Payload):
     draft_rev: int | None
 
 
+class UseAnswer(_Payload):
+    """Update `use_answer`: draft the item's next rev from a member's answer to another
+    item on the same card (`from_escalation_id`, which they approved). The API has
+    checked that the member may act on both."""
+
+    escalation_id: UUID
+    from_escalation_id: UUID
+
+
+class AnswerUsed(_Payload):
+    """`use_answer`'s result: the rev being drafted."""
+
+    escalation_id: UUID
+    draft_rev: int
+
+
 class ThreadProgress(_Payload):
     """Query `state`."""
 
@@ -394,6 +440,9 @@ __all__ = [
     "DRAFT_TEXT_MAX_CHARS",
     "ESCALATION_NOT_OPEN_ERROR",
     "INVALID_RESOLUTION_ERROR",
+    "LOOK_EVERY",
+    "LOOK_LATEST",
+    "LOOK_LULL",
     "NOT_FOUND_ERROR",
     "NOT_IN_ORG_ERROR",
     "REQUEST_KIND",
@@ -402,6 +451,7 @@ __all__ = [
     "STEER_RUNNING_ERROR",
     "THREAD_CLOSED_ERROR",
     "THREAD_KIND",
+    "AnswerUsed",
     "BudgetExhaustedDetails",
     "CardResolved",
     "ConversationCarry",
@@ -410,6 +460,7 @@ __all__ = [
     "ConversationResult",
     "EscalationResolved",
     "MemberMessage",
+    "NetworkNews",
     "NetworkRequestInput",
     "NetworkRequestResult",
     "NetworkUpdate",
@@ -426,6 +477,7 @@ __all__ = [
     "ThreadProgress",
     "ThreadProgressRef",
     "ThreadResult",
+    "UseAnswer",
     "conversation_workflow_id",
     "request_workflow_id",
     "thread_workflow_id",

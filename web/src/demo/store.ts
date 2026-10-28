@@ -11,13 +11,10 @@ export interface WalkthroughPrefs {
   highlightSuggestedRecipients: boolean;
 }
 
-export type DemoControlsTab = "overview" | "controls";
-
 interface DemoState extends WalkthroughPrefs {
   /** The demo controls modal opens by itself until the visitor has seen it once. */
   welcomed: boolean;
   controlsOpen: boolean;
-  controlsTab: DemoControlsTab;
   resetConfirmOpen: boolean;
 }
 
@@ -30,7 +27,6 @@ export const demoStore = createStore<DemoState>()(
       highlightSuggestedRecipients: true,
       welcomed: false,
       controlsOpen: false,
-      controlsTab: "overview",
       resetConfirmOpen: false,
     }),
     {
@@ -75,12 +71,8 @@ export function setWalkthroughPref(key: keyof WalkthroughPrefs, value: boolean):
   demoStore.setState({ [key]: value });
 }
 
-export function openDemoControls(tab?: DemoControlsTab): void {
-  demoStore.setState(tab === undefined ? { controlsOpen: true } : { controlsOpen: true, controlsTab: tab });
-}
-
-export function setDemoControlsTab(tab: DemoControlsTab): void {
-  demoStore.setState({ controlsTab: tab });
+export function openDemoControls(): void {
+  demoStore.setState({ controlsOpen: true });
 }
 
 /** Closing the modal also counts as having seen it, so it stops opening by itself. */

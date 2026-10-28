@@ -26,8 +26,6 @@ function RecipientPill({
   why: string | null;
 }) {
   const calendar = useCalendar();
-  // Listed on the card but left out of the request (3.13 E4(f)).
-  if (!recipient.sent) return <Pill tone="muted">Not sent</Pill>;
   switch (recipient.participant) {
     case "screened":
       // Sent, with no conversation yet: the request opens a few at a time, so this one
@@ -135,23 +133,20 @@ function RecipientRow({
   );
 }
 
-/** "Sent to 2 · 1 not sent": rows that come only from the card don't count as sent. */
-function sentMeta(recipients: readonly RecipientStatus[]): string {
-  const sent = recipients.filter((recipient) => recipient.sent).length;
-  const left = recipients.length - sent;
-  return left === 0 ? `Sent to ${sent}` : `Sent to ${sent} · ${left} not sent`;
-}
 
 /** The live per-recipient status of one network request (UI_REFERENCE §4). */
 export function RequestStatusPanel({ view, memberId }: { view: RequestStatusView; memberId: string | null }) {
   const titleId = useId();
   const budget = useBudgetState();
+  // Organizations left out of the request (3.13 E4(f)) aren't part of it: the card lists
+  // only who it went to.
+  const sent = view.recipients.filter((recipient) => recipient.sent);
   return (
     <ToolCard
       labelledBy={titleId}
       icon={<Waypoints size={16} strokeWidth={1.6} />}
       title="Harmony Network Request"
-      meta={sentMeta(view.recipients)}
+      meta={`Sent to ${String(sent.length)}`}
       footer={
         <Link
           to="/requests"
@@ -164,7 +159,7 @@ export function RequestStatusPanel({ view, memberId }: { view: RequestStatusView
     >
       <p className="text-[15px] leading-6 font-medium text-ink">{view.title}</p>
       <ul className="mt-1.5">
-        {view.recipients.map((recipient) => (
+        {sent.map((recipient) => (
           <RecipientRow
             key={recipient.org.id}
             recipient={recipient}

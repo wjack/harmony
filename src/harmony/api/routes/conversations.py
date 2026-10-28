@@ -118,6 +118,9 @@ class ConversationDetail(_View):
     # Queued messages not yet in `items` (the workflow holds them until its next turn).
     queued_message_ids: list[UUID]
     turn_in_flight: bool
+    # Claude is checking the news on this chat's requests (an update look): it may
+    # write, and the member's messages wait for it like any turn.
+    looking: bool
     # Why Claude's last turn failed, if it did and nothing has run since: the chat says
     # why it couldn't reply, so the member can try again.
     turn_failure: FailureReason | None
@@ -240,6 +243,7 @@ async def get_conversation(
         pending_card_id=card.id if card is not None else None,
         queued_message_ids=[m.message_id for m in held.queued_messages] if held else [],
         turn_in_flight=held.turn_in_flight if held else False,
+        looking=held.looking if held else False,
         turn_failure=held.turn_failure if held else None,
         send_mode=mode,
         version=conversation.version,

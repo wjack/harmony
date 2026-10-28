@@ -33,6 +33,7 @@ describe("labels", () => {
       status: "live",
       created_at: "2026-11-25T15:00:00Z",
       ff_offset_s: 0,
+      skip_approvals: false,
     };
     const created = Date.parse(world.created_at);
     const calendar = worldCalendar(world);

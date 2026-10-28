@@ -755,13 +755,13 @@ describe("the box", () => {
       screen.getByText("Claude rewrites the draft and follows this for the rest of the conversation. Only Northlake sees it."),
     ).toBeTruthy();
 
-    // Typed but not sent: the card says so, and marks the draft Claude will rewrite.
+    // Typed but not sent: the card marks the draft Claude will rewrite, and warns no further.
     type(region, EDIT_INSTRUCTION);
-    expect(within(decision).getByText("Your instruction to Claude isn't sent yet · Tell Claude first?")).toBeTruthy();
     expect(within(decision).getByText("Claude rewrites this when you tell it")).toBeTruthy();
+    expect(within(decision).queryByText(/isn't sent yet/)).toBeNull();
     fireEvent.click(mode(region, "Comment"));
     expect(field(region).value).toBe(EDIT_INSTRUCTION);
-    expect(within(decision).queryByText(/isn't sent yet/)).toBeNull();
+    expect(within(decision).queryByText("Claude rewrites this when you tell it")).toBeNull();
   });
 
   it("says an Edit with no draft waiting changes what Claude does from its next message", async () => {

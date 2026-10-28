@@ -80,6 +80,7 @@ const NOTICE_HEADING: Record<DeliveredNotice["kind"], string> = {
   world_date: "Today's date",
   closed: "The other side closed the conversation",
   reopened: "The conversation was reopened",
+  shared: "Shared by your side for this conversation",
 };
 
 function releasedBy(answer: ReleasedAnswer): string {

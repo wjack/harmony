@@ -75,7 +75,6 @@ beforeEach(() => {
   demoStore.setState({
     welcomed: true,
     controlsOpen: false,
-    controlsTab: "overview",
     showSuggestedMessage: true,
     highlightSuggestedRecipients: true,
   });
@@ -95,8 +94,7 @@ it("hides the suggestion chip and the recipient rings when their walkthrough swi
   expect(await screen.findByText("Rings: northlake, ridgeline, calder")).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
-  const controls = await screen.findByRole("dialog", { name: "The Harmony demo" });
-  fireEvent.click(within(controls).getByRole("radio", { name: "Controls" }));
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
 
   // (The open modal hides the page from role queries, so look for the chip by its title.)
   fireEvent.click(within(controls).getByRole("switch", { name: /Show the suggested message/ }));
@@ -113,6 +111,23 @@ it("hides the suggestion chip and the recipient rings when their walkthrough swi
   expect(await screen.findByTitle(message)).toBeTruthy();
   expect(JSON.parse(window.localStorage.getItem("harmony.demo") ?? "{}")).toMatchObject({
     state: { showSuggestedMessage: true, highlightSuggestedRecipients: false },
+  });
+
+  dispatcher.stop();
+});
+
+it("turns Skip approvals on for the world from Demo controls", async () => {
+  const dispatcher = renderNewChat();
+  await act(() => dispatcher.start());
+
+  fireEvent.click(await screen.findByRole("button", { name: "Demo controls" }));
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
+  const skip = await within(controls).findByRole("switch", { name: /Dangerously skip approvals/ });
+  expect(skip.getAttribute("aria-checked")).toBe("false");
+
+  fireEvent.click(skip);
+  await waitFor(() => {
+    expect(skip.getAttribute("aria-checked")).toBe("true");
   });
 
   dispatcher.stop();

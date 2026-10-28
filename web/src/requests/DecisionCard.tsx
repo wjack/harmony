@@ -16,6 +16,7 @@ import { useHarmonySettings } from "../customize/api";
 import { MODE_INFO } from "../customize/modes";
 import { sharingPath } from "../customize/sections";
 import { cx } from "../shell/ui";
+import { DraftedFrom } from "./EventRow";
 import { ReassignMenu } from "./ReassignMenu";
 import {
   ANSWER_MAX_CHARS,
@@ -23,6 +24,7 @@ import {
   approveHint,
   cardTitle,
   declineCopy,
+  draftedFrom,
   draftLabel,
   eyebrow,
   lookedAtSummary,
@@ -43,7 +45,7 @@ interface DecisionCardProps {
   memberId: string | undefined;
   /** The viewer can change what our side shares; anyone else reads it. */
   admin: boolean;
-  /** The box below holds an instruction to Claude that isn't sent yet. */
+  /** The box below holds an instruction to Claude that isn't sent yet: the draft it will rewrite is marked. */
   unsentEdit: boolean;
 }
 
@@ -53,6 +55,7 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
   const [declining, setDeclining] = useState(false);
   const held = escalation.kind === "outbound_review";
   const reason = reasonLine(escalation);
+  const drafted = draftedFrom(consult);
   useApproveShortcut(card, decision.approve, !declining && !rewriting && blocked === null);
 
   // A held message waits because of how our side works with them: say which mode, and where to change it.
@@ -70,8 +73,7 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
   else if (rewriting) hintRight = "You can approve once the new draft is here";
 
   let hintLeft: ReactNode;
-  if (unsentEdit) hintLeft = <CardHint tone="unsent_edit">Your instruction to Claude isn't sent yet · Tell Claude first?</CardHint>;
-  else if (held && autonomy !== undefined) {
+  if (held && autonomy !== undefined) {
     hintLeft = (
       <span>
         {modeLine(MODE_INFO[autonomy].label, them)} ·{" "}
@@ -103,14 +105,14 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
           <h2 className="text-ui-title font-medium break-words whitespace-pre-wrap text-ink">
             {cardTitle(escalation, rev, consult, them)}
           </h2>
-          {reason !== null && <CardHint tone="reason">{reason}</CardHint>}
+          {reason !== null && <CardHint>{reason}</CardHint>}
 
           <div className="mt-2 border-t border-border pt-3">
             <DraftLabel decision={decision} label={draftLabel(escalation)} unsentEdit={unsentEdit} />
             <Draft decision={decision} label={draftLabel(escalation)} unsentEdit={unsentEdit} />
           </div>
 
-          {rev !== null && rev.activity.length > 0 && <LookedAt rev={rev} />}
+          {rev !== null && (rev.activity.length > 0 || drafted !== null) && <LookedAt rev={rev} drafted={drafted} />}
           <Link
             to={sharingPath(them.id)}
             className="self-start text-ui-xs text-muted underline decoration-border-strong underline-offset-[3px] hover:text-ink hover:decoration-ink"
@@ -255,28 +257,34 @@ const TOOL_ICON: Readonly<Record<string, ReactNode>> = {
   read_document: <FileText size={12} strokeWidth={1.75} />,
 };
 
-/** What internal Claude read to draft this: one line, opening to one row per tool call. */
-function LookedAt({ rev }: { rev: EscalationDraft }) {
+/**
+ * What internal Claude read to draft this: one line, opening to one row per tool call,
+ * led by the member's earlier answer when the draft started from one.
+ */
+function LookedAt({ rev, drafted }: { rev: EscalationDraft; drafted: string | null }) {
   const [open, setOpen] = useState(false);
   return (
-    <section aria-label="What Claude looked at" className="mt-1">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((value) => !value);
-        }}
-        className="flex w-full min-w-0 items-center gap-1.5 text-left text-ui-sm text-muted hover:text-ink"
-      >
-        <Eye size={14} strokeWidth={1.6} aria-hidden className="shrink-0" />
-        <span className="min-w-0 truncate">Looked at: {lookedAtSummary(rev)}</span>
-        <ChevronRight
-          size={14}
-          strokeWidth={1.5}
-          aria-hidden
-          className={cx("shrink-0 transition-transform", open && "rotate-90")}
-        />
-      </button>
+    <section aria-label="What Claude looked at" className="mt-1 flex flex-col gap-1">
+      {drafted !== null && <DraftedFrom line={drafted} />}
+      {rev.activity.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => {
+            setOpen((value) => !value);
+          }}
+          className="flex w-full min-w-0 items-center gap-1.5 text-left text-ui-sm text-muted hover:text-ink"
+        >
+          <Eye size={14} strokeWidth={1.6} aria-hidden className="shrink-0" />
+          <span className="min-w-0 truncate">Looked at: {lookedAtSummary(rev)}</span>
+          <ChevronRight
+            size={14}
+            strokeWidth={1.5}
+            aria-hidden
+            className={cx("shrink-0 transition-transform", open && "rotate-90")}
+          />
+        </button>
+      )}
       {open && <ActivityList lines={rev.activity} />}
     </section>
   );
@@ -284,7 +292,7 @@ function LookedAt({ rev }: { rev: EscalationDraft }) {
 
 function ActivityList({ lines }: { lines: readonly ActivityLine[] }) {
   return (
-    <ul className="mt-2 flex flex-col gap-1 pl-5">
+    <ul className="mt-1 flex flex-col gap-1 pl-5">
       {lines.map((line, index) => (
         // Lines have no id; a draft rev's activity never changes.
         <li key={`${String(index)}:${line.tool}`} className="flex items-start gap-2 text-ui-sm">

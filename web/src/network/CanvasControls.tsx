@@ -2,7 +2,7 @@ import { Panel, useReactFlow } from "@xyflow/react";
 import { LayoutGrid, Maximize, Minus, Plus, type LucideIcon } from "lucide-react";
 
 import { Tooltip } from "../shell/ui";
-import { FIT_OPTIONS } from "./geometry";
+import { fitOptions } from "./geometry";
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 
@@ -32,10 +32,12 @@ const GROUP = "flex flex-col overflow-hidden rounded-control border border-borde
 interface CanvasControlsProps {
   /** Put every node back where the layout wants it, then frame them. */
   onAutoLayout: () => void;
+  /** Space kept clear at the top for a note floating over the canvas. */
+  topInset: number;
 }
 
 /** Zoom, fit and auto-layout, stacked at the bottom left as on Railway's canvas. */
-export function CanvasControls({ onAutoLayout }: CanvasControlsProps) {
+export function CanvasControls({ onAutoLayout, topInset }: CanvasControlsProps) {
   const flow = useReactFlow();
   return (
     <Panel position="bottom-left" style={{ margin: 16 }} className="flex flex-col gap-2">
@@ -44,7 +46,7 @@ export function CanvasControls({ onAutoLayout }: CanvasControlsProps) {
         <div className="h-px bg-border" />
         <Control label="Zoom out" Icon={Minus} onClick={() => void flow.zoomOut({ duration: 160 })} />
         <div className="h-px bg-border" />
-        <Control label="Fit view" Icon={Maximize} onClick={() => void flow.fitView({ ...FIT_OPTIONS, duration: 240 })} />
+        <Control label="Fit view" Icon={Maximize} onClick={() => void flow.fitView({ ...fitOptions(topInset), duration: 240 })} />
       </div>
       <div className={GROUP}>
         <Control label="Auto-layout" Icon={LayoutGrid} onClick={onAutoLayout} />

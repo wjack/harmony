@@ -149,8 +149,8 @@ def test_the_status_tool_has_nothing_to_check_right_after_a_send() -> None:
     description = str(GET_REQUEST_STATUS_TOOL["description"])
     assert (
         "Right after a request goes out there's nothing to check, and no need to promise "
-        "to check back: you're told in the chat when something needs the member and when "
-        "every conversation has ended." in description
+        "to check back: you're told in the chat when there's news, when something needs "
+        "the member and when every conversation has ended." in description
     )
     assert "only when" not in description
 

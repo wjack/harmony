@@ -1,7 +1,8 @@
 """The release decision by mode (REVISION_UNSTRUCTURED.md §4.4, §11): *Ask* releases
 nothing, *Auto* only a draft the answerer would release that passes the sharing check,
-*Skip* any draft the answerer would release; a trusted organization's mode and sharing
-description apply to that counterparty only."""
+*Skip* any draft the answerer would release; a draft from a member's earlier answer is
+checked in every mode; a trusted organization's mode and sharing description apply to
+that counterparty only. Demo controls' Skip approvals asks nobody in any mode."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from hypothesis import strategies as st
 
 from harmony.agents import context, release
 from harmony.agents.consult import ConsultDraft, SharingCheck
-from harmony.agents.release import NeedsHuman, Release
+from harmony.agents.release import Decline, NeedsHuman, Release
 from harmony.db.models import Consult, RepPolicy, TrustedOrganization
 from harmony.db.models.choices import Autonomy
 
@@ -85,17 +86,61 @@ def test_skip_releases_what_the_answerer_would_and_nothing_else(
     assert held.reason == "needs_human"
 
 
+@given(
+    mode=st.sampled_from(MODES),
+    answer=ANSWERS,
+    needs_human=st.booleans(),
+    reused=st.booleans(),
+    check=CHECKS,
+)
+def test_skip_approvals_asks_nobody_and_checks_every_draft(
+    mode: Autonomy, answer: str, needs_human: bool, reused: bool, check: SharingCheck
+) -> None:
+    """Demo controls' Skip approvals skips the people, never the check: a draft that
+    passes goes out even when the answerer flagged it, and one that fails is declined."""
+    proposed = draft(answer, needs_human=needs_human)
+    assert release.needs_sharing_check(mode, proposed, reused=reused, skip_people=True)
+    decided = release.decide(mode, proposed, check, reused=reused, skip_people=True)
+    if check.within_sharing:
+        assert decided == Release(answer=answer)
+    else:
+        assert decided == Decline(detail=check.reason)
+
+
+def test_skip_approvals_needs_the_verdict() -> None:
+    with pytest.raises(ValueError, match="sharing check"):
+        release.decide("skip", draft(), None, skip_people=True)
+
+
 def test_auto_needs_the_verdict() -> None:
     with pytest.raises(ValueError, match="sharing check"):
         release.decide("auto", draft(), None)
 
 
-@given(mode=st.sampled_from(MODES), needs_human=st.booleans())
-def test_only_auto_runs_the_check_and_only_on_a_releasable_draft(
-    mode: Autonomy, needs_human: bool
+@given(mode=st.sampled_from(MODES), needs_human=st.booleans(), reused=st.booleans())
+def test_auto_or_a_reused_answer_runs_the_check_and_only_on_a_releasable_draft(
+    mode: Autonomy, needs_human: bool, reused: bool
 ) -> None:
-    expected = mode == "auto" and not needs_human
-    assert release.needs_sharing_check(mode, draft(needs_human=needs_human)) is expected
+    """A draft from a member's earlier answer goes to a counterparty it wasn't written
+    for, so it is checked in every mode, Skip included."""
+    expected = (mode == "auto" or reused) and not needs_human
+    proposed = draft(needs_human=needs_human)
+    assert release.needs_sharing_check(mode, proposed, reused=reused) is expected
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_reused_answer_that_fails_the_check_goes_to_a_person_in_every_mode(
+    mode: Autonomy,
+) -> None:
+    failed = SharingCheck(within_sharing=False, reason="It names another organization.")
+    held = release.decide(mode, draft(), failed, reused=True)
+    assert held == NeedsHuman(reason="sharing_check", detail="It names another organization.")
+    with pytest.raises(ValueError, match="sharing check"):
+        release.decide(mode, draft(), None, reused=True)
+    passed = release.decide(
+        mode, draft(), SharingCheck(within_sharing=True, reason=""), reused=True
+    )
+    assert isinstance(passed, NeedsHuman if mode == "ask" else Release)
 
 
 def test_the_answerers_reason_is_what_the_reviewer_reads() -> None:

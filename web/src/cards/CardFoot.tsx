@@ -10,7 +10,7 @@ export interface CardFootProps {
   approveLabel?: string;
   approveDisabled?: boolean;
   declineDisabled?: boolean;
-  /** Context, on the left of the hint row: a mode line, or the unsent-Edit `CardHint`. */
+  /** Context, on the left of the hint row: a mode line. */
   hintLeft?: ReactNode;
   /** What approving does, on the right: "Claude replies to Henderson Lab with this answer". */
   hintRight?: ReactNode;
@@ -39,7 +39,7 @@ export function CardFoot({
       </div>
       {(hintLeft !== undefined || hintRight !== undefined) && (
         // Wraps as two whole lines when both sides don't fit, rather than squeezing each
-        // into a ragged column (an unsent Edit beside a long org name at 1000 px).
+        // into a ragged column (a mode line beside a long org name at 1000 px).
         <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-ui-xs text-muted">
           <div className="min-w-0">{hintLeft}</div>
           <div className="ml-auto text-right">{hintRight}</div>

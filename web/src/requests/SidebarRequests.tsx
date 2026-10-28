@@ -1,13 +1,13 @@
 /**
- * Requests in the sidebar (LIVE_DEMO_PLAN 3.9), the way Claude lists recent chats, above
- * Recents in the same scroll area: "Needs you", every item waiting on the acting member,
- * then "Recent requests", their other threads newest first, and "All requests".
+ * Requests in the sidebar (LIVE_DEMO_PLAN 3.9), above Recents in the same scroll area:
+ * "Needs you", every item waiting on the acting member, and "All requests". Everything
+ * else lives on the Requests page, so the sidebar stays about chats.
  */
 import { NavLink } from "react-router";
 
 import { useInbox, useSession } from "../app/queries";
 import { cx } from "../shell/ui";
-import { recentRequests, requestPath, threadPath } from "./sections";
+import { requestPath } from "./sections";
 import { isUnread, useSeen } from "./seen";
 import type { InboxItem } from "./types";
 
@@ -19,50 +19,30 @@ export function SidebarRequests() {
   const { seen } = useSeen(useSession().data?.member.id);
   if (inbox.data === undefined) return null;
   const needs = inbox.data.needs_you;
-  const recent = recentRequests(inbox.data);
-  if (needs.length === 0 && recent.length === 0) return null;
-
-  const all = (
-    <li>
-      <NavLink to="/requests" end className={({ isActive }) => cx(ROW, "h-8 items-center text-secondary", isActive ? "bg-hover" : "hover:bg-hover")}>
-        All requests
-      </NavLink>
-    </li>
-  );
+  if (needs.length === 0) return null;
 
   return (
-    <>
-      {needs.length > 0 && (
-        <section aria-labelledby="needs-you-heading" className="mb-4">
-          <h2 id="needs-you-heading" className={HEADING}>
-            Needs you
-          </h2>
-          <ul className="flex flex-col gap-px">
-            {needs.map((item) => (
-              <NeedsRow
-                key={item.thread_id}
-                item={item}
-                unread={isUnread(seen, item.thread_id, item.last_activity_at)}
-              />
-            ))}
-            {recent.length === 0 && all}
-          </ul>
-        </section>
-      )}
-      {recent.length > 0 && (
-        <section aria-labelledby="recent-requests-heading" className="mb-4">
-          <h2 id="recent-requests-heading" className={HEADING}>
-            Recent requests
-          </h2>
-          <ul className="flex flex-col gap-px">
-            {recent.map((item) => (
-              <RecentRow key={item.thread_id} item={item} />
-            ))}
-            {all}
-          </ul>
-        </section>
-      )}
-    </>
+    <section aria-labelledby="needs-you-heading" className="mb-4">
+      <h2 id="needs-you-heading" className={HEADING}>
+        Needs you
+      </h2>
+      <ul className="flex flex-col gap-px">
+        {needs.map((item) => (
+          <NeedsRow key={item.thread_id} item={item} unread={isUnread(seen, item.thread_id, item.last_activity_at)} />
+        ))}
+        <li>
+          <NavLink
+            to="/requests"
+            end
+            className={({ isActive }) =>
+              cx(ROW, "h-8 items-center text-secondary", isActive ? "bg-hover" : "hover:bg-hover")
+            }
+          >
+            All requests
+          </NavLink>
+        </li>
+      </ul>
+    </section>
   );
 }
 
@@ -84,22 +64,6 @@ function NeedsRow({ item, unread }: { item: InboxItem; unread: boolean }) {
         <span className={cx("min-w-0 truncate", unread && "font-medium")}>{item.title}</span>
         <span className="truncate text-[12.5px] leading-[18px] text-muted">{item.counterparty.name}</span>
         {unread && <span aria-hidden className="absolute top-3 right-3 size-1.5 rounded-full bg-accent" />}
-      </NavLink>
-    </li>
-  );
-}
-
-/** One line, the title; who it's with is in the tooltip and the link's name. */
-function RecentRow({ item }: { item: InboxItem }) {
-  return (
-    <li>
-      <NavLink
-        to={threadPath(item)}
-        title={`${item.title} · ${item.counterparty.name}`}
-        aria-label={`${item.title}, with ${item.counterparty.name}`}
-        className={({ isActive }) => cx(ROW, "h-8 items-center pr-2", isActive ? "bg-hover" : "hover:bg-hover")}
-      >
-        <span className="min-w-0 flex-1 truncate">{item.title}</span>
       </NavLink>
     </li>
   );

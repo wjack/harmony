@@ -1,14 +1,10 @@
 /**
  * Keeps the network view live (ARCHITECTURE.md §8, §11.6).
  *
- * - **Desk world:** the tab's own stream, through the dispatcher. It carries what the
- *   acting member may see (their threads' snapshots and typing) plus every org's
- *   payload-free demo cues, which is all the graph needs. The view's REST read is
- *   scoped by access in the desk world, so the stream is too: another org's internal
- *   notes and drafts never reach this browser.
- * - **Network world (the big run):** a demo lens over both sides of every thread,
- *   labelled as such, so the view opens its own `GET /api/events?lens=network` stream
- *   from the view's snapshot cursor while it is mounted.
+ The network view is a demo tool (opened from the demo bar) that watches both sides of
+ * every thread, in either world, so it opens its own `GET /api/events?lens=network`
+ * stream from the view's snapshot cursor while it is mounted. The tab's own stream
+ * stays the acting member's.
  *
  * Snapshots that change the graph refetch the view (a composed server view, refetched
  * rather than patched); typing marks a thread's edge as in flight; a committed message
@@ -18,7 +14,6 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { createContext, use, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import type { EventEnvelope } from "../api/types";
-import { useDispatcher } from "../app/context";
 import type { EventSourceLike } from "../realtime/dispatcher";
 import { parseEnvelope } from "../realtime/envelope";
 import { networkKeys } from "./api";
@@ -163,7 +158,6 @@ function canvasSink(
 /** Subscribe the view to its world's stream while mounted (module docstring). */
 export function useNetworkLive({ world, worldId, cursor, epoch, enabled }: LensOptions): LensActivity {
   const open = use(LensSourceContext);
-  const dispatcher = useDispatcher();
   const queryClient = useQueryClient();
   const [inFlight, setInFlight] = useState<InFlight>(new Map());
   const [pulses, setPulses] = useState<Pulses>(new Map());
@@ -177,19 +171,8 @@ export function useNetworkLive({ world, worldId, cursor, epoch, enabled }: LensO
     latestCursor.current = cursor;
   }, [cursor]);
 
-  // Desk world: the tab's member-scoped stream.
-  useEffect(() => {
-    if (world !== "desk" || !enabled) return;
-    const sink = canvasSink(queryClient, world, setInFlight, setPulses);
-    const off = dispatcher.onEnvelope(sink.receive);
-    return () => {
-      off();
-      sink.dispose();
-    };
-  }, [world, enabled, dispatcher, queryClient]);
-
-  // Network world: the demo lens.
-  const lensReady = world === "network" && enabled && cursor !== null && worldId !== null && open !== null;
+  // The demo lens.
+  const lensReady = enabled && cursor !== null && worldId !== null && open !== null;
   useEffect(() => {
     if (!lensReady) return;
     if (resume.current.worldId !== worldId) resume.current = { worldId, seq: latestCursor.current };

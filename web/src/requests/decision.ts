@@ -105,6 +105,15 @@ export function sharingLabel(admin: boolean, them: OrgRef): string {
   return `${admin ? "Edit" : "See"} what you share with ${them.name}`;
 }
 
+/**
+ * "Drafted from Alex's answer to Ridgeline, Oct 26": the member's answer in another
+ * conversation that a reused draft started from, worded by the server for this viewer.
+ * Null when the draft didn't start from one.
+ */
+export function draftedFrom(consult: ConsultView | null): string | null {
+  return consult?.drafted_from ?? null;
+}
+
 /** The items Claude read to draft, as one line: a record's title, else what it searched for. */
 export function lookedAtSummary(rev: EscalationDraft): string {
   return rev.activity.map((line) => (line.detail == null || line.detail === "" ? line.label : line.detail)).join(" · ");

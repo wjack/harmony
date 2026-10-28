@@ -41,6 +41,7 @@ __all__ = [
     "ChatItemType",
     "ContextPart",
     "ContextPartKind",
+    "DeliveryState",
     "EscalationAction",
     "EscalationResolution",
     "EscalationStatus",
@@ -51,6 +52,8 @@ __all__ = [
     "OutreachEdits",
     "OutreachRecipient",
     "ParticipantStatus",
+    "QuestionAsker",
+    "QuestionDelivery",
     "RequestStatus",
     "RequestStatusItem",
     "Route",
@@ -386,12 +389,56 @@ class RequestStatusItem(_ChatItem):
     request_id: UUID
 
 
+class QuestionAsker(_Model):
+    """Another conversation on the request whose representative asked the card's
+    question, routed to the chat's owner ("How each asked")."""
+
+    escalation_id: UUID
+    thread_id: UUID
+    from_org: OrgRef
+    # Our representative's question in that conversation.
+    question: str
+    status: EscalationStatus
+
+
+# Where a card's answer went in one conversation:
+# - `as_written`: the asker the card shows, sent the member's words (or another asker a
+#   member answered in its own conversation);
+# - `fitted`: another asker, sent Claude's version fitted to its question, after its
+#   org's checks;
+# - `drafting`: that version is being written;
+# - `held`: the asker waits for a person (`reason`): its version didn't pass;
+# - `not_sent`: the member unticked the asker, it asked after the answer, or a member
+#   declined it;
+# - `ended`: its conversation ended before the answer reached it.
+DeliveryState = Literal["as_written", "fitted", "drafting", "held", "not_sent", "ended"]
+
+
+class QuestionDelivery(_Model):
+    """One row under an answered card: what became of the answer in one conversation."""
+
+    thread_id: UUID
+    org: OrgRef
+    state: DeliveryState
+    # When it was sent or held.
+    at: datetime | None
+    # Why it waits for a person (`held` only).
+    reason: str | None
+
+
 class InlineQuestionItem(_ChatItem):
     """A requester-side consult routed to the chat's owner (a counterparty's question,
     or terms to agree to), resolved through the same endpoint as the inbox (§7). A
     resolved one carries how it was settled (`action`) and the words that went with it
     (`answer`): the member's own, else the draft rev they approved as written. An item
-    cancelled because its thread ended stays, as no longer needed."""
+    cancelled because its thread ended stays, as no longer needed.
+
+    A card groups the request's items that ask the same question and are routed to the
+    chat's owner. The one shown (`escalation_id`, `question`, `from_org`) is the item a
+    member answered, else the oldest open one; the rest are `askers`. The answer goes to
+    the one shown and the askers the member keeps ticked, never to another conversation.
+    Answered, it lists one `deliveries` row per asker, and who answered (`answered_by`,
+    `answered_at`)."""
 
     type: Literal["inline_question"] = "inline_question"
     escalation_id: UUID
@@ -401,6 +448,13 @@ class InlineQuestionItem(_ChatItem):
     status: EscalationStatus
     action: EscalationAction | None
     answer: str | None
+    askers: list[QuestionAsker] = []
+    # The request's organizations: the member's answer may name none but the shown
+    # asker's.
+    recipients: list[OrgRef] = []
+    deliveries: list[QuestionDelivery] = []
+    answered_by: MemberRef | None
+    answered_at: datetime | None
 
 
 ChatItem = Annotated[

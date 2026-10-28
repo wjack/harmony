@@ -47,6 +47,11 @@ async function openFromSidebar(page: Page, name: string): Promise<void> {
     .click();
 }
 
+/** The network view is the demo's, opened from the demo bar. */
+async function openNetworkView(page: Page): Promise<void> {
+  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
+}
+
 /** Opens a chat from the sidebar's Recents, below the requests that share its scroll area. */
 async function openChat(page: Page, title: string): Promise<void> {
   await sidebar(page)
@@ -170,7 +175,8 @@ async function clippedValues(details: Locator): Promise<string[]> {
 test("before any request is in flight, the network view's note sits clear of every card", async ({ page }) => {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: /^Network view/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
   await expect(page).toHaveURL(/\/network/);
   const note = page.locator("[data-no-request]");
   await expect(note).toContainText(/No requests yet|Nothing in flight/);
@@ -214,7 +220,10 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
     const before = await claudeTexts(page).count();
     await card.getByRole("button", { name: "Approve and send" }).click();
-    await expect(statusRow(page, CALDER)).toContainText("Not sent", TURNS);
+    // The status card lists only where it went: Calder, left out, isn't on it.
+    await expect(statusRow(page, NORTHLAKE)).toBeVisible(TURNS);
+    await expect(statusRow(page, RIDGELINE)).toBeVisible();
+    await expect(statusRow(page, CALDER)).toHaveCount(0);
     await expect(page.getByRole("region", { name: /^Harmony Network Request / }).getByText("Sent", { exact: true })).toBeVisible();
 
     // Claude says one sentence: it's out, and where progress shows.
@@ -232,12 +241,12 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect(page.getByRole("button", { name: /Northlake needs a human/ })).toBeVisible(TURNS);
   });
 
-  await test.step("the network view rings the suggested recipients, and keeps Northlake's escalation Northlake's", async () => {
-    await openFromSidebar(page, "Network");
+  await test.step("the network view rings the suggested recipients and shows who waits on a person, on either side", async () => {
+    await openNetworkView(page);
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) {
-      await expect(networkNode(page, org)).toContainText("Suggested");
+      await expect(networkNode(page, org).locator("[data-suggested]")).toHaveCount(1);
     }
-    await expect(networkNode(page, NORTHLAKE)).not.toContainText("Needs human");
+    await expect(networkNode(page, NORTHLAKE)).toContainText("Needs human", TURNS);
     await expect(networkNode(page, CALDER)).toContainText("Screened");
     expect(await nameFits(page, NORTHLAKE)).toBe(true);
     await expect(page.locator("[data-edge-label]").first()).toBeVisible();
@@ -298,7 +307,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
   });
 
   await test.step("the network view shows both conversations Closed and Calder Screened, at a readable size", async () => {
-    await openFromSidebar(page, "Network");
+    await openNetworkView(page);
     await expect(networkNode(page, NORTHLAKE)).toContainText("Closed");
     await expect(networkNode(page, RIDGELINE)).toContainText("Closed");
     await expect(networkNode(page, CALDER)).toContainText("Screened");
@@ -327,11 +336,9 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
   await test.step("Northlake's representative saw the released answer, never Raj's note", async () => {
     await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
-    // Settled, it's one of her recent requests.
-    await sidebar(page)
-      .getByRole("region", { name: "Recent requests" })
-      .getByRole("link", { name: `${NORTHLAKE_TITLE}, with Henderson Lab` })
-      .click();
+    // Settled, it's on her Requests page.
+    await openFromSidebar(page, "Requests");
+    await page.getByRole("main").getByRole("link", { name: new RegExp(`^${NORTHLAKE_TITLE}`) }).first().click();
     const details = await openDetails(page);
     await details.getByRole("button", { name: /^What our representative saw/ }).click();
     const saw = page.getByRole("dialog", { name: "What our representative saw" });

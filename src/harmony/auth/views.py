@@ -56,6 +56,8 @@ class WorldView(_View):
     created_at: datetime
     # World clock: scenario anchor + (now - created_at) + ff_offset_s (§11.1).
     ff_offset_s: int
+    # Demo controls' Skip approvals (§11.4).
+    skip_approvals: bool
 
 
 class InternalModelView(_View):
@@ -172,6 +174,7 @@ async def session_view(
             status=world.status,
             created_at=world.created_at,
             ff_offset_s=world.ff_offset_s,
+            skip_approvals=world.skip_approvals,
         ),
         member=member_view(member, org),
         internal_model=internal_model(org, settings),

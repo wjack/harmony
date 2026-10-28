@@ -8,6 +8,7 @@ import type { Block } from "./items";
 import type { StreamingText } from "./live";
 import { ActivityLine, AssistantMessage, StreamingSpark, UserMessage } from "./Messages";
 import { Markdown } from "./Markdown";
+import type { ResolveEscalation } from "./types";
 
 export interface TranscriptActions {
   /** Answering inline questions: which one is sending, and failures by escalation id. */
@@ -15,13 +16,15 @@ export interface TranscriptActions {
   answerErrors: Readonly<Record<string, string>>;
   /** Why live turns can't start now (`budgetLine`): answers hold until it clears. */
   blocked: string | null;
-  onAnswer: (escalationId: string, text: string) => void;
+  onAnswer: (escalationId: string, body: ResolveEscalation) => void;
   onUnavailable: (feature: string) => void;
 }
 
 export interface TranscriptProps extends TranscriptActions {
   blocks: readonly Block[];
   memberId: string | null;
+  /** Our organization's name, for where an answer went. */
+  us: string;
   /** Claude is working: no reply is finished yet, so the last one keeps its actions hidden. */
   working: boolean;
   /** Draw the spark: a turn is running (not paused on a card). */
@@ -67,6 +70,7 @@ function replyTexts(blocks: readonly Block[]): Map<string, string> {
 export function Transcript({
   blocks,
   memberId,
+  us,
   working,
   showSpark,
   failure,
@@ -122,11 +126,12 @@ export function Transcript({
         return (
           <InlineQuestionCard
             item={block.item}
+            us={us}
             busy={answering === block.item.escalation_id}
             blocked={blocked}
             error={answerErrors[block.item.escalation_id] ?? null}
-            onAnswer={(text) => {
-              onAnswer(block.item.escalation_id, text);
+            onAnswer={(body) => {
+              onAnswer(block.item.escalation_id, body);
             }}
           />
         );

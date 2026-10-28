@@ -18,6 +18,14 @@ check's verdict when one ran (`record_sharing_check`), and what reached the
 representative and from whom (`release`, or `decline` with what it may say). A redraft
 is an escalation draft (`escalations.add_draft`), not a new decision.
 
+One answer, many askers: when Claude judges that a requester-side question asks an
+earlier one, still waiting for its answer, on the request again (`record_same_as`), the
+two share a card, the group's first consult. The chat owner's approval of any of its
+items, in their own words, is the card's answer (`member_answer`). It goes only to the
+askers the owner kept ticked, whose organizations the card records (`add_goes_to`); a
+later asker's question reaches a person afresh. A draft that starts from it records
+which item it came from (`record_drafted_from`).
+
 Writes queue a `consult` snapshot to the consulting org's thread scope only.
 
 Owner: E2.
@@ -29,18 +37,19 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 from uuid import UUID
 
 from pydantic import JsonValue
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents.models import ActivityLine
 from harmony.db import repo
-from harmony.db.models import Consult, ModelCall
+from harmony.db.models import Consult, Escalation, ModelCall, NetworkRequest, Thread
 from harmony.db.models.choices import ConsultStatus, ReleasedBy, Side
 from harmony.db.uow import UnitOfWork
 from harmony.domain import conversations, records, threads
@@ -229,11 +238,20 @@ async def mark_needs_human(uow: UnitOfWork, consult_id: UUID) -> Consult:
     return consult
 
 
-async def decline(uow: UnitOfWork, consult_id: UUID, *, text: str, member_id: UUID) -> Consult:
-    """`needs_human` (or still `answering`) → `declined` by the member `member_id`.
-    `text` is the tool result the representative receives (what it may say, if
-    anything): kept as `released_text`, like a release, since it reached the
-    representative. The caller owes it. Idempotent once declined."""
+async def decline(
+    uow: UnitOfWork,
+    consult_id: UUID,
+    *,
+    text: str,
+    released_by: ReleasedBy = "member",
+    member_id: UUID | None = None,
+) -> Consult:
+    """`needs_human` (or still `answering`) → `declined` by the member `member_id`, or by
+    code (`auto`, under Skip approvals). `text` is the tool result the representative
+    receives (what it may say, if anything): kept as `released_text`, like a release,
+    since it reached the representative. The caller owes it. Idempotent once declined."""
+    if (released_by == "member") != (member_id is not None):
+        raise ValueError("a member decline names the member, and only a member decline does")
     consult = await _locked(uow, consult_id)
     if consult.status == "declined":
         return consult
@@ -241,12 +259,146 @@ async def decline(uow: UnitOfWork, consult_id: UUID, *, text: str, member_id: UU
         raise ConsultNotOpen(consult_id, consult.status)
     consult.status = "declined"
     consult.released_text = text
-    consult.released_by = "member"
+    consult.released_by = released_by
     consult.released_by_member_id = member_id
     consult.released_at = datetime.now(UTC)
     await uow.session.flush()
     _queue(uow, consult)
     return consult
+
+
+async def record_same_as(uow: UnitOfWork, consult_id: UUID, card_id: UUID) -> Consult:
+    """Store the card whose question this consult asks again. The first write wins."""
+    consult = await _locked(uow, consult_id)
+    if consult.same_as_id is None and card_id != consult_id:
+        consult.same_as_id = card_id
+        await uow.session.flush()
+        _queue(uow, consult)
+    return consult
+
+
+async def record_drafted_from(uow: UnitOfWork, consult_id: UUID, escalation_id: UUID) -> Consult:
+    """Store the item whose member answer this consult's draft started from. The first
+    write wins."""
+    consult = await _locked(uow, consult_id)
+    if consult.drafted_from_id is None:
+        consult.drafted_from_id = escalation_id
+        await uow.session.flush()
+        _queue(uow, consult)
+    return consult
+
+
+async def add_goes_to(uow: UnitOfWork, card_id: UUID, org_ids: Sequence[UUID]) -> Consult:
+    """Record the organizations of the askers the card's answer went to."""
+    consult = await _locked(uow, card_id)
+    added = [*consult.goes_to_org_ids, *(str(org_id) for org_id in org_ids)]
+    consult.goes_to_org_ids = list(dict.fromkeys(added))
+    await uow.session.flush()
+    _queue(uow, consult)
+    return consult
+
+
+def card_of(consult: Consult) -> UUID:
+    """The card a consult belongs to: the one it asks again, else its own."""
+    return consult.same_as_id or consult.id
+
+
+def member_answer(items: Iterable[Escalation], owner_id: UUID | None) -> Escalation | None:
+    """The newest of `items` the member `owner_id` approved in their own words: a card's
+    answer, with the request's creator (the chat's owner) as `owner_id`. A draft approved
+    as written was fitted to its own conversation, and a teammate's answer to an item
+    routed to them is a one-off, so neither ever is."""
+    approved = [
+        item
+        for item in items
+        if owner_id is not None
+        and item.resolved_by_member_id == owner_id
+        and item.resolution is not None
+        and item.resolution.get("action") == "approve"
+        and str(item.resolution.get("text") or "").strip()
+    ]
+    return max(approved, key=lambda item: item.resolved_at or item.created_at, default=None)
+
+
+async def card_askers(
+    session: AsyncSession, world_id: UUID, card_id: UUID, member_id: UUID
+) -> list[Escalation]:
+    """The card's open items routed to `member_id`, oldest first: the askers one answer
+    from them can serve."""
+    return [
+        item
+        for item in await _card_items(session, world_id, card_id)
+        if item.status == "open" and str(member_id) in item.assignees
+    ]
+
+
+async def cards_to_join(session: AsyncSession, consult: Consult) -> list[Consult]:
+    """The cards the consult may ask again: those of its side's questions on the
+    request's other threads, asked before it, while a person decides one of the card's
+    items and the chat's owner hasn't answered it. Oldest first."""
+    thread = await repo.get_required(session, Thread, consult.world_id, consult.thread_id)
+    owner_id = await _owner_of(session, consult)
+    rows = await session.execute(
+        select(Consult, Escalation)
+        .join(Thread, (Thread.world_id == Consult.world_id) & (Thread.id == Consult.thread_id))
+        .outerjoin(
+            Escalation,
+            (Escalation.world_id == Consult.world_id) & (Escalation.consult_id == Consult.id),
+        )
+        .where(
+            Consult.world_id == consult.world_id,
+            Thread.request_id == thread.request_id,
+            Consult.side == consult.side,
+            Consult.thread_id != consult.thread_id,
+            Consult.created_at < consult.created_at,
+        )
+        .order_by(Consult.created_at, Consult.id)
+    )
+    cards: dict[UUID, Consult] = {}
+    items: dict[UUID, list[Escalation]] = {}
+    for asked, joined in rows:
+        item = cast("Escalation | None", joined)  # an outer join
+        if asked.same_as_id is None:
+            cards[asked.id] = asked
+        if item is not None:
+            items.setdefault(card_of(asked), []).append(item)
+    return [
+        card
+        for card_id, card in cards.items()
+        if any(item.status == "open" for item in items.get(card_id, []))
+        and member_answer(items.get(card_id, []), owner_id) is None
+    ]
+
+
+async def _owner_of(session: AsyncSession, consult: Consult) -> UUID | None:
+    """The member who created the consult's request: its chat's owner."""
+    return await session.scalar(
+        select(NetworkRequest.created_by_member_id)
+        .join(
+            Thread,
+            (Thread.world_id == NetworkRequest.world_id) & (Thread.request_id == NetworkRequest.id),
+        )
+        .where(Thread.world_id == consult.world_id, Thread.id == consult.thread_id)
+    )
+
+
+async def _card_items(session: AsyncSession, world_id: UUID, card_id: UUID) -> list[Escalation]:
+    return list(
+        await session.scalars(
+            select(Escalation)
+            .join(
+                Consult,
+                (Consult.world_id == Escalation.world_id) & (Consult.id == Escalation.consult_id),
+            )
+            .where(Escalation.world_id == world_id, in_card(card_id))
+            .order_by(Escalation.created_at, Escalation.id)
+        )
+    )
+
+
+def in_card(card_id: UUID) -> ColumnElement[bool]:
+    """The consults of the card `card_id`."""
+    return or_(Consult.id == card_id, Consult.same_as_id == card_id)
 
 
 async def get(session: AsyncSession, *, world_id: UUID, consult_id: UUID) -> Consult:
@@ -325,15 +477,23 @@ __all__ = [
     "OPEN_STATUSES",
     "QUESTION_MAX_CHARS",
     "activity",
+    "add_goes_to",
+    "card_askers",
+    "card_of",
+    "cards_to_join",
     "decline",
     "dedupe_key",
     "for_thread",
     "get",
+    "in_card",
     "mark_needs_human",
+    "member_answer",
     "normalize_question",
     "open",
     "ordinal",
     "record_draft",
+    "record_drafted_from",
+    "record_same_as",
     "record_sharing_check",
     "release",
 ]

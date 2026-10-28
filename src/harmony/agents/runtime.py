@@ -84,10 +84,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from harmony.agents.models import ScreenedCounts
 from harmony.agents.transcript import (
+    ConversationTranscript,
     TranscriptConflict,
     TranscriptRef,
     TranscriptStore,
     WireMessage,
+    chat_history,
 )
 from harmony.db.models.choices import CardKind, ThreadMessageKind
 from harmony.errors import HarmonyError
@@ -515,8 +517,12 @@ async def run_turn(
     on_text: TextSink | None = None,
 ) -> TurnOutcome:
     """Run one turn's tool loop (module docstring). Idempotent under activity retry:
-    stored calls are reused, transcript appends and side effects are keyed on the turn."""
+    stored calls are reused, transcript appends and side effects are keyed on the turn.
+    A chat's history leaves its finished update looks out but for what they wrote
+    (`transcript.chat_history`)."""
     history = await transcript.load(ctx.transcript)
+    if isinstance(ctx.transcript, ConversationTranscript):
+        history = chat_history(history, turn_id=ctx.turn_id)
     run = _TurnRun(ctx, executor, model, transcript, on_text, history=history)
     return await run.run()
 

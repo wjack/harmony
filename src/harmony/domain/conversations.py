@@ -12,16 +12,20 @@ in turn order, so a member message never lands between a request and its respons
   `tool_activity` (status from its `tool_result`), except `send_network_request`, which
   renders as its card. A tool row reads in the present tense until its result is
   stored ("Searching the Harmony network…"), then in the past with what a search found
-  ("2 possible fits of 14"); its `detail` is what it worked on (the need, the query,
-  the record's title);
+  ("2 possible fits of 14") or where a share went; its `detail` is what it worked on
+  (the need, the query, the record's title, the words shared);
 - `cards` (by `tool_use_id`) → `outreach_card`, followed by a `request_status` item
   once it is approved. A recipient row is `selected` when it is in the request: every
   listed row while the card awaits the member or once it was rejected; the rows the
   request went to once approved; and, for an `auto` card still sending, its
   `auto_send_recipients`;
 - requester-side consult escalations on this chat's requests that were routed to its
-  owner → `inline_question` (R§7), kept once settled or cancelled.
-Items are ordered by when they happened, ties by transcript seq.
+  owner → `inline_question` (R§7), kept once settled or cancelled: one card per
+  question, however many conversations asked it (`consults.card_of`). An answered card
+  lists where its answer went (`QuestionDelivery`).
+Items are ordered by when they happened, ties by transcript seq. An update look's note
+never shows, and a look that wrote nothing leaves no item at all: no tool row, no
+thinking.
 
 Every write bumps `conversations.version` and `last_activity_at` and queues a
 `conversation` snapshot to the owner, which tells the client to refetch the items.
@@ -45,25 +49,37 @@ from typing import Final, Literal
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from harmony.agents import release
 from harmony.agents.models import (
     AssistantTextItem,
     CardPayload,
     CardRecipient,
     CardResolution,
     ChatItem,
+    DeliveryState,
     EscalationResolution,
     InlineQuestionItem,
+    MemberRef,
     OutreachCardItem,
     OutreachRecipient,
+    QuestionAsker,
+    QuestionDelivery,
     RequestStatusItem,
     ScreenedCounts,
     ThinkingSummaryItem,
     ToolActivityItem,
     ToolActivityStatus,
     UserTextItem,
+)
+from harmony.agents.transcript import (
+    LOOK_NOTE_BLOCK,
+    LOOK_NOTE_PREFIX,
+    AnsweredQuestion,
+    WireMessage,
+    is_look_note,
 )
 from harmony.auth.views import OrgRef, org_ref
 from harmony.db import repo
@@ -73,15 +89,19 @@ from harmony.db.models import (
     Consult,
     Conversation,
     Escalation,
+    Member,
     NetworkRequest,
     Org,
     RepPolicy,
     Thread,
+    ThreadMessage,
 )
 from harmony.db.models.choices import CardRejectedWith
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards as cards_domain
-from harmony.domain import escalations, records, requests
+from harmony.domain import consults, escalations, records, requests
+from harmony.domain.settings import skips_approvals
+from harmony.domain.threads import TERMINAL_STATES
 from harmony.events.schemas import EntitySnapshot, EventScope
 from harmony.llm.wire import canonical_json
 
@@ -96,6 +116,7 @@ _TOOL_LABELS: Final[Mapping[str, tuple[str, str | None]]] = {
     records.READ_DOCUMENT: ("Read a document", None),
     "search_network": ("Searched the Harmony network", "need"),
     "get_request_status": ("Checked on the request", None),
+    "share_with_representatives": ("Shared with your representatives", "text"),
 }
 # A chat's row while its tool runs (no result stored yet).
 _RUNNING_LABELS: Final[Mapping[str, str]] = {
@@ -103,6 +124,7 @@ _RUNNING_LABELS: Final[Mapping[str, str]] = {
     records.READ_DOCUMENT: "Reading a document",
     "search_network": "Searching the Harmony network…",
     "get_request_status": "Checking on the request",
+    "share_with_representatives": "Sharing with your representatives",
 }
 
 
@@ -278,7 +300,10 @@ async def send_mode(session: AsyncSession, conversation: Conversation) -> SendMo
 
 
 async def effective_send_mode(session: AsyncSession, conversation: Conversation) -> bool:
-    """Whether the chat sends Harmony Network Requests without the member's review."""
+    """Whether the chat sends Harmony Network Requests without the member's review: its
+    send mode, or always while the world skips approvals (§11.4)."""
+    if await skips_approvals(session, conversation.world_id):
+        return True
     return (await send_mode(session, conversation)).effective
 
 
@@ -324,15 +349,167 @@ async def ordinal(session: AsyncSession, conversation: Conversation) -> int:
 
 
 async def turns_taken(session: AsyncSession, conversation: Conversation) -> int:
-    """How many internal turns the chat has run: the cassette turn number continues
-    from here when its workflow starts again after an idle exit."""
+    """How many internal turns the chat has run, its update looks aside: the cassette
+    turn number continues from here when its workflow starts again after an idle exit."""
     count = await session.scalar(
         select(func.count(func.distinct(ChatMessage.turn_id))).where(
             ChatMessage.world_id == conversation.world_id,
             ChatMessage.conversation_id == conversation.id,
+            ChatMessage.turn_id.not_in(_look_turns(conversation)),
         )
     )
     return int(count or 0)
+
+
+async def looks_taken(session: AsyncSession, conversation: Conversation) -> int:
+    """How many update looks stored anything: the look's cassette turn number continues
+    from here."""
+    count = await session.scalar(
+        select(func.count()).select_from(_look_turns(conversation).distinct().subquery())
+    )
+    return int(count or 0)
+
+
+async def last_wrote_at(
+    session: AsyncSession, conversation: Conversation, *, besides: UUID
+) -> datetime | None:
+    """When Claude last wrote to the member in this chat (a text block), in a turn other
+    than `besides`."""
+    return await session.scalar(
+        select(func.max(ChatMessage.created_at)).where(
+            ChatMessage.world_id == conversation.world_id,
+            ChatMessage.conversation_id == conversation.id,
+            ChatMessage.role == "assistant",
+            ChatMessage.content_text.contains('{"type":"text","text":"', autoescape=True),
+            ChatMessage.turn_id.is_distinct_from(besides),
+        )
+    )
+
+
+async def last_looked_at(
+    session: AsyncSession, conversation: Conversation, *, besides: UUID
+) -> datetime | None:
+    """When an update look other than `besides` last stored its note."""
+    return await session.scalar(
+        select(func.max(ChatMessage.created_at)).where(
+            _is_look_note(conversation), ChatMessage.turn_id.is_distinct_from(besides)
+        )
+    )
+
+
+async def requests_with_news(
+    session: AsyncSession, conversation: Conversation, *, since: datetime | None
+) -> list[UUID]:
+    """The chat's requests where a counterparty wrote, or a conversation ended, after
+    `since` (ever, when None), oldest first."""
+    ended = Thread.ended_at > since if since is not None else Thread.ended_at.is_not(None)
+    wrote = (
+        select(ThreadMessage.id)
+        .where(
+            ThreadMessage.world_id == Thread.world_id,
+            ThreadMessage.thread_id == Thread.id,
+            ThreadMessage.from_org_id == Thread.responder_org_id,
+            ThreadMessage.kind == "message",
+            ThreadMessage.created_at > since if since is not None else true(),
+        )
+        .exists()
+    )
+    news = (
+        select(Thread.id)
+        .where(
+            Thread.world_id == NetworkRequest.world_id,
+            Thread.request_id == NetworkRequest.id,
+            or_(ended, wrote),
+        )
+        .exists()
+    )
+    rows = await session.scalars(
+        select(NetworkRequest.id)
+        .where(
+            NetworkRequest.world_id == conversation.world_id,
+            NetworkRequest.conversation_id == conversation.id,
+            news,
+        )
+        .order_by(NetworkRequest.created_at, NetworkRequest.id)
+    )
+    return list(rows)
+
+
+async def answers_to_pass_on(
+    session: AsyncSession, conversation: Conversation, *, since: datetime | None
+) -> list[AnsweredQuestion]:
+    """The answers the chat's owner gave, in their own words, to their own
+    representative's questions on the chat's requests after `since` (ever, when None),
+    oldest first, each with the request's other open conversations: those that haven't
+    ended and didn't ask the question of its card. An answer with none is left out."""
+    rows = await session.execute(
+        select(Escalation, Consult, NetworkRequest, Thread.responder_org_id)
+        .join(
+            Consult,
+            (Consult.world_id == Escalation.world_id) & (Consult.id == Escalation.consult_id),
+        )
+        .join(Thread, (Thread.world_id == Consult.world_id) & (Thread.id == Consult.thread_id))
+        .join(
+            NetworkRequest,
+            (NetworkRequest.world_id == Thread.world_id) & (NetworkRequest.id == Thread.request_id),
+        )
+        .where(
+            Escalation.world_id == conversation.world_id,
+            NetworkRequest.conversation_id == conversation.id,
+            Consult.side == "requester",
+            Escalation.resolved_by_member_id == conversation.owner_member_id,
+            Escalation.resolved_at > since if since is not None else true(),
+        )
+        .order_by(Escalation.resolved_at, Escalation.id)
+    )
+    orgs = await _org_refs(session, conversation.world_id)
+    answers: list[AnsweredQuestion] = []
+    for item, consult, request, asker_id in rows:
+        words = await escalations.settled_words(session, item)
+        if consults.member_answer([item], conversation.owner_member_id) is None or not words:
+            continue
+        card_id = consults.card_of(consult)
+        asked = set(
+            await session.scalars(
+                select(Consult.thread_id).where(
+                    Consult.world_id == conversation.world_id, consults.in_card(card_id)
+                )
+            )
+        )
+        others = [
+            orgs[thread.responder_org_id]
+            for thread in await requests.threads_of(session, request)
+            if thread.state not in TERMINAL_STATES and thread.id not in asked
+        ]
+        if not others:
+            continue
+        card = await consults.get(session, world_id=conversation.world_id, consult_id=card_id)
+        went = [UUID(org_id) for org_id in card.goes_to_org_ids] or [asker_id]
+        answers.append(
+            AnsweredQuestion(
+                request_id=request.id,
+                answer=words,
+                asked=[orgs[org_id].name for org_id in went],
+                others=[(org.name, org.slug) for org in others],
+            )
+        )
+    return answers
+
+
+def _is_look_note(conversation: Conversation) -> ColumnElement[bool]:
+    return and_(
+        ChatMessage.world_id == conversation.world_id,
+        ChatMessage.conversation_id == conversation.id,
+        ChatMessage.role == "user",
+        ChatMessage.content_text.contains(LOOK_NOTE_BLOCK, autoescape=True),
+    )
+
+
+def _look_turns(conversation: Conversation) -> Select[UUID | None]:
+    """The turn ids of the chat's update looks."""
+    return select(ChatMessage.turn_id).where(
+        _is_look_note(conversation), ChatMessage.turn_id.is_not(None)
+    )
 
 
 async def requests_of(session: AsyncSession, conversation: Conversation) -> list[NetworkRequest]:
@@ -381,8 +558,11 @@ async def chat_items(session: AsyncSession, conversation: Conversation) -> list[
     read = records.read_ids(_tool_calls(rows))
     titles = await records.titles(session, world_id=world_id, org_id=conversation.org_id, ids=read)
 
+    silent = _silent_looks(rows)
     placed: list[_Placed] = []
     for row in rows:
+        if row.turn_id in silent:
+            continue
         for block_idx, block in enumerate(_blocks(row)):
             item = _transcript_item(
                 conversation,
@@ -418,6 +598,32 @@ async def chat_items(session: AsyncSession, conversation: Conversation) -> list[
 
     placed.sort(key=lambda entry: (entry.at, entry.order))
     return [entry.item for entry in placed]
+
+
+def _silent_looks(rows: Sequence[ChatMessage]) -> set[UUID]:
+    """The update looks, by turn, in which Claude wrote nothing. `rows` are in seq
+    order, so a turn's first row is its opening."""
+    seen: set[UUID] = set()
+    looks: set[UUID] = set()
+    wrote: set[UUID] = set()
+    for row in rows:
+        turn = row.turn_id
+        if turn is None:
+            continue
+        if turn not in seen:
+            seen.add(turn)
+            if is_look_note(WireMessage(role=row.role, content_text=row.content_text)):
+                looks.add(turn)
+        if turn in looks and row.role == "assistant" and _writes(row):
+            wrote.add(turn)
+    return looks - wrote
+
+
+def _writes(row: ChatMessage) -> bool:
+    return any(
+        block.get("type") == "text" and str(block.get("text") or "").strip()
+        for block in _blocks(row)
+    )
 
 
 def _blocks(row: ChatMessage) -> list[Mapping[str, JsonValue]]:
@@ -476,7 +682,12 @@ def _transcript_item(
     kind = block.get("type")
     text = block.get("text")
     if row.role == "user":
-        if kind != "text" or not isinstance(text, str) or text == NO_MEMBER_MESSAGE:
+        if (
+            kind != "text"
+            or not isinstance(text, str)
+            or text == NO_MEMBER_MESSAGE
+            or text.startswith(LOOK_NOTE_PREFIX)
+        ):
             return None
         return UserTextItem(
             id=item_id,
@@ -512,6 +723,13 @@ def _transcript_item(
             outcome=None,
             turn_id=row.turn_id,
         )
+    outcome = None
+    if result.status == "done":
+        outcome = (
+            _shared_with(block.get("input"), orgs)
+            if name == "share_with_representatives"
+            else _outcome(name, result.content)
+        )
     return ToolActivityItem(
         id=item_id,
         at=row.created_at,
@@ -519,7 +737,7 @@ def _transcript_item(
         label=label,
         detail=detail,
         status=result.status,
-        outcome=_outcome(name, result.content) if result.status == "done" else None,
+        outcome=outcome,
         turn_id=row.turn_id,
     )
 
@@ -568,6 +786,18 @@ def _outcome(name: str, content: JsonValue) -> str | None:
                 return None
     except ValidationError:
         return None
+
+
+def _shared_with(tool_input: JsonValue | None, orgs: Mapping[UUID, OrgRef]) -> str | None:
+    """Where a share went: "Northlake Characterization Core and Calder Computational"."""
+    slugs = tool_input.get("organizations") if isinstance(tool_input, dict) else None
+    if not isinstance(slugs, list):
+        return None
+    names = {org.slug: org.name for org in orgs.values()}
+    shown = [names[slug] for slug in slugs if isinstance(slug, str) and slug in names]
+    if not shown:
+        return None
+    return " and ".join(shown) if len(shown) <= 2 else f"{', '.join(shown[:-1])} and {shown[-1]}"
 
 
 def _fits(screened: ScreenedCounts) -> str:
@@ -654,69 +884,181 @@ def _in_request(
     return {row.org_id: row for row in rows}
 
 
+@dataclass(frozen=True, slots=True)
+class _Asked:
+    """One requester-side consult on the request, its item if a person was asked, and
+    the organization its conversation is with."""
+
+    consult: Consult
+    item: Escalation | None
+    org_id: UUID
+
+
 async def _inline_questions(
     session: AsyncSession,
     conversation: Conversation,
     request: NetworkRequest,
     orgs: Mapping[UUID, OrgRef],
 ) -> list[InlineQuestionItem]:
-    """The request's consults routed to the chat's owner: questions their side's
-    representative asked them, answered from the chat (§7). A settled one shows what the
-    member let through, never the representative's tool result."""
+    """The request's questions routed to the chat's owner: questions their side's
+    representative asked them, answered from the chat (§7). One card per question: the
+    items of a card (`consults.card_of`) that are routed to the owner show as one, the
+    oldest open one first (the asker the answer goes to as written), the others as its
+    `askers`. An answered card shows the answer the owner approved and where it went. A
+    settled one shows what the member let through, never the representative's tool
+    result."""
     rows = await session.execute(
-        select(Escalation, Consult, Thread)
-        .join(
-            Consult,
-            (Consult.world_id == Escalation.world_id) & (Consult.id == Escalation.consult_id),
-        )
-        .join(
-            Thread, (Thread.world_id == Escalation.world_id) & (Thread.id == Escalation.thread_id)
+        select(Consult, Escalation, Thread.responder_org_id)
+        .join(Thread, (Thread.world_id == Consult.world_id) & (Thread.id == Consult.thread_id))
+        .outerjoin(
+            Escalation,
+            (Escalation.world_id == Consult.world_id) & (Escalation.consult_id == Consult.id),
         )
         .where(
-            Escalation.world_id == conversation.world_id,
-            Escalation.org_id == conversation.org_id,
-            Escalation.kind == "consult",
-            Escalation.side == "requester",
-            Escalation.assignees.contains([str(conversation.owner_member_id)]),
+            Consult.world_id == conversation.world_id,
+            Consult.org_id == conversation.org_id,
+            Consult.side == "requester",
             Thread.request_id == request.id,
         )
-        .order_by(Escalation.created_at, Escalation.id)
+        .order_by(Consult.created_at, Consult.id)
     )
+    cards: dict[UUID, list[_Asked]] = {}
+    for consult, item, org_id in rows:
+        cards.setdefault(consults.card_of(consult), []).append(_Asked(consult, item, org_id))
+    owner = str(conversation.owner_member_id)
+    recipients = [row.org_id for row in requests.recipients_of(request)]
     items: list[InlineQuestionItem] = []
-    for escalation, consult, thread in rows:
-        resolution = (
-            EscalationResolution.model_validate(escalation.resolution)
-            if escalation.resolution is not None
-            else None
-        )
-        items.append(
-            InlineQuestionItem(
-                id=f"esc:{escalation.id}",
-                at=escalation.created_at,
-                escalation_id=escalation.id,
-                thread_id=thread.id,
-                question=consult.question,
-                from_org=orgs[thread.responder_org_id],
-                status=escalations.escalation_status(escalation.status),
-                action=resolution.action if resolution is not None else None,
-                answer=await _settled_words(session, escalation, resolution),
+    for card_id, asked in cards.items():
+        routed = [a for a in asked if a.item is not None and owner in a.item.assignees]
+        if routed:
+            items.append(
+                await _question_card(
+                    session, conversation, card_id, asked, routed, recipients, orgs
+                )
             )
-        )
     return items
 
 
-async def _settled_words(
-    session: AsyncSession, escalation: Escalation, resolution: EscalationResolution | None
-) -> str | None:
-    """The member's own words, else (on an approval) the draft rev they approved as
-    written."""
-    if resolution is None:
+async def _question_card(
+    session: AsyncSession,
+    conversation: Conversation,
+    card_id: UUID,
+    asked: Sequence[_Asked],
+    routed: Sequence[_Asked],
+    recipients: Sequence[UUID],
+    orgs: Mapping[UUID, OrgRef],
+) -> InlineQuestionItem:
+    answer = consults.member_answer(
+        (a.item for a in asked if a.item is not None), conversation.owner_member_id
+    )
+    open_items = [a for a in routed if _item(a).status == "open"]
+    shown = next(
+        (a for a in asked if answer is not None and a.item is answer),
+        open_items[0] if open_items else routed[0],
+    )
+    item = _item(shown)
+    resolution = (
+        EscalationResolution.model_validate(item.resolution)
+        if item.resolution is not None
+        else None
+    )
+    card = next((a.consult for a in asked if a.consult.id == card_id), shown.consult)
+    goes_to = [UUID(org_id) for org_id in card.goes_to_org_ids]
+    answered_by = None
+    if answer is not None and answer.resolved_by_member_id is not None:
+        member = await repo.get_required(
+            session, Member, answer.world_id, answer.resolved_by_member_id
+        )
+        answered_by = MemberRef(id=member.id, slug=member.slug, name=member.name)
+    return InlineQuestionItem(
+        id=f"esc:{_item(routed[0]).id}",
+        at=_item(routed[0]).created_at,
+        escalation_id=item.id,
+        thread_id=item.thread_id or shown.consult.thread_id,
+        question=shown.consult.question,
+        from_org=orgs[shown.org_id],
+        status=escalations.escalation_status(item.status),
+        action=resolution.action if resolution is not None else None,
+        answer=await escalations.settled_words(session, item),
+        askers=[
+            QuestionAsker(
+                escalation_id=_item(a).id,
+                thread_id=a.consult.thread_id,
+                from_org=orgs[a.org_id],
+                question=a.consult.question,
+                status=escalations.escalation_status(_item(a).status),
+            )
+            for a in routed
+            if a is not shown
+        ],
+        recipients=[orgs[org_id] for org_id in recipients if org_id in orgs],
+        deliveries=(
+            []
+            if answer is None
+            else [
+                delivery
+                for a in asked
+                if (delivery := await _delivery(session, a, answer, routed, goes_to, orgs))
+                is not None
+            ]
+        ),
+        answered_by=answered_by,
+        answered_at=answer.resolved_at if answer is not None else None,
+    )
+
+
+async def _delivery(
+    session: AsyncSession,
+    asked: _Asked,
+    answer: Escalation,
+    routed: Sequence[_Asked],
+    goes_to: Sequence[UUID],
+    orgs: Mapping[UUID, OrgRef],
+) -> QuestionDelivery | None:
+    """What became of the card's answer in one conversation (`DeliveryState`); None for
+    one it never concerned: a question answered from the records alone, or an item a
+    teammate decides. `goes_to`: the organizations of the askers it went to."""
+    consult, item = asked.consult, asked.item
+    answered_at = answer.resolved_at or answer.created_at
+
+    def row(
+        state: DeliveryState, at: datetime | None, reason: str | None = None
+    ) -> QuestionDelivery:
+        return QuestionDelivery(
+            thread_id=consult.thread_id, org=orgs[asked.org_id], state=state, at=at, reason=reason
+        )
+
+    if item is None:
         return None
-    text = (resolution.text or "").strip()
-    if text or resolution.action != "approve":
-        return text or None
-    draft = await escalations.resolved_draft(session, escalation, resolution)
-    return draft.answer if draft is not None else None
+    if item is answer:
+        return row("as_written", item.resolved_at)
+    if item.status == "resolved" and item.resolved_by_member_id is None:
+        return row("fitted", item.resolved_at)
+    if asked not in routed:
+        return None
+    match item.status:
+        case "cancelled":
+            return row("ended", item.resolved_at)
+        case "resolved":
+            declined = item.resolution is not None and item.resolution.get("action") == "decline"
+            return row("not_sent" if declined else "as_written", item.resolved_at)
+        case _:
+            pass
+    current = await escalations.current_draft(session, item)
+    if consult.drafted_from_id is not None:
+        held = current.held_reason if current is not None else None
+        return row(
+            "held", current.created_at if current else None, release.why_needed(consult, held)
+        )
+    # An asker that asked after the answer was given never got it.
+    if asked.org_id not in goes_to or item.created_at > answered_at:
+        return row("not_sent", None)
+    return row("drafting", None)
+
+
+def _item(asked: _Asked) -> Escalation:
+    assert asked.item is not None
+    return asked.item
 
 
 async def _org_refs(session: AsyncSession, world_id: UUID) -> dict[UUID, OrgRef]:
@@ -777,16 +1119,21 @@ __all__ = [
     "NO_MEMBER_MESSAGE",
     "TITLE_MAX_CHARS",
     "SendMode",
+    "answers_to_pass_on",
     "append_assistant_content",
     "append_member_message",
     "append_turn_input",
     "chat_items",
     "discard",
     "effective_send_mode",
+    "last_looked_at",
+    "last_wrote_at",
     "locked",
+    "looks_taken",
     "ordinal",
     "recents",
     "requests_of",
+    "requests_with_news",
     "send_mode",
     "set_send_mode",
     "start",

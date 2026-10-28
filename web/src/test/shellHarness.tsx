@@ -11,7 +11,7 @@ import { vi } from "vitest";
 
 import { createApiClient } from "../api/client";
 import { createQueryClient } from "../api/queryClient";
-import type { Inbox, MemberView, SessionView } from "../api/types";
+import type { DemoWaiting, Inbox, MemberView, SessionView } from "../api/types";
 import { AppProviders } from "../app/AppProviders";
 import type { BudgetView } from "../app/budget";
 import { fetchStreamSnapshot } from "../app/snapshot";
@@ -96,6 +96,8 @@ export class FakeServer {
   locked = false;
   /** What `GET /api/budget` answers. */
   budget: BudgetView = budgets.ok;
+  /** What `GET /api/demo/waiting` answers: no account has an open item. */
+  waiting: DemoWaiting = { accounts: [] };
   /** Alex's inbox: empty unless a test gives him a question. */
   alexInbox: Inbox = { ...inbox, needs_you: [] };
   readonly calls: string[] = [];
@@ -143,6 +145,7 @@ export class FakeServer {
         );
       },
       "GET /api/budget": () => this.budget,
+      "GET /api/demo/waiting": () => this.waiting,
       "POST /api/gate/lock": () => {
         this.locked = true;
         return new Response(null, { status: 204 });

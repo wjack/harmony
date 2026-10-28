@@ -141,7 +141,8 @@ test("the chat keeps its gutter, Reset its place and the sidebar its width, from
 async function startOnNetwork(page: Page): Promise<void> {
   await unlock(page);
   await page.goto("/");
-  await page.getByRole("dialog").getByRole("button", { name: /^Network view/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Try the suggested request", exact: true }).click();
+  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network view" }).click();
   await expect(page).toHaveURL(/\/network/);
 }
 

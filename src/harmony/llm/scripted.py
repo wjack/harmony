@@ -14,7 +14,10 @@ A cassette is a YAML file of canned responses keyed by
         # end_turn), stop_details, served_model (default: the requested model)
 
 `thread: "*"` matches any thread (for an org that plays the same script everywhere,
-like the adversary). The model streams the response as the API would (message_start,
+like the adversary), except a chat's update looks (`look:...`) and the question
+matcher (`match:...`): an unscripted look ends its turn without a word and an
+unscripted match finds none (`{"same_as": null}`), so the story cassettes need no entry
+for either. The model streams the response as the API would (message_start,
 content blocks with deltas, message_delta, message_stop), reports synthetic usage
 that `FreeSpend` prices at $0, records every request, and writes no ledger lines.
 
@@ -34,6 +37,7 @@ from typing import Annotated, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
+from harmony.agents.keys import LOOK_PREFIX, MATCH_PREFIX
 from harmony.llm import (
     CallKey,
     HeartbeatCallback,
@@ -48,6 +52,8 @@ from harmony.llm.wire import JsonObject, as_str, canonical_json
 
 ANY_THREAD = "*"
 SCRIPTED_SIGNATURE_PREFIX = "scripted-signature:"
+# What an unscripted question matcher answers: no earlier question asks the same.
+NO_MATCH = '{"same_as":null}'
 
 StopReason = Literal["end_turn", "tool_use", "max_tokens", "stop_sequence", "refusal", "pause_turn"]
 type CassetteKey = tuple[str, str, str, str | None, int, int]
@@ -239,6 +245,12 @@ class ScriptedModel:
 
     def _lookup(self, key: CallKey) -> CassetteEntry:
         exact: CassetteKey = (key.scenario, key.org, key.role, key.thread, key.turn, key.step_idx)
+        entry = self._entries.get(exact)
+        if entry is not None:
+            return entry
+        default = _unscripted(key)
+        if default is not None:
+            return default
         wildcard: CassetteKey = (
             key.scenario,
             key.org,
@@ -247,7 +259,7 @@ class ScriptedModel:
             key.turn,
             key.step_idx,
         )
-        entry = self._entries.get(exact) or self._entries.get(wildcard)
+        entry = self._entries.get(wildcard)
         if entry is None:
             raise BadRequest(f"no cassette entry for {exact}")
         return entry
@@ -318,6 +330,20 @@ class ScriptedModel:
         return [text[i : i + self._chunk] for i in range(0, len(text), self._chunk)]
 
 
+def _unscripted(key: CallKey) -> CassetteEntry | None:
+    """The answer to an unscripted look (an empty `end_turn`) or match (none)."""
+    prefix = (key.thread or "").partition(":")[0]
+    if prefix not in (LOOK_PREFIX, MATCH_PREFIX):
+        return None
+    match = CassetteMatch(
+        org=key.org, role=key.role, thread=key.thread, turn=max(key.turn, 1), step=key.step_idx
+    )
+    content: list[ScriptedBlock] = (
+        [TextBlock(type="text", text=NO_MATCH)] if prefix == MATCH_PREFIX else []
+    )
+    return CassetteEntry(match=match, content=content, stop_reason="end_turn")
+
+
 def _start(index: int, block: JsonObject) -> JsonObject:
     return {"type": "content_block_start", "index": index, "content_block": block}
 
@@ -334,6 +360,7 @@ def _token(key: CallKey, index: int) -> str:
 
 __all__ = [
     "ANY_THREAD",
+    "NO_MATCH",
     "SCRIPTED_SIGNATURE_PREFIX",
     "Cassette",
     "CassetteEntry",

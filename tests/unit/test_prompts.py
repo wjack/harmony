@@ -62,6 +62,8 @@ EXPECTED: dict[str, frozenset[str]] = {
     "consult_redraft": frozenset(
         {"org_name", "member_first", "why", "draft_heading", "draft", "instruction"}
     ),
+    "consult_reuse": frozenset({"member", "org_name", "counterparty_name", "date", "answer"}),
+    "same_question": frozenset({"org_name", "question", "earlier"}),
     "steer_guidance": frozenset(
         {
             "org_name",
@@ -86,7 +88,9 @@ EXPECTED: dict[str, frozenset[str]] = {
             "instruction",
         }
     ),
-    "sharing_check": frozenset({"org_name", "counterparty_name", "sharing", "question", "answer"}),
+    "sharing_check": frozenset(
+        {"org_name", "counterparty_name", "sharing", "question", "answer", "reuse"}
+    ),
     "screener": frozenset({"need", "org_slug", "summary", "review_stats"}),
 }
 
@@ -184,13 +188,14 @@ def test_internal_claude_writes_one_brief_and_an_ask_per_organization() -> None:
 
 
 def test_internal_claude_has_nothing_to_check_right_after_a_send() -> None:
-    """Decision 7: the chat hears when something needs the member and when every
-    conversation has ended, so Claude neither checks nor promises to check back."""
+    """Decision 7: the chat hears when there's news, when something needs the member
+    and when every conversation has ended, so Claude neither checks nor promises to
+    check back."""
     text = render("internal", dict.fromkeys(placeholders("internal"), "x"))
     assert (
         "Right after a request goes out there's nothing to check, and no need to promise "
-        "to check back: you're told here when something needs x and when every "
-        "conversation has ended." in text
+        "to check back: you're told here when there's news, when something needs x and "
+        "when every conversation has ended." in text
     )
 
 
