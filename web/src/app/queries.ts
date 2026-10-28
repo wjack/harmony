@@ -1,10 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
 
 import { unwrap } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
-import type { DemoStory } from "../api/types";
-import { applyWalkthroughPrefs, useWalkthroughPrefs } from "../demo/store";
 import { useApi, useDispatcher } from "./context";
 
 /** The acting session. The dispatcher's snapshot fills it, so it never goes stale. */
@@ -52,24 +49,13 @@ export function useInbox() {
   });
 }
 
-/**
- * The walkthrough's story beat: suggested message and recipients, and the world date.
- * The visitor's walkthrough switches (Demo controls) are applied here: with one off,
- * `suggested_message` is null or `suggested_recipients` is empty, so the chat's chip
- * and the network view's rings follow them without reading the switches themselves.
- */
+/** The walkthrough's story beat: suggested message and recipients, and the world date. */
 export function useDemoStory() {
   const api = useApi();
-  const { showSuggestedMessage, highlightSuggestedRecipients } = useWalkthroughPrefs();
-  const select = useCallback(
-    (story: DemoStory) => applyWalkthroughPrefs(story, { showSuggestedMessage, highlightSuggestedRecipients }),
-    [showSuggestedMessage, highlightSuggestedRecipients],
-  );
   return useQuery({
     queryKey: queryKeys.story,
     queryFn: () => unwrap(api.GET("/api/demo/story")),
     staleTime: 5 * 60_000,
-    select,
   });
 }
 

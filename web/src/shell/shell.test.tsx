@@ -45,6 +45,10 @@ beforeEach(() => {
     resetConfirmOpen: false,
     introHelp: false,
     prefillSuggestion: false,
+    userGuide: false,
+    // The tip after the intro's guide is HelpOverlay.test's; here it would be one more status.
+    guideTip: false,
+    guideTipShown: true,
   });
   sidebarStore.setState({ collapsed: false });
   toastStore.setState({ toasts: [] });

@@ -45,8 +45,8 @@ interface DemoBarProps {
  *
  * The budget, Reset and "?" are pinned right and never leave it. Who and when take the
  * room the alerts leave, measured on their own group: short of it, their labels drop
- * first ("World date", "Acting as", the org's full name, "Demo controls"), and only
- * then are they cut at their end.
+ * first ("Acting as", the org's full name, "Demo controls"), and only then are they cut
+ * at their end. The date is kept small: the scenario's clock, not a control.
  */
 export function DemoBar({ session, offline = false, reconnecting = false }: DemoBarProps) {
   const worldDate = useWorldDate(session?.world);
@@ -61,7 +61,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
       className="flex shrink-0 items-center gap-1 bg-demo px-2.5 text-[12.5px] leading-none text-demo-text"
     >
       {/* Each label drops where the longest of the cast's own ("Dr. Helen Ward · Northlake
-          Characterization Core") would otherwise be cut. */}
+          Characterization Core", with a count on Network view) would otherwise be cut. */}
       <div className="@container/who flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         <span className="mr-1 inline-flex h-5 shrink-0 items-center rounded-[4px] border border-demo-border px-1.5 font-mono text-[10px] font-medium tracking-[0.12em] text-demo-muted">
           DEMO
@@ -69,7 +69,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
         <BarButton
           label="Demo controls"
           help="demo-controls"
-          labelClassName="@max-[504px]/who:hidden"
+          labelClassName="@max-[640px]/who:hidden"
           onClick={() => {
             openDemoControls();
           }}
@@ -79,7 +79,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
           <BarButton
             label="Network view"
             help="network"
-            labelClassName="@max-[504px]/who:hidden"
+            labelClassName="@max-[640px]/who:hidden"
             onClick={() => {
               void navigate("/network");
             }}
@@ -100,10 +100,12 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
             <ActingAs member={session.member} />
             <Divider />
             {worldDate !== null && (
-              <span className="flex shrink-0 items-center gap-1.5 px-1.5" title="The world's date: the scenario's clock">
-                <CalendarDays size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
-                <span className="text-demo-muted @max-[770px]/who:hidden">World date</span>
-                <span className="font-medium tabular-nums">{formatWorldDate(worldDate)}</span>
+              <span
+                className="flex shrink-0 items-center gap-1 px-1.5 text-[11px] text-demo-muted tabular-nums"
+                title="World date: the scenario's clock"
+              >
+                <CalendarDays size={11} strokeWidth={1.75} aria-hidden />
+                {formatWorldDate(worldDate)}
               </span>
             )}
           </>
@@ -150,16 +152,16 @@ function ActingAs({ member }: { member: MemberView }) {
       title="The account you're acting as"
     >
       <Avatar name={member.name} seed={member.org.slug} size={18} />
-      <span className="text-demo-muted @max-[700px]/who:hidden">Acting as</span>
+      <span className="text-demo-muted @max-[836px]/who:hidden">Acting as</span>
       <span className="font-medium">{member.name}</span>
-      <span className="text-demo-muted @max-[412px]/who:hidden">
+      <span className="text-demo-muted @max-[461px]/who:hidden">
         ·{" "}
         {short === org ? (
           org
         ) : (
           <>
-            <span className="@max-[637px]/who:hidden">{org}</span>
-            <span className="hidden @max-[637px]/who:inline">{short}</span>
+            <span className="@max-[773px]/who:hidden">{org}</span>
+            <span className="hidden @max-[773px]/who:inline">{short}</span>
           </>
         )}
       </span>

@@ -329,6 +329,8 @@ class StorySpec(_Strict):
     suggested_message: Text
     # Ringed and tagged "Suggested" in the network view.
     suggested_recipients: list[Slug] = []
+    # Who's on the network, in a sentence: "What's on screen" shows it over every org.
+    network: Text | None = None
     steps: list[StoryStepSpec] = []
     humans: list[HumanRule] = []
 

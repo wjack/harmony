@@ -27,7 +27,15 @@ beforeEach(() => {
       disconnect(): void {}
     },
   );
-  demoStore.setState({ introOpen: false, controlsOpen: false, resetConfirmOpen: false, introHelp: false });
+  demoStore.setState({
+    introOpen: false,
+    controlsOpen: false,
+    resetConfirmOpen: false,
+    userGuide: false,
+    guideTip: false,
+    guideTipShown: false,
+    introHelp: false,
+  });
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     const box = BOXES[this.getAttribute("data-help") ?? ""];
     return box === undefined ? new DOMRect() : new DOMRect(...box);
@@ -54,6 +62,11 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
   ]) {
     expect(within(overlay).getByText(line)).toBeTruthy();
   }
+  // Who's on the network, by kind.
+  const network = within(overlay).getByRole("region", { name: "This network" });
+  expect(within(network).getByText(/^Battery materials research/)).toBeTruthy();
+  expect(within(network).getByText("7 organizations")).toBeTruthy();
+  expect(within(network).getByTitle("Northlake Characterization Core")).toBeTruthy();
   // A control that isn't on screen goes without its callout.
   const shown = within(overlay).getAllByRole("listitem");
   expect(shown).toHaveLength(5);
@@ -68,12 +81,54 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
     expect(document.activeElement).toBe(help);
   });
 
+  // Opened from the "?" itself, nothing points the "?" out.
+  expect(screen.queryByText("See this guide any time")).toBeNull();
+
   // Anywhere on it closes it too, the scrim included.
   fireEvent.click(help);
   fireEvent.click(await screen.findByRole("dialog", { name: "What's on screen" }));
   await waitFor(() => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+
+  dispatcher.stop();
+});
+
+it("opens from Demo controls' See user guide, in place of the modal", async () => {
+  const { dispatcher } = await renderLive(sessionAs(members.alex));
+
+  fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
+  const controls = await screen.findByRole("dialog", { name: "Demo controls" });
+  fireEvent.click(within(controls).getByRole("button", { name: "See user guide" }));
+
+  const overlay = await screen.findByRole("dialog", { name: "What's on screen" });
+  expect(within(overlay).getByText("This is the person and organization you're currently acting as.")).toBeTruthy();
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "Demo controls" })).toBeNull();
+  });
+
+  fireEvent.keyDown(overlay, { key: "Escape" });
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // The first time, a tip points at the "?", and its × dismisses it.
+  const tip = await screen.findByText("See this guide any time");
+  fireEvent.click(within(tip).getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => {
+    expect(screen.queryByText("See this guide any time")).toBeNull();
+  });
+
+  // Once is enough.
+  fireEvent.click(screen.getByRole("button", { name: "Demo controls" }));
+  fireEvent.click(
+    within(await screen.findByRole("dialog", { name: "Demo controls" })).getByRole("button", { name: "See user guide" }),
+  );
+  fireEvent.keyDown(await screen.findByRole("dialog", { name: "What's on screen" }), { key: "Escape" });
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  expect(screen.queryByText("See this guide any time")).toBeNull();
 
   dispatcher.stop();
 });
