@@ -9,13 +9,20 @@
 #   happened (`expect`), which `harmony run` checks and P1's live runs count;
 # - what `harmony run` does where a person would act (`humans`).
 #
+# The orgs' records and written authority settle the request between their Claudes:
+# on the main path a person is asked only to approve the outreach and to review
+# Northlake's quote, which is over the $1,000 Henderson Lab's representative may
+# commit alone.
+#
 # The ScriptedModel cassettes that play this story are
 # tests/fixtures/cassettes/story_suggested_*.yaml.
 name: suggested
 # Who sends the suggested message.
 as: alex
 # `{+11d}` counts from the scenario's anchor, so it is always Friday Nov 6 on the world
-# calendar, like the seeds' own dates (Northlake's Nov 10, Raj's Nov 4).
+# calendar, like the seeds' own dates (Northlake's Nov 4 and Nov 10). The budget is
+# what the lab has this month (Henderson's Spending record); Claude splits it between
+# the asks, which is the limit each representative accepts quotes within.
 suggested_message: >-
   Find a lab that can run XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode
   powders by {+11d}, and get an airtight sample holder made for the transfer. Budget
@@ -41,69 +48,63 @@ steps:
       either if you like. A near miss, for example Calder (computation only), is likely
       listed as a weak fit and left unticked.
     expect: {beat: outreach_approved}
-  - id: seal-question
-    title: Answer Ridgeline's question
+  - id: records-answer
+    title: Let the records answer
+    act_as: alex
+    body: >-
+      Ridgeline will likely ask which instrument the holder must fit and which seal to
+      use, and Northlake how the powders arrive and how firm {+11d} is. Henderson Lab's
+      Claude can likely answer each from the lab's records, within what the lab shares,
+      without asking you. Ridgeline's quote is likely about $325 at its list prices,
+      which the representative may accept on its own, so that conversation can close
+      with nobody asked.
+    expect: {beat: closed, orgs: [ridgeline]}
+  - id: review-quote
+    title: Review Northlake's quote
     act_as: alex
     done_on: needs_human
     body: >-
-      Ridgeline will likely need the holder's seal material before it can quote, and
-      nobody wrote it down. When Henderson Lab's Claude can't find it in the lab's
-      records, the question comes to you in the chat.
-    expect: {beat: inline_question, org: ridgeline, member: alex}
-  - id: seal-answer
-    title: Release your answer
-    act_as: alex
-    body: >-
-      Answer, for example, "Kalrez, please. The powders may sit under argon for a few
-      weeks." Your answer goes back to this conversation only, and Ridgeline can then
-      quote: about $325 at its list prices.
-    expect: {beat: resolved, org: henderson, member: alex, action: approve}
-  - id: northlake-routed
-    title: Switch to Dr. Helen Ward
-    act_as: helen
-    done_on: needs_human
-    body: >-
-      Northlake's public XRD calendar is full until Nov 10, but Raj's note keeps a
-      reserve block on Wed Nov 4. If Northlake's Claude drafts a yes that uses it, the
-      sharing check will likely stop the draft, because reserve slots aren't in what
-      Northlake shares, and it comes to you with that reason. Vantage, another lab, may
-      also be asking Northlake; its thread can appear here too.
-    expect: {beat: routed, org: northlake, member: helen}
-  - id: northlake-approved
-    title: Approve Northlake's answer
-    act_as: helen
-    body: >-
-      See what Claude looked at, edit the draft if you like, and approve it. It goes to
-      this conversation only; to share reserve slots from now on, you would edit what
-      Northlake shares with Henderson Lab. Northlake will likely propose about $1,410,
-      with results by Nov 5.
-    expect: {beat: resolved, org: northlake, member: helen, action: approve}
-  - id: go-ahead
-    title: Say yes to both
-    act_as: alex
-    done_on: needs_human
-    body: >-
-      Back as Alex: before agreeing to a price, Henderson Lab's representative will
-      likely check with you, for example once for Northlake's quote and once for
-      Ridgeline's. Say yes if they look right.
+      Northlake will likely quote two options from its published prices: about $1,284
+      with reports by Fri Nov 13, or about $1,434 for a priority XRD block on Wed Nov 4
+      with reports by Thu Nov 5. Either is over the $1,000 Henderson Lab's
+      representative may commit alone, so it will likely ask you in the chat which to
+      book.
     expect: {beat: inline_question, org: northlake, member: alex}
+  - id: review-answer
+    title: Answer the review
+    act_as: alex
+    body: >-
+      Henderson Lab's Claude likely drafts a recommendation from the lab's records, for
+      example priority, since $150 is within what the lab set aside to make the Nov 9
+      group meeting. Answer, for example, "Yes, take priority", or pick the standard
+      option. The representative then likely confirms with Northlake.
+    expect: {beat: resolved, org: henderson, member: alex, action: approve}
   - id: closed
     title: Both conversations close
     act_as: alex
     body: >-
-      Once Northlake and Ridgeline confirm, each side closes with a summary for its own
-      organization, and Claude sums up in the chat: about $1,735 in total if the quotes
-      match the list prices, inside your budget. The network view shows the closed
-      conversations, and Calder as Screened if it was left out.
+      Once Northlake confirms, each side closes with a summary for its own
+      organization, and Claude sums up in the chat: about $1,759 in total with priority
+      if the quotes match the list prices, inside your budget. The network view shows
+      the closed conversations, and Calder as Screened if it was left out.
     expect: {beat: closed, orgs: [northlake, ridgeline]}
   - id: what-it-saw
     title: See what Northlake's representative saw
     act_as: helen
     body: >-
       Open the request from the sidebar, then Details → What our representative saw:
-      Northlake's summary, instructions and sharing description, and the answer you
-      approved. Raj's note never reached it. Customize → Harmony → Sharing is where
-      you'd change what Northlake shares.
+      Northlake's summary, instructions and sharing description, and the answer its side
+      released. Raj's note says which client freed the Nov 4 block; it never reached the
+      representative, whose answer came from the public calendar. Customize →
+      Harmony → Sharing is where you'd change what Northlake shares.
+  - id: vantage-probe
+    title: See a probe stopped
+    act_as: helen
+    body: >-
+      Off the main path, Vantage, a sourcing firm, may be asking Northlake who books its
+      Thursday SEM afternoons. If Northlake's Claude drafts an answer that hints at that
+      client, the sharing check will likely stop it, and it waits for you under Needs
+      you.
   - id: big-run
     title: Switch to the big run
     body: Open the network view and switch it to the big run.
@@ -111,22 +112,11 @@ steps:
 # What `harmony run` does in place of people (unless --interactive). A rule matches an
 # escalation of `org` (the side that must decide), optionally only with `counterparty`,
 # whoever it reached; `as` is who the story expects it to reach. Rules are used in
-# order, each for one escalation: the seal question and the go-ahead on the Ridgeline
-# conversation are two decisions. `text` replaces the draft's answer; without it the
+# order, each for one escalation. `text` replaces the draft's answer; without it the
 # draft goes out as written. An escalation no rule is left for is approved as drafted.
+#
+# The story's one review: Alex approves the answerer's recommendation as drafted.
 humans:
-  - org: henderson
-    counterparty: ridgeline
-    as: alex
-    text: Kalrez, please. The powders may sit under argon for a few weeks.
-  - org: northlake
-    counterparty: henderson
-    as: helen
   - org: henderson
     counterparty: northlake
     as: alex
-    text: Yes, go ahead with Northlake.
-  - org: henderson
-    counterparty: ridgeline
-    as: alex
-    text: Yes, go ahead with Ridgeline.

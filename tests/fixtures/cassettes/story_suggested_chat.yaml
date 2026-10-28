@@ -7,8 +7,10 @@
 # and proposes the recipients, each with its own title and ask (the budget is split
 # between the asks, since each representative sees only its own conversation), with
 # Calder listed but not suggested: the outreach card pauses the turn at step 2, and it
-# resumes at step 3 once Alex approves, saying in one sentence that it's out. Turn 2 is
-# woken when the request closes (both conversations ended) and sums up in prose.
+# resumes at step 3 once Alex approves, saying in one sentence that it's out. The brief
+# lets each representative accept a list-price quote within its ask, and leaves the
+# holder's instrument and seal to Henderson Lab's records. Turn 2 is woken when the
+# request closes (both conversations ended) and sums up in prose.
 scenario: harmony-demo
 entries:
   - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 0}
@@ -37,26 +39,28 @@ entries:
         name: search_network
         input:
           need: >-
-            An airtight holder to carry air-sensitive powders under argon to a Bruker D8
-            powder XRD dome mount, delivered by Nov 3.
+            A sealed holder made to carry air-sensitive powders under argon from a
+            glovebox into an instrument for analysis, delivered by Nov 3.
   - match: {org: henderson, role: internal, thread: "chat:alex:1", turn: 1, step: 2}
     content:
       - type: thinking
         thinking: >-
           Northlake for the measurements and Ridgeline for the holder. Calder came up in
           both searches but only does computation. One brief for all: the sample class
-          and count but not the compositions, and a check with Alex before agreeing to
-          anything. Each organization's part and its share of the budget go in its ask.
+          and count but not the compositions. Each organization's part and its share of
+          the budget go in its ask; the representatives may accept list-price quotes
+          within them, and anything over $1,000 with one organization comes back to
+          Alex.
       - type: text
         text: |-
           Two organizations are strong fits:
 
-          - **Northlake Characterization Core** for the XRD and SEM/EDS: a shared-instrument facility with air-free dome holders, open to external academic users. Their summary says turnaround is usually 5–10 business days with priority service by arrangement, so Nov 6 is the open question.
+          - **Northlake Characterization Core** for the XRD and SEM/EDS: a shared-instrument facility with air-free handling, open to external academic users. Their summary says turnaround is usually 5–10 business days, with priority XRD blocks for a published fee, so Nov 6 may be possible.
           - **Ridgeline Fabrication** for the holder: they machine airtight sample holders and transfer vessels in 3–5 business days.
 
           Calder Computational came up too, but it's a weak fit: it does DFT and modelling only, with no lab instruments, so I'd leave it out. Bayside and Ostrander run XRD, but Bayside can't handle air-sensitive samples and Ostrander is booked through December. Granite machines parts, but not sealed ones.
 
-          Here's the Harmony Network Request I'd send. The brief shares the sample class and count and that the powders are air-sensitive, but not their compositions. Each organization gets its own ask, with its share of the budget kept to us: about $1,600 for the measurements and $400 for the holder. The representatives will check with you before agreeing to a price, a date or an order.
+          Here's the Harmony Network Request I'd send. The brief shares the sample class and count and that the powders are air-sensitive, but not their compositions. Each organization gets its own ask, with its share of the budget kept to us: about $1,600 for the measurements and $400 for the holder. The representatives may accept list-price quotes within those shares, and will check with you before committing more than $1,000 with any one organization.
       - type: tool_use
         name: send_network_request
         input:
@@ -66,16 +70,16 @@ entries:
 
             Henderson Lab (Dept. of Materials Science, Northlake University) needs two things:
             - Powder XRD and SEM/EDS on 12 layered-oxide sodium-ion cathode powders, with standard reports by Fri Nov 6.
-            - An airtight holder to carry the powders under argon to a Bruker D8 powder XRD dome mount, delivered to the lab before Tue Nov 3.
+            - A sealed holder made to carry the powders under argon for the transfer to the instruments, delivered before Tue Nov 3.
 
-            You may tell counterparties the sample class and count, that the powders are air-sensitive and kept under argon (no air exposure at any point), the instrument and mount, the dates, and the shipping address: Henderson Lab, Bldg 4, Northlake campus. Don't share the compositions, dopant fractions or any results.
+            You may tell counterparties the sample class and count, that the powders are air-sensitive and kept under argon (no air exposure at any point), and the dates. Don't share the compositions, dopant fractions or any results.
 
-            Ask for quotes with dates, and check with Alex before agreeing to a price, a date or an order.
+            Ask for quotes with dates. You may accept a quote at list price that fits these dates and the limit in your ask; check with Alex before committing more than $1,000 with any one organization.
           recipients:
             - org: northlake
               reason: >-
-                Powder XRD and SEM/EDS with air-free dome holders; priority service by
-                arrangement.
+                Powder XRD and SEM/EDS with air-free handling; priority XRD blocks for a
+                published fee.
               title: XRD and SEM/EDS quote
               ask: >-
                 Powder XRD and SEM/EDS on the 12 powders, with standard reports by Fri
@@ -88,8 +92,8 @@ entries:
                 Machines airtight sample holders and transfer vessels in 3–5 business days.
               title: Airtight holder quote
               ask: >-
-                An airtight holder to carry the 12 powders under argon to a Bruker D8 powder
-                XRD dome mount, delivered to the lab before Tue Nov 3: ask for a quote and a
+                A sealed holder made to carry the 12 powders under argon for the transfer
+                to the instruments, delivered before Tue Nov 3: ask for a quote and a
                 delivery date. Up to about $400 is acceptable; keep that figure to
                 yourself.
               suggested: true
@@ -121,13 +125,13 @@ entries:
     content:
       - type: thinking
         thinking: >-
-          $1,410 + $325 = $1,735, inside the ~$2,000 budget. The holder ships Oct 30,
-          before the powders must reach Northlake on Nov 3.
+          $1,434 + $325 = $1,759, inside the ~$2,000 budget. The holder reaches the core
+          on Nov 2, before the SEM work from Nov 3.
       - type: text
         text: |-
           Both are done, and together they cover the whole request:
 
-          - **Northlake Characterization Core** booked the powder XRD for the morning of Wed Nov 4 and the SEM/EDS from Tue Nov 3, with standard reports by Thu Nov 5, for **$1,410** at their external academic rates. Ship the 12 powders sealed under argon to arrive by Tue Nov 3.
-          - **Ridgeline Fabrication** is machining the airtight transfer holder with Kalrez seals for **$325**. It ships to the lab by Fri Oct 30, in time to load the powders and send them to Northlake.
+          - **Northlake Characterization Core** booked the powder XRD in a priority block on Wed Nov 4 and the SEM/EDS from Tue Nov 3, with standard reports by Thu Nov 5, for **$1,434** at their published academic prices (a 10% volume discount on each technique, plus the $150 priority fee). You chose priority over the $1,284 standard option. The 12 sealed vials go over by Tue Nov 3.
+          - **Ridgeline Fabrication** is making the sealed transfer holder for the SEM's airlock with a Kalrez seal for **$325**. It's delivered to the core on Mon Nov 2, in time for the SEM work.
 
-          That's **$1,735** in total, inside your $2,000 budget.
+          That's **$1,759** in total, inside your $2,000 budget.

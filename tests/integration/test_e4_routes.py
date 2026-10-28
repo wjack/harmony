@@ -924,7 +924,7 @@ async def test_members_read_and_admins_change_harmony_settings(
             None,
             1,
         )
-        assert trusted["sharing_description"].startswith("Our dome-holder dimensions")
+        assert trusted["sharing_description"].startswith("Our Apreo 2 airlock dimensions")
         version = settings["policy_version"]
         problem = await v.json(
             "PUT",

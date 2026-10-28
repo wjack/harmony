@@ -1,5 +1,7 @@
-# Ridgeline Fabrication, a responder (docs/SCENARIO.md). It needs the seal material
-# before it quotes an airtight part, and Henderson's brief and records leave it out.
+# Ridgeline Fabrication, a responder (docs/SCENARIO.md). It needs the instrument and the
+# seal material before it quotes an airtight part; Henderson Lab's records have both.
+# Its price list has the holder the story needs, so it quotes and confirms the order at
+# list price without asking anyone.
 slug: ridgeline
 name: Ridgeline Fabrication
 kind: fabrication
@@ -21,14 +23,14 @@ settings:
   instructions: >-
     You represent Ridgeline Fabrication. Before quoting an airtight part, make sure you
     have drawings or the instrument model, and the seal material. Consult the shop for
-    prices and lead times. You may confirm an order at list price and standard lead
-    time; consult for rush jobs or anything off the price list.
+    prices and lead times. You may confirm an order at list price, the published rush
+    included; consult only for work that isn't on the price list.
 
 policy:
   autonomy: auto
   sharing_description: >-
-    Prices, seal options and lead times from our price list, and what we need to quote
-    a part. Not: the shop's workload or other customers.
+    Prices, seal options, lead times and delivery from our price list, and what we
+    need to quote a part. Not: the shop's workload or other customers.
   routing_prompt: Everything goes to Dana.
   default_assignee: dana
 
@@ -41,9 +43,11 @@ knowledge:
     title: Price list
     kind: price-list
     body: >-
-      Airtight powder transfer holder for a Bruker D8 dome mount, aluminum body: $240,
-      4 business days. Seal options: Viton (included) or Kalrez (+$85, recommended for
-      long Ar storage). The seal material must be specified before machining.
+      Sealed SEM transfer holder for the Thermo Fisher Apreo 2 airlock, aluminum body:
+      $240, ready in 4 business days, Viton seal included. Kalrez seal in its place
+      +$85, recommended for long storage under argon. Free delivery on Northlake campus
+      the next business day after it's ready. Rush: ready in 3 business days for +$60,
+      when the lathe is free. Other holders and fixtures are quoted from drawings.
   - slug: shop-load
     title: Shop load
     kind: note

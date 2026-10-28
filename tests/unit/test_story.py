@@ -6,7 +6,7 @@ requests a world is seeded with (threads.yaml `requests`)."""
 from __future__ import annotations
 
 import shutil
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, get_args
 
@@ -27,6 +27,7 @@ from harmony.seeds.schema import (
     Closed,
     InlineQuestion,
     OrgSpec,
+    OutreachApproved,
     Resolved,
     Routed,
     ScenarioError,
@@ -86,33 +87,22 @@ def test_the_demo_story_loads_with_its_scenario() -> None:
     assert (story.name, story.member) == ("suggested", "alex")
     assert story.suggested_recipients == ["northlake", "ridgeline", "calder"]
     assert render_dates(story.suggested_message, scenario.spec.anchor).count("by Nov 6,") == 1
-    beats = {step.id: step.expect for step in story.steps}
-    assert beats["seal-question"] == InlineQuestion(
-        beat="inline_question", org="ridgeline", member="alex"
-    )
-    assert beats["seal-answer"] == Resolved(
-        beat="resolved", org="henderson", member="alex", action="approve"
-    )
-    assert beats["northlake-routed"] == Routed(beat="routed", org="northlake", member="helen")
-    assert beats["northlake-approved"] == Resolved(
-        beat="resolved", org="northlake", member="helen", action="approve"
-    )
-    assert beats["go-ahead"] == InlineQuestion(
-        beat="inline_question", org="northlake", member="alex"
-    )
-    assert beats["closed"] == Closed(beat="closed", orgs=["northlake", "ridgeline"])
-    # In order: the seal question and Ridgeline's go-ahead are two decisions.
-    assert [(r.org, r.counterparty, r.member, r.action, r.text) for r in story.humans] == [
-        (
-            "henderson",
-            "ridgeline",
-            "alex",
-            "approve",
-            "Kalrez, please. The powders may sit under argon for a few weeks.",
+    beats = {step.id: step.expect for step in story.steps if step.expect is not None}
+    # The main path asks a person twice: the outreach, and Alex's review of Northlake's
+    # quote. Ridgeline's conversation closes with nobody asked.
+    assert beats == {
+        "approve-outreach": OutreachApproved(beat="outreach_approved"),
+        "records-answer": Closed(beat="closed", orgs=["ridgeline"]),
+        "review-quote": InlineQuestion(beat="inline_question", org="northlake", member="alex"),
+        "review-answer": Resolved(
+            beat="resolved", org="henderson", member="alex", action="approve"
         ),
-        ("northlake", "henderson", "helen", "approve", None),
-        ("henderson", "northlake", "alex", "approve", "Yes, go ahead with Northlake."),
-        ("henderson", "ridgeline", "alex", "approve", "Yes, go ahead with Ridgeline."),
+        "closed": Closed(beat="closed", orgs=["northlake", "ridgeline"]),
+    }
+    assert not [b for b in beats.values() if isinstance(b, Routed)], "no one else's inbox"
+    # The one review: Alex approves the recommendation as drafted.
+    assert [(r.org, r.counterparty, r.member, r.action, r.text) for r in story.humans] == [
+        ("henderson", "northlake", "alex", "approve", None)
     ]
 
 
@@ -127,14 +117,22 @@ def test_the_story_hedges_what_live_models_may_do() -> None:
         "class and count, and each ask holds that organization's part and its limit. Edit "
         "either if you like."
     )
-    assert bodies["northlake-routed"].endswith(
-        "Vantage, another lab, may also be asking Northlake; its thread can appear here too."
-    )
     assert bodies["what-it-saw"].startswith(
         "Open the request from the sidebar, then Details → What our representative saw"
     )
-    for step_id in ("ask", "seal-question", "northlake-routed", "northlake-approved"):
+    for step_id in (
+        "ask",
+        "records-answer",
+        "review-quote",
+        "review-answer",
+        "vantage-probe",
+    ):
         assert "likely" in bodies[step_id], step_id
+    # The figures are the list prices', and the story says they're likely, not booked.
+    assert "about $325" in bodies["records-answer"]
+    assert "about $1,284" in bodies["review-quote"]
+    assert "about $1,434" in bodies["review-quote"]
+    assert "about $1,759" in bodies["closed"]
 
 
 def test_every_seeded_request_has_a_title() -> None:
@@ -178,18 +176,18 @@ def test_every_org_describes_itself_and_what_it_shares_in_prose(name: str) -> No
             assert member.profile.strip(), f"{org.slug}/{member.slug}"
 
 
-def test_northlake_shares_neither_reserve_slots_nor_other_clients_nor_discounts() -> None:
+def test_northlake_shares_its_published_terms_but_not_other_clients() -> None:
     northlake = _org(load_scenario("harmony-demo"), "northlake")
     assert _flat(northlake.policy.sharing_description) == (
-        "Our external academic price list, what is open on the public instrument "
-        "calendar, sample-prep and air-free handling requirements, and typical "
-        "turnaround. Not: other clients or their bookings, internal reserve slots, or "
-        "discounts."
+        "Our external academic price list and its published terms, what is open on the "
+        "public instrument calendar, sample-prep and air-free handling requirements, and "
+        "typical turnaround. Not: other clients or their bookings, staff notes, or "
+        "off-list pricing."
     )
 
 
 def test_the_trusted_organization_example_leaves_the_story_to_the_sharing_check() -> None:
-    """Northlake trusts Ridgeline with its holder specifications, in its default mode.
+    """Northlake trusts Ridgeline with its airlock dimensions, in its default mode.
     Henderson is trusted by no one, so its consults meet each org's default."""
     scenario = load_scenario("harmony-demo")
     trusted = [(org.slug, row) for org in scenario.orgs for row in org.trusted_organizations]
@@ -197,33 +195,71 @@ def test_the_trusted_organization_example_leaves_the_story_to_the_sharing_check(
         ("northlake", "ridgeline", None)
     ]
     ((_, row),) = trusted
-    assert "reserve" not in row.sharing_description.lower()
+    assert _flat(row.sharing_description).startswith("Our Apreo 2 airlock dimensions")
+    assert "Apreo 2 airlock" in _records(scenario, "northlake")["apreo-airlock"]
 
 
 def test_the_records_hold_what_the_story_turns_on() -> None:
-    """The cassettes' answerers read these: Henderson has no seal material on file,
-    Northlake's public calendar misses Nov 6 while Raj's note doesn't, and the list
-    prices add up to the quotes ($1,410 and $325, $1,735 together)."""
+    """The cassettes' answerers read these: Henderson's records answer what the
+    counterparties ask (instrument, seal, samples, dates), Northlake's published
+    calendar and terms give both options, and the list prices add up to the quotes
+    ($1,284 standard, $1,434 priority, $325, $1,759 with priority)."""
     scenario = load_scenario("harmony-demo")
-    henderson = " ".join(_records(scenario, "henderson").values()).lower()
-    for word in ("seal", "o-ring", "gasket", "kalrez", "viton"):
-        assert word not in henderson
+    henderson = _records(scenario, "henderson")
+    assert "Thermo Fisher Apreo 2 airlock, with a Kalrez seal" in henderson["transfer-holder"]
+    assert "about 150 mg each, are in crimp-sealed glass vials" in henderson["samples-handling"]
+    assert "alex.chen@henderson-lab.example" in henderson["samples-handling"]
+    dates = henderson["dates"]
+    assert "results by Fri Nov 6, for the group meeting on Mon Nov 9" in dates
+    assert "Results by Fri Nov 13 still work" in dates
+    assert "worth up to about $200 extra" in dates
+    assert "About $2,000 discretionary" in henderson["budget"]
+    assert "Alex reviews any single order over $1,000" in henderson["budget"]
+
     northlake = _records(scenario, "northlake")
-    assert "XRD fully booked until Nov 10" in northlake["public-calendar"]
-    assert "reserve XRD block on Wed Nov 4, 09:00–13:00" in northlake["reserve-xrd-block"]
-    assert "Powder XRD $45 per sample. SEM/EDS $60 per sample." in northlake["price-list"]
-    assert "Air-free transfer and handling $150 flat per batch." in northlake["price-list"]
-    assert (
-        "Academic users pay the external academic list price, priority slots included."
-        in (northlake["pricing-policy"])
-    )
-    assert 12 * 45 + 12 * 60 + 150 == 1_410
+    calendar = northlake["public-calendar"]
+    assert "Next standard XRD block: Tue Nov 10, with reports by Fri Nov 13." in calendar
+    priority = "Wed Nov 4, 09:00–13:00, for up to 14 powders, with reports by Thu Nov 5"
+    assert priority in calendar
+    prices = northlake["price-list"]
+    assert "Powder XRD $45 per sample. SEM/EDS $60 per sample." in prices
+    assert "Air-free transfer and handling $150 flat per batch." in prices
+    assert "10 or more samples on one technique get 10% off that technique" in prices
+    assert "a priority XRD block is a $150 flat fee" in prices
+    assert "Helen decides only off-list exceptions." in northlake["pricing-policy"]
+    # Who freed the Nov 4 block: a client, so it stays out of every answer.
+    assert "Voltaic" in northlake["nov-4-xrd-block"]
+    standard = (12 * 45 + 12 * 60) * 9 // 10 + 150
+    assert standard == 1_284
+    assert standard + 150 == 1_434
+
     ridgeline = _records(scenario, "ridgeline")["price-list"]
-    assert "$240, 4 business days" in ridgeline
-    assert "Kalrez (+$85" in ridgeline
-    assert 1_410 + 240 + 85 == 1_735
-    budget = _records(scenario, "henderson")["budget"]
-    assert "About $2,000 discretionary" in budget
+    assert "Apreo 2 airlock, aluminum body: $240, ready in 4 business days" in ridgeline
+    assert "Kalrez seal in its place +$85" in ridgeline
+    assert "Free delivery on Northlake campus the next business day" in ridgeline
+    assert 240 + 85 == 325
+    assert 1_434 + 325 == 1_759
+    # Ordered on the anchor, Mon Oct 26: ready Fri Oct 30, delivered Mon Nov 2.
+    assert (ANCHOR + timedelta(days=4), ANCHOR + timedelta(days=7)) == (
+        date(2026, 10, 30),
+        date(2026, 11, 2),
+    )
+
+
+def test_the_story_dates_fall_on_the_weekdays_the_content_names() -> None:
+    days = {
+        "Tue Nov 3": date(2026, 11, 3),
+        "Wed Nov 4": date(2026, 11, 4),
+        "Thu Nov 5": date(2026, 11, 5),
+        "Fri Nov 6": date(2026, 11, 6),
+        "Mon Nov 9": date(2026, 11, 9),
+        "Tue Nov 10": date(2026, 11, 10),
+        "Fri Nov 13": date(2026, 11, 13),
+        "Mon Nov 2": date(2026, 11, 2),
+    }
+    for name, day in days.items():
+        assert day.strftime("%a") == name[:3], name
+    assert ANCHOR.strftime("%a") == "Mon"
 
 
 def test_a_scenario_without_a_story_has_none(tmp_path: Path) -> None:

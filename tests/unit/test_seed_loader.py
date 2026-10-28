@@ -176,15 +176,16 @@ def test_the_demo_scenario_is_structurally_complete() -> None:
         assert any(item.kind == "price-list" for item in orgs[slug].knowledge), slug
     northlake = orgs["northlake"]
     assert northlake.policy.default_assignee == "helen"
-    # The sharing description keeps the reserve block out (SCENARIO.md); Ridgeline is
-    # the trusted organization example.
-    assert "internal reserve slots" in northlake.policy.sharing_description
+    # The sharing description keeps staff notes (Raj's note on the Nov 4 block) out
+    # (SCENARIO.md); Ridgeline is the trusted organization example.
+    assert "staff notes" in northlake.policy.sharing_description
     assert [row.org for row in northlake.trusted_organizations] == ["ridgeline"]
 
-    # The story depends on Henderson's knowledge never naming a seal material.
-    henderson_text = " ".join(item.body.lower() for item in orgs["henderson"].knowledge)
-    for word in ("seal", "gasket", "o-ring", "viton", "kalrez"):
-        assert word not in henderson_text
+    # The story depends on Henderson's records answering what Ridgeline asks: the
+    # instrument and the seal material.
+    henderson_text = " ".join(item.body for item in orgs["henderson"].knowledge)
+    for words in ("Apreo 2 airlock", "Kalrez"):
+        assert words in henderson_text
 
 
 def test_everyone_in_the_demo_is_an_admin() -> None:

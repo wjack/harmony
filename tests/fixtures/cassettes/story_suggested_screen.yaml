@@ -14,7 +14,7 @@ entries:
     content:
       - type: text
         text: >-
-          {"fit": "strong", "reason": "Shared-instrument core with powder XRD (Bruker D8, air-free dome holders) and SEM/EDS; turnaround 5–10 business days, priority service by arrangement."}
+          {"fit": "strong", "reason": "Shared-instrument core with powder XRD (Bruker D8, air-free dome holders) and SEM/EDS; turnaround 5–10 business days, priority XRD blocks for a published fee."}
   - match: {org: bayside, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text

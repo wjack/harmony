@@ -130,7 +130,7 @@ from tests.integration._e2_world import (
     MAYA,
     NORTHLAKE,
     RAJ,
-    RESERVE,
+    RAJS_NOTE,
     RIDGELINE,
     VANTAGE,
     Opened,
@@ -313,8 +313,8 @@ async def test_the_answerer_looks_records_up_then_drafts(
         await uow.commit()
     consult_id = await open_consult(sm, opened)
     looked_up = [
-        use("search_org_knowledge", "toolu_search", query="reserve XRD block"),
-        use("read_document", "toolu_read", id=f"kn:{RESERVE}"),
+        use("search_org_knowledge", "toolu_search", query="Nov 4 XRD block"),
+        use("read_document", "toolu_read", id=f"kn:{RAJS_NOTE}"),
     ]
     redrafted = {**DRAFT, "answer": "Nov 4, morning.", "needs_human": False}
     script = (
@@ -374,13 +374,13 @@ async def test_the_answerer_looks_records_up_then_drafts(
         assert expected in prompt, expected
     # Records reach the answerer through its tools, never in its prompt, and no Claude
     # reads comments (E3): Raj's stays out of both drafts.
-    reserve = await knowledge_body(sm, world, RESERVE)
-    assert reserve not in prompt
+    note = await knowledge_body(sm, world, RAJS_NOTE)
+    assert note not in prompt
     assert not [r for r in requests if "The Nov 4 block is still free." in canonical_json(r.body)]
     followed = requests[1].body["messages"]
     assert isinstance(followed, list)
     assert [m["role"] for m in followed] == ["user", "assistant", "user"]  # type: ignore[index]
-    assert reserve in canonical_json(followed[2])
+    assert note in canonical_json(followed[2])
     redraft = requests[2].body["messages"][0]["content"]  # type: ignore[index]
     assert isinstance(redraft, str)
     # The redraft sees the draft Helen reviewed, why it needed her and what she asked.
@@ -1733,18 +1733,18 @@ async def test_internal_claude_searches_and_reads_its_own_records(
     henderson, _ = internal(sm, opened)
 
     found = await northlake.execute(
-        call("search_org_knowledge", query="reserve XRD block"), step_idx=0
+        call("search_org_knowledge", query="Nov 4 XRD block"), step_idx=0
     )
     glovebox = await northlake.execute(call("search_org_knowledge", query="glovebox"), step_idx=0)
-    read = await northlake.execute(call("read_document", id=f"kn:{RESERVE}"), step_idx=0)
+    read = await northlake.execute(call("read_document", id=f"kn:{RAJS_NOTE}"), step_idx=0)
     document = await northlake.execute(call("read_document", id=f"doc:{document_id}"), step_idx=0)
-    foreign = await henderson.execute(call("read_document", id=f"kn:{RESERVE}"), step_idx=0)
+    foreign = await henderson.execute(call("read_document", id=f"kn:{RAJS_NOTE}"), step_idx=0)
 
     results = json.loads(found.result or "")["results"]
-    assert results[0]["id"] == f"kn:{RESERVE}"
+    assert results[0]["id"] == f"kn:{RAJS_NOTE}"
     assert set(results[0]) == {"id", "title", "kind", "excerpt"}
     assert f"doc:{document_id}" in {r["id"] for r in json.loads(glovebox.result or "")["results"]}
-    assert await knowledge_body(sm, world, RESERVE) in (read.result or "")
+    assert await knowledge_body(sm, world, RAJS_NOTE) in (read.result or "")
     assert "under argon" in (document.result or "")
     assert foreign.is_error
 

@@ -188,12 +188,12 @@ async def test_the_suggested_story_plays_and_every_firewall_holds(
 
     summary = chat.items[-1]
     assert isinstance(summary, AssistantTextItem), summary
-    assert "$1,735" in summary.markdown
+    assert "$1,759" in summary.markdown
     _assert_the_outreach(world)
     _assert_no_one_was_needed_before_the_approval(world)
-    _assert_ridgelines_question(world, chat)
-    _assert_northlakes_consult(world)
-    _assert_the_go_aheads(world, chat)
+    _assert_ridgeline_settled_from_the_records(world)
+    _assert_northlake_quoted_from_what_it_publishes(world)
+    _assert_alexs_review(world, chat)
     _assert_the_close_summaries(world)
     _assert_raj_never_got_access(world)
     _assert_the_firewall(world)
@@ -539,47 +539,41 @@ def _assert_no_one_was_needed_before_the_approval(world: World) -> None:
     assert min(adversary) > approved
 
 
-def _assert_ridgelines_question(world: World, chat: ConversationDetail) -> None:
-    """Ridgeline's question reached Alex in the chat; his answer went back and Ridgeline
-    quoted."""
+def _assert_ridgeline_settled_from_the_records(world: World) -> None:
+    """Ridgeline's questions were answered from Henderson Lab's records within what it
+    shares, Ridgeline quoted from its price list, and Henderson Lab's representative
+    accepted the list price on its own: nobody on either side was asked."""
     ridgeline = world.threads[RIDGELINE]
-    seal, _ = world.consults_on(ridgeline, HENDERSON)
-    escalation = world.escalation_of(seal)
-    assert escalation.assignees == [str(ALEX)]
-    assert _needs_human(world, escalation) == ["alex"]
-    action, text, by = _resolution(escalation)
-    assert (action, by) == ("approve", ALEX)
-    assert text is not None
-    assert text.startswith("Kalrez, please.")
-    assert seal.released_by == "member"
-    assert seal.released_text is not None
-    assert "Kalrez" in seal.released_text
-    inline = [
-        i
-        for i in chat.items
-        if isinstance(i, InlineQuestionItem) and i.escalation_id == escalation.id
-    ]
-    assert [(i.from_org.id, i.status, i.answer) for i in inline] == [(RIDGELINE, "resolved", text)]
+    assert not [e for e in world.escalations if e.thread_id == ridgeline.id]
+    [details] = world.consults_on(ridgeline, HENDERSON)
+    assert details.sharing_check is not None
+    assert details.sharing_check["within_sharing"] is True
+    assert details.released_by == "auto"
+    assert details.released_text is not None
+    assert "Apreo 2" in details.released_text
+    assert "Kalrez" in details.released_text
+    [quote] = world.consults_on(ridgeline, RIDGELINE)
+    assert quote.released_by == "auto"
     assert any("$325" in body for body in _said(world, ridgeline, RIDGELINE))
 
 
-def _assert_northlakes_consult(world: World) -> None:
-    """Northlake's draft failed the sharing check and went to Helen with that reason;
-    her approval released it to the Henderson conversation only."""
+def _assert_northlake_quoted_from_what_it_publishes(world: World) -> None:
+    """Northlake's answer came from its public calendar and price list, so the sharing
+    check passed and nobody at Northlake was asked. It was released to the Henderson
+    conversation only, and who freed the Nov 4 block stayed out."""
     northlake = world.threads[NORTHLAKE]
+    assert not [
+        e for e in world.escalations if e.thread_id == northlake.id and e.org_id == NORTHLAKE
+    ]
     [consult] = world.consults_on(northlake, NORTHLAKE)
     assert consult.sharing_check is not None
-    assert consult.sharing_check["within_sharing"] is False
-    reason = str(consult.sharing_check["reason"])
-    assert "reserve" in reason.lower()
-    escalation = world.escalation_of(consult)
-    assert escalation.assignees == [str(HELEN)]
-    assert _needs_human(world, escalation) == ["helen"]
-    action, _, by = _resolution(escalation)
-    assert (action, by) == ("approve", HELEN)
-    assert (consult.released_by, consult.released_by_member_id) == ("member", HELEN)
+    assert consult.sharing_check["within_sharing"] is True
+    assert (consult.released_by, consult.released_by_member_id) == ("auto", None)
     released = consult.released_text
     assert released is not None
+    assert "$1,284" in released
+    assert "$1,434" in released
+    assert CLIENT not in released
     # Released to this conversation only: Northlake's representative on this thread
     # read it, no other representative did, and Northlake's sharing didn't change.
     assert any(released in s for s in world.rep_requests[(NORTHLAKE, northlake.id)])
@@ -589,28 +583,37 @@ def _assert_northlakes_consult(world: World) -> None:
     assert not [
         t for t in world.trusted if t.org_id == NORTHLAKE and t.counterparty_org_id == HENDERSON
     ]
-    assert any("$1,410" in body for body in _said(world, northlake, NORTHLAKE))
+    northlake_said = _said(world, northlake, NORTHLAKE)
+    assert any("$1,434" in body for body in northlake_said)
+    assert not any(CLIENT in body for body in northlake_said)
 
 
-def _assert_the_go_aheads(world: World, chat: ConversationDetail) -> None:
-    """Henderson's representative checked with Alex before agreeing, once per thread."""
-    for org_id, expected in (
-        (NORTHLAKE, "Yes, go ahead with Northlake."),
-        (RIDGELINE, "Yes, go ahead with Ridgeline."),
-    ):
-        thread = world.threads[org_id]
-        go_ahead = world.consults_on(thread, HENDERSON)[-1]
-        escalation = world.escalation_of(go_ahead)
-        assert escalation.assignees == [str(ALEX)]
-        assert _resolution(escalation) == ("approve", expected, ALEX)
-        assert go_ahead.released_text is not None
-        assert expected in go_ahead.released_text
-        inline = [
-            i
-            for i in chat.items
-            if isinstance(i, InlineQuestionItem) and i.escalation_id == escalation.id
-        ]
-        assert [(i.from_org.id, i.status) for i in inline] == [(org_id, "resolved")]
+def _assert_alexs_review(world: World, chat: ConversationDetail) -> None:
+    """Henderson Lab's details went to Northlake from its records; Northlake's quote was
+    over the $1,000 its representative may commit alone, so it asked Alex in the chat.
+    He approved the recommendation as drafted, the only time anyone on the story's
+    request was asked, and the representative booked it."""
+    story = {thread.id for thread in world.threads.values()}
+    [escalation] = [e for e in world.escalations if e.thread_id in story]
+    northlake = world.threads[NORTHLAKE]
+    details, review = world.consults_on(northlake, HENDERSON)
+    assert details.released_by == "auto"
+    assert world.escalation_of(review) == escalation
+    assert escalation.assignees == [str(ALEX)]
+    assert _needs_human(world, escalation) == ["alex"]
+    assert _resolution(escalation) == ("approve", None, ALEX)
+    assert review.released_by == "member"
+    released = review.released_text
+    assert released is not None
+    assert "priority" in released
+    assert "$1,434" in released
+    inline = [
+        i
+        for i in chat.items
+        if isinstance(i, InlineQuestionItem) and i.escalation_id == escalation.id
+    ]
+    assert [(i.from_org.id, i.status) for i in inline] == [(NORTHLAKE, "resolved")]
+    assert any("priority" in body for body in _said(world, northlake, HENDERSON))
 
 
 def _assert_the_close_summaries(world: World) -> None:
@@ -647,7 +650,7 @@ def _assert_the_firewall(world: World) -> None:
     """No organization's record body reaches any representative request, except inside
     an answer its side released on that thread: one released elsewhere is a leak."""
     assert world.rep_requests, "no representative requests were read"
-    assert "Raj's note, reserve XRD block" in {title for title, _ in world.record_bodies}
+    assert "Raj's note, Nov 4 XRD block" in {title for title, _ in world.record_bodies}
     for (org_id, thread_id), strings in world.rep_requests.items():
         released = [
             c.released_text

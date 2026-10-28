@@ -296,7 +296,7 @@ def test_the_resumed_and_woken_turns_follow_the_card_and_the_close() -> None:
     summary = entry("internal", "henderson", CHAT, 2, 1)
     assert tool_calls(summary) == []
     text = text_of(summary)
-    for figure in ("$1,410", "$325", "$1,735", "Nov 5", "Oct 30"):
+    for figure in ("$1,434", "$325", "$1,759", "Nov 5", "Nov 2"):
         assert figure in text
     assert "Calder" not in text
 
@@ -337,16 +337,24 @@ def test_screener_verdicts_are_a_fit_and_a_reason(scenario: Scenario) -> None:
 
 def test_each_thread_plays_the_story_turn_by_turn() -> None:
     threads = "story_suggested_threads"
+    # Northlake asks for the details, Henderson's records answer, Northlake's side
+    # quotes both options, and the quote comes to the lab for review before Henderson
+    # books it.
     assert moves(NORTHLAKE, threads) == [
         ("henderson", 1, "send_message"),
-        ("northlake", 1, "consult"),
-        ("northlake", 2, "send_message"),
+        ("northlake", 1, "send_message"),
         ("henderson", 2, "consult"),
         ("henderson", 3, "send_message"),
+        ("northlake", 2, "consult"),
         ("northlake", 3, "send_message"),
-        ("northlake", 3, "close"),
-        ("henderson", 4, "close"),
+        ("henderson", 4, "consult"),
+        ("henderson", 5, "send_message"),
+        ("northlake", 4, "send_message"),
+        ("northlake", 4, "close"),
+        ("henderson", 6, "close"),
     ]
+    # Ridgeline asks for the instrument and seal, Henderson's records answer, and
+    # Henderson accepts the quote without consulting: it is within its authority.
     assert moves(RIDGELINE, threads) == [
         ("henderson", 1, "send_message"),
         ("ridgeline", 1, "send_message"),
@@ -354,11 +362,10 @@ def test_each_thread_plays_the_story_turn_by_turn() -> None:
         ("henderson", 3, "send_message"),
         ("ridgeline", 2, "consult"),
         ("ridgeline", 3, "send_message"),
-        ("henderson", 4, "consult"),
-        ("henderson", 5, "send_message"),
+        ("henderson", 4, "send_message"),
         ("ridgeline", 4, "send_message"),
         ("ridgeline", 4, "close"),
-        ("henderson", 6, "close"),
+        ("henderson", 5, "close"),
     ]
     # If a visitor ticks Calder on the card, it answers the modelling enquiry and closes.
     assert moves(CALDER, threads) == [
@@ -396,16 +403,19 @@ def test_prices_and_agreement_are_messages() -> None:
             for _, tool_input in tool_calls(e)
         )
 
-    assert "$1,410" in said("northlake", NORTHLAKE)
-    assert "reports by Thu Nov 5" in said("northlake", NORTHLAKE)
-    assert "Kalrez, please" in said("henderson", RIDGELINE)
+    northlake = said("northlake", NORTHLAKE)
+    for figure in ("$1,284", "reports by Fri Nov 13", "$1,434", "reports by Thu Nov 5"):
+        assert figure in northlake
+    assert "Apreo 2" in said("henderson", RIDGELINE)
+    assert "Kalrez" in said("henderson", RIDGELINE)
     assert "$325" in said("ridgeline", RIDGELINE)
-    assert "go ahead" in said("henderson", NORTHLAKE)
+    assert "Mon Nov 2" in said("ridgeline", RIDGELINE)
+    assert "priority option" in said("henderson", NORTHLAKE)
     assert "go ahead" in said("henderson", RIDGELINE)
 
 
 def test_each_side_closes_with_a_summary_for_its_own_org() -> None:
-    for thread, figure in ((NORTHLAKE, "$1,410"), (RIDGELINE, "$325")):
+    for thread, figure in ((NORTHLAKE, "$1,434"), (RIDGELINE, "$325")):
         closes = {
             e.match.org: str(tool_input["summary"])
             for e in entries("story_suggested_threads")
@@ -429,7 +439,9 @@ def test_representatives_never_hold_org_records() -> None:
     northlake = rep_said("northlake")
     for secret in ("~14 powders", "Raj", "Voltaic", "NDA", "standing"):
         assert secret not in northlake
-    assert "2,000" not in rep_said("henderson"), "the budget stays with the lab"
+    henderson = rep_said("henderson")
+    assert "2,000" not in henderson, "the budget stays with the lab"
+    assert "$200" not in henderson, "so does what making Nov 6 is worth"
 
 
 # --- Threads: answerers and the sharing check -----------------------------------------
@@ -482,33 +494,24 @@ def test_a_sharing_check_runs_exactly_where_auto_mode_needs_one(scenario: Scenar
     assert checked == needed
 
 
-def test_northlakes_reserve_slot_fails_the_sharing_check_and_goes_to_helen(
-    scenario: Scenario,
-) -> None:
-    northlake = org(scenario, "northlake")
-    assert "henderson" not in {row.org for row in northlake.trusted_organizations}
-    assert read_ids("northlake", NORTHLAKE)[:2] == [
-        record_ref("northlake", "public-calendar"),
-        record_ref("northlake", "reserve-xrd-block"),
+def test_henderson_answers_northlakes_questions_from_its_records(scenario: Scenario) -> None:
+    henderson = org(scenario, "henderson")
+    assert read_ids("henderson", NORTHLAKE) == [
+        record_ref("henderson", "samples-handling"),
+        record_ref("henderson", "transfer-holder"),
+        record_ref("henderson", "dates"),
     ]
-    answer = draft("northlake", NORTHLAKE)
+    answer = draft("henderson", NORTHLAKE)
     assert answer.needs_human is False
-    # Proposed although no person is needed: the sharing check may still call for one.
-    assert answer.route is not None
-    (assignee,) = answer.route.assignees
-    assert assignee.member == "helen"
-    assert "reserve-slot" in assignee.why
-    assert "Wed Nov 4" in answer.answer
-    assert "$1,410" in answer.answer
-    check = sharing_check("northlake", NORTHLAKE)
-    decision = decide(northlake.policy.autonomy, answer, check)
-    assert isinstance(decision, NeedsHuman)
-    assert decision.reason == "sharing_check"
-    assert "reserve" in decision.detail
-    assert "reserve-slot requests" in northlake.policy.routing_prompt
+    for detail in ("150 mg", "crimp-sealed", "Apreo 2", "Fri Nov 6", "Fri Nov 13"):
+        assert detail in answer.answer, detail
+    # What making Nov 6 is worth is the lab's budget: it stays out.
+    assert "$" not in answer.answer
+    decision = decide(henderson.policy.autonomy, answer, sharing_check("henderson", NORTHLAKE))
+    assert isinstance(decision, Release), decision
 
 
-def test_the_seal_question_comes_back_to_alex(scenario: Scenario) -> None:
+def test_henderson_answers_ridgelines_questions_from_its_records(scenario: Scenario) -> None:
     henderson = org(scenario, "henderson")
     queries = [
         str(tool_input["query"])
@@ -517,13 +520,40 @@ def test_the_seal_question_comes_back_to_alex(scenario: Scenario) -> None:
         if name == "search_org_knowledge"
     ]
     assert any("seal" in query for query in queries)
+    assert read_ids("henderson", RIDGELINE) == [record_ref("henderson", "transfer-holder")]
     answer = draft("henderson", RIDGELINE)
-    assert answer.needs_human
+    assert answer.needs_human is False
+    assert "Apreo 2" in answer.answer
+    assert "Kalrez" in answer.answer
+    # The other recipient's name stays out of what reaches Ridgeline.
+    assert org(scenario, "northlake").name not in answer.answer
+    decision = decide(henderson.policy.autonomy, answer, sharing_check("henderson", RIDGELINE))
+    assert isinstance(decision, Release), decision
+
+
+def test_northlakes_quote_is_published_so_nobody_is_asked(scenario: Scenario) -> None:
+    northlake = org(scenario, "northlake")
+    assert "henderson" not in {row.org for row in northlake.trusted_organizations}
+    assert read_ids("northlake", NORTHLAKE) == [
+        record_ref("northlake", "public-calendar"),
+        record_ref("northlake", "price-list"),
+        record_ref("northlake", "sem-air-free"),
+    ]
+    answer = draft("northlake", NORTHLAKE)
+    assert answer.needs_human is False
+    # Proposed although no person is needed: the sharing check may still call for one.
     assert answer.route is not None
-    assert [a.member for a in answer.route.assignees] == ["alex"]
-    decision = decide(henderson.policy.autonomy, answer, None)
-    assert isinstance(decision, NeedsHuman)
-    assert decision.reason == "needs_human"
+    (assignee,) = answer.route.assignees
+    assert assignee.member == "helen"
+    for figure in ("$1,284", "Tue Nov 10", "Fri Nov 13", "$1,434", "Wed Nov 4", "Thu Nov 5"):
+        assert figure in answer.answer, figure
+    # Who freed the Nov 4 block is Raj's note, and another client's business.
+    assert "Voltaic" not in answer.answer
+    assert "Raj" not in answer.answer
+    check = sharing_check("northlake", NORTHLAKE)
+    assert check.within_sharing
+    decision = decide(northlake.policy.autonomy, answer, check)
+    assert isinstance(decision, Release), decision
 
 
 def test_ridgelines_quote_is_within_what_it_shares(scenario: Scenario) -> None:
@@ -533,35 +563,49 @@ def test_ridgelines_quote_is_within_what_it_shares(scenario: Scenario) -> None:
     decision = decide(ridgeline.policy.autonomy, answer, sharing_check("ridgeline", RIDGELINE))
     assert isinstance(decision, Release), decision
     assert "$325" in decision.answer
+    assert "Mon Nov 2" in decision.answer
 
 
-@pytest.mark.parametrize(("thread", "turn"), [(NORTHLAKE, 1), (RIDGELINE, 2)])
-def test_each_go_ahead_reaches_alex_within_the_budget(thread: str, turn: int) -> None:
+def test_northlakes_quote_is_over_the_review_line_and_reaches_alex(scenario: Scenario) -> None:
     *_, question = (
         str(tool_input["question"])
         for e in entries("story_suggested_threads")
-        if (e.match.org, e.match.thread, e.match.role) == ("henderson", thread, "representative")
+        if (e.match.org, e.match.thread, e.match.role) == ("henderson", NORTHLAKE, "representative")
         for name, tool_input in tool_calls(e)
         if name == "consult"
     )
-    assert "$" in question
+    for figure in ("$1,284", "$1,434", "$1,000"):
+        assert figure in question, figure
     assert question.endswith("?")
-    answer = draft("henderson", thread, turn)
+    answer = draft("henderson", NORTHLAKE, 2)
     assert answer.needs_human
+    assert answer.needs_human_reason is not None
+    assert "$1,000" in answer.needs_human_reason
     assert answer.route is not None
     assert [a.member for a in answer.route.assignees] == ["alex"]
-    assert "budget" in answer.rationale
-    assert "2,000" not in answer.answer, "the answer may reach the counterparty"
+    # A recommendation from the lab's records: priority, within what making Nov 6 is
+    # worth. The figures behind it are for Alex; the answer may reach the counterparty.
+    assert "priority" in answer.answer
+    assert "$200" in answer.rationale
+    for private in ("2,000", "$200"):
+        assert private not in answer.answer, private
+    decision = decide(org(scenario, "henderson").policy.autonomy, answer, None)
+    assert isinstance(decision, NeedsHuman)
+    assert decision.reason == "needs_human"
 
 
-def test_the_story_humans_answer_the_questions_the_cassettes_ask(scenario: Scenario) -> None:
+def test_the_story_humans_approve_the_recommendation_as_drafted(scenario: Scenario) -> None:
     story = scenario.story
     assert story is not None
-    texts = [rule.text for rule in story.humans]
-    assert texts[0] is not None
-    assert "Kalrez" in texts[0]
-    # Helen approves Northlake's draft as written.
-    assert texts[1] is None
+    (rule,) = story.humans
+    assert (rule.org, rule.counterparty, rule.member, rule.action, rule.text) == (
+        "henderson",
+        "northlake",
+        "alex",
+        "approve",
+        None,
+    )
+    assert draft("henderson", NORTHLAKE, 2).answer.startswith("Book the priority option")
 
 
 # --- The adversary's open request -----------------------------------------------------
