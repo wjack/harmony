@@ -207,8 +207,9 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
               key={key}
               data-callout={key}
               // Laid out unseen first, to be measured; one with no room or no control stays so.
-              style={placed === undefined ? { visibility: "hidden" } : { left: placed.box.left, top: placed.box.top }}
-              className="absolute top-0 left-0 w-[216px] rounded-[8px] bg-demo px-3 py-2.5 text-[13px] leading-[18px] text-demo-text shadow-menu ring-1 ring-demo-border"
+              aria-hidden={placed === undefined}
+              style={placed === undefined ? undefined : { left: placed.box.left, top: placed.box.top }}
+              className={`absolute top-0 left-0 w-[216px] rounded-[8px] bg-demo px-3 py-2.5 text-[13px] leading-[18px] text-demo-text shadow-menu ring-1 ring-demo-border ${placed === undefined ? "invisible" : ""}`}
             >
               {name !== undefined && <span className="sr-only">{name}: </span>}
               <span>{text}</span>
