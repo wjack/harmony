@@ -121,7 +121,7 @@ export default [
   view(
     "A request, in the app",
     THREAD.henderson,
-    "Helen at Northlake. Claude's draft for Henderson Lab uses the internal reserve block, so the sharing check sent it to her. Change the wording in place, approve and send, decline, reassign, comment, or switch the box to Edit to tell Claude what to do differently; the fixtures are stateful.",
+    "Helen at Northlake. Claude's draft for Henderson Lab says which client freed the Nov 4 block, so the sharing check sent it to her. Change the wording in place, approve and send, decline, reassign, comment, or switch the box to Edit to tell Claude what to do differently; the fixtures are stateful.",
   ),
   {
     title: "Requests list",

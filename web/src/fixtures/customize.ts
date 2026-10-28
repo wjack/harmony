@@ -47,22 +47,23 @@ export const northlakeSettings: HarmonySettingsView = {
     "Northlake Characterization Core is the shared-instrument facility at Northlake University, open to external academic and industry users. " +
     "We run powder XRD (Bruker D8, with air-free dome holders), SEM with EDS, and XPS.\n\n" +
     "Ask us for quotes, scheduling and sample-prep requirements. We don't do synthesis, sample shipping, or data interpretation beyond our standard reports. " +
-    "Typical turnaround is 5–10 business days; priority by arrangement.",
+    "Typical turnaround is 5–10 business days, with priority XRD blocks for a published fee.",
   instructions:
     "Represent the Northlake Characterization Core to outside labs and companies. Be friendly, precise and brief.\n\n" +
     "Quote from the external academic price list. Never quote below it, and never mention another client by name.\n\n" +
-    "For priority requests, reserve slots or pricing exceptions, check with the team before you commit: Helen decides those. " +
+    "Once your side says a slot is open, you may confirm a booking at published prices. " +
+    "For off-list pricing exceptions, check with the team before you commit: Helen decides those. " +
     "For sample-prep and air-free handling questions, Raj is the expert.\n\n" +
     "If a request is outside our services (synthesis, shipping, interpretation), decline politely and say what we can do instead.",
   sharing_description:
-    "Our external academic price list, what is open on the public instrument calendar, sample-prep and air-free handling requirements, and typical turnaround. " +
-    "Not: other clients or their bookings, internal reserve slots, or discounts.",
+    "Our external academic price list and its published terms, what is open on the public instrument calendar, sample-prep and air-free handling requirements, and typical turnaround. " +
+    "Not: other clients or their bookings, staff notes, or off-list pricing.",
   autonomy: "auto",
   trusted_organizations: [
     trusted(
       orgs.pacific,
       null,
-      "Our full XRD calendar, including internal reserve blocks, so we can line up beamtime with lab time.",
+      "Our full XRD calendar, including blocks held for staff, so we can line up beamtime with lab time.",
       members.helen,
       12,
     ),
@@ -70,7 +71,7 @@ export const northlakeSettings: HarmonySettingsView = {
   ],
   directory_visibility: "public",
   routing_prompt:
-    "Instrument scheduling, priority or reserve-slot requests, and pricing exceptions go to Helen. " +
+    "Instrument scheduling and off-list pricing exceptions go to Helen. " +
     "Sample-prep and air-free handling questions go to Raj.",
   default_assignee: ref(members.helen),
   members: [
@@ -182,7 +183,7 @@ export interface CustomizeFixtureOptions {
 
 /** Their save, in the `conflict` scenario. */
 export const THEIR_SHARING =
-  "Our external academic price list, the public instrument calendar, sample-prep requirements and typical turnaround. Not: other clients, reserve slots or discounts.";
+  "Our external academic price list, the public instrument calendar, sample-prep requirements and typical turnaround. Not: other clients, staff notes or off-list pricing.";
 
 /**
  * Shell routes acting as `actingAs`, plus the Harmony settings and trusted-organization

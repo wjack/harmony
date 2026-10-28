@@ -3,7 +3,7 @@
  * (ARCHITECTURE.md §11.5, §11.6), and where answering it happens.
  *
  * A recipient's thread can wait on either side: the responder's team (Northlake asks
- * Helen) or the requester's own member (Henderson asks Alex about the seal). The API
+ * Helen) or the requester's own member (Henderson asks Alex to review a quote). The API
  * puts either on the recipient's node, so the side comes from the member's org.
  *
  * In the desk world `waiting_on` names only the acting member's own org, and only on a

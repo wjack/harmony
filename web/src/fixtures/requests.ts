@@ -1,8 +1,9 @@
 /**
  * The Requests inbox's fixtures: Northlake's side of the harmony-demo story
  * (docs/REVISION_UNSTRUCTURED.md §10). Helen's inbox holds Henderson Lab's XRD request,
- * where Claude's draft uses Raj's internal reserve block and the sharing check stops
- * it, and a reply to Vantage held for review because Northlake trusts Vantage on Ask.
+ * where Claude's draft says which client freed the Nov 4 block (from Raj's note) and the
+ * sharing check stops it, and a reply to Vantage held for review because Northlake
+ * trusts Vantage on Ask.
  * Beside them sit threads Claude is handling and ones already closed.
  *
  * The routes are a small in-memory server: resolving, reassigning, Edits, Reopen,
@@ -106,23 +107,23 @@ function read(title: string): ActivityLine {
 // --- Drafts ------------------------------------------------------------------------------
 
 export const HENDERSON_QUESTION =
-  "Can we run XRD on 12 air-sensitive powders before Nov 6? The public calendar is full until Nov 10.";
+  "Can we run XRD and SEM/EDS on 12 air-sensitive powders before Nov 6, and at what price?";
 
 /** The answerer's short form of the question, the decision card's title. */
 export const HENDERSON_SHORT_QUESTION =
   "Can we run all 12 by Nov 6, at what price, and how do we keep SEM samples inert?";
 
 const HENDERSON_ANSWER =
-  "Yes, we can fit them in. There's XRD time on the morning of Wednesday, Nov 4, and SEM/EDS is open that week, so results would be ready by Thursday, Nov 5.\n\n" +
-  "At our external academic list price that's $1,410: 12 × ($45 XRD + $60 SEM/EDS), plus $150 for air-free handling. " +
-  "The powders need to arrive sealed under argon by Tuesday, Nov 3; we load them in our glovebox into airtight dome holders.";
+  "Yes. Another client released our Wednesday, Nov 4 XRD block on Friday, so we can run your powders there, and SEM/EDS is open from Nov 3, so results would be ready by Thursday, Nov 5.\n\n" +
+  "At our published academic prices that's $1,434: 12 × $45 XRD and 12 × $60 SEM/EDS, each 10% off for 10 or more samples, plus $150 for air-free handling and the $150 priority fee. " +
+  "The powders need to arrive sealed under argon by Tuesday, Nov 3; we open the vials in our glovebox.";
 
 const HENDERSON_SHARING_REASON =
-  "The answer mentions an internal reserve XRD slot (Wed, Nov 4). Northlake shares what's open on the public calendar, not internal reserve slots.";
+  "The answer says another client released the Nov 4 XRD block. Northlake shares what's open on the public calendar, not other clients or their bookings.";
 
 /** Why routing gave Henderson's item to each member, in the answerer's words to them. */
 export const HENDERSON_WHY = {
-  helen: "you approve reserve-slot exceptions",
+  helen: "you schedule the instruments and their bookings",
   raj: "you run XRD and SEM",
 } as const;
 
@@ -134,14 +135,13 @@ export function hendersonDraft(createdAt: string): EscalationDraft {
     short_question: HENDERSON_SHORT_QUESTION,
     route: { assignees: [{ slug: "helen", why: HENDERSON_WHY.helen }] },
     rationale:
-      "The public calendar has XRD booked until Nov 10, so without the reserve block the honest answer is no. " +
-      "The reserve-slot schedule puts the block on Wed, Nov 4, 09:00 to 13:00, enough for about 14 powders. " +
-      "The price is the external academic list: 12 × ($45 + $60) + $150 = $1,410.",
+      "The public calendar has a priority XRD block open on Wed, Nov 4, 09:00 to 13:00, enough for about 14 powders; Raj's note says a client released it on Friday. " +
+      "The price is the published academic list: (12 × $45 + 12 × $60), 10% off each, plus $150 handling and the $150 priority fee = $1,434.",
     activity: [
       searched("XRD availability before Nov 6"),
       read("Public calendar"),
-      read("XRD reserve-slot schedule"),
-      read("External academic price list"),
+      read("Raj's note, Nov 4 XRD block"),
+      read("Price list, external academic"),
     ],
     rewritten_by: null,
     created_at: createdAt,
@@ -150,9 +150,9 @@ export function hendersonDraft(createdAt: string): EscalationDraft {
 
 /** Henderson's answer as Claude rewrites it after an Edit (the fixture can't think). */
 export const HENDERSON_REWRITE =
-  "Yes. We can run XRD on Wednesday, Nov 4 and SEM/EDS the same week, with results to you by Thursday, Nov 5. " +
-  "At list price that's $1,410 for all 12.\n\n" +
-  "Please ship the powders sealed under argon to arrive by Tuesday, Nov 3; we'll handle the glovebox transfer on our side.";
+  "Yes. We can run XRD in our priority block on Wednesday, Nov 4 and SEM/EDS from Nov 3, with results to you by Thursday, Nov 5. " +
+  "At our published academic prices that's $1,434 for all 12.\n\n" +
+  "Please bring the powders sealed under argon by Tuesday, Nov 3; we'll open them in our glovebox.";
 
 /** Vantage's held reply as Claude rewrites it after an Edit. */
 const VANTAGE_REWRITE =
@@ -438,13 +438,13 @@ function hendersonThread({ at }: Clock): ThreadRecord {
         "agent",
         "Hello from Claude for Henderson Lab, writing for Alex Chen in Prof. Maya Henderson's group.\n\n" +
           "We need powder XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders (layered oxides), with results by Friday, Nov 6. " +
-          "The samples have to stay under argon; we can ship them sealed.\n\n" +
-          "Your public calendar shows XRD booked until Nov 10. Is there any way to fit them in before Nov 6, and what would it cost?",
+          "The samples have to stay under argon; we can bring them over sealed.\n\n" +
+          "Can you run both before Nov 6, and what would it cost?",
         at(12),
         "1",
       ),
     ],
-    access: [routed(helen), shared(raj, helen, "Can you run the reserve block on Wednesday?")],
+    access: [routed(helen), shared(raj, helen, "Can you run the priority block on Wednesday?")],
     consults: [
       consult(CONSULT.henderson, HENDERSON_QUESTION, at(11), {
         status: "needs_human",
@@ -462,7 +462,7 @@ function hendersonThread({ at }: Clock): ThreadRecord {
         seq: 1,
         author_kind: "member",
         author: helen,
-        body: "@raj can you run the reserve block on Wednesday morning? It'd be 12 powders.",
+        body: "@raj can you run the priority block on Wednesday morning? It'd be 12 powders.",
         mentions: [raj],
         created_at: at(7),
       },

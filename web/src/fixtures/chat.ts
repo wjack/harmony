@@ -81,9 +81,9 @@ export const brief = [
   "",
   "Henderson Lab needs powder XRD and SEM/EDS on 12 layered-oxide cathode powders (Na–Mn–Fe–Ni–O family), with results by Nov 6. The powders are stored under argon and take up moisture within minutes in air, so they need air-free handling from unpacking to measurement.",
   "",
-  "We also need an airtight powder holder for a Bruker D8 dome mount, so the samples can go to the diffractometer without exposure.",
+  "We also need a sealed holder made to carry the powders under argon for the transfer to the instruments, delivered before Nov 3.",
   "",
-  "Please reply with what you can do, the price and the turnaround. The samples can ship to arrive by Nov 3.",
+  "Please reply with what you can do, the price and the dates. Alex can bring the samples over by Nov 3.",
 ].join("\n");
 
 /** The request's name for Alex, as `story_suggested_chat.yaml` has Claude write it. */
@@ -100,16 +100,16 @@ export const cardRecipients: CardRecipient[] = [
     fit: "strong",
     reason: "Powder XRD and SEM/EDS, and they load air-sensitive powders in their own glovebox.",
     title: "XRD and SEM/EDS quote",
-    ask: "Quote powder XRD and SEM/EDS on all 12 powders, loaded air-free, with results by Nov 6. Keep it under $1,600; above that, check with Alex first.",
+    ask: "Quote powder XRD and SEM/EDS on all 12 powders, loaded air-free, with results by Nov 6. Up to about $1,600; check with Alex before committing more than $1,000.",
     suggested: true,
     selected: true,
   },
   {
     org: orgs.ridgeline,
     fit: "strong",
-    reason: "Machines airtight holders for Bruker D8 dome mounts in about 4 business days.",
+    reason: "Machines airtight sample holders and transfer vessels in 3–5 business days.",
     title: "Airtight holder quote",
-    ask: "Quote one airtight powder holder for a Bruker D8 dome mount, with the seal options and lead time. Keep it under $400.",
+    ask: "Quote one sealed transfer holder for the powders, with the seal options and a delivery date before Nov 3. Keep it under $400.",
     suggested: true,
     selected: true,
   },
@@ -137,9 +137,9 @@ export const redraftBrief = brief.replace(
 
 const REDRAFT_ASKS: Readonly<Record<string, string>> = {
   [orgs.northlake.id]:
-    "Quote powder XRD and SEM/EDS on all 12 powders, opened from their sealed argon vials and loaded air-free, with results by Nov 6. Keep it under $1,600; above that, check with Alex first.",
+    "Quote powder XRD and SEM/EDS on all 12 powders, opened from their sealed argon vials and loaded air-free, with results by Nov 6. Up to about $1,600; check with Alex before committing more than $1,000.",
   [orgs.ridgeline.id]:
-    "Quote one airtight powder holder for a Bruker D8 dome mount: which seal materials they supply, what each costs and the lead time. Keep it under $400.",
+    "Quote one sealed transfer holder for the powders: which seal materials they supply, what each costs and the delivery date. Keep it under $400.",
 };
 
 export const REDRAFT_REPLY =
@@ -156,7 +156,7 @@ export const screened: ScreenedCounts = { total: 14, strong: 2, possible: 4, no:
 /** What Alex answers, unless a gallery visitor types something else. */
 export const ANSWERS = {
   seal: "Kalrez, please. The powders may sit under argon for a few weeks.",
-  northlake: "Yes, go ahead with Northlake.",
+  northlake: "Yes, take priority.",
   ridgeline: "Yes, go ahead with Ridgeline, with the Kalrez seal.",
 } as const;
 
@@ -201,7 +201,7 @@ export const SEARCHES = [
     need: "Powder XRD and SEM/EDS on 12 air-sensitive cathode powders, loaded air-free, results by Nov 6",
     outcome: "1 strong, 2 possible of 14",
   },
-  { need: "An airtight powder holder for a Bruker D8 dome mount", outcome: "1 strong, 1 possible of 14" },
+  { need: "A sealed holder to carry the powders under argon to the instruments", outcome: "1 strong, 1 possible of 14" },
 ] as const;
 
 /** Running, the line reads as BE4 builds it: present tense, nothing found yet. */
@@ -211,7 +211,7 @@ export const FIRST_REPLY = [
   "I screened the network and found two organizations that fit, plus one near miss:",
   "",
   "- **Northlake Characterization Core** runs powder XRD and SEM/EDS, and loads air-sensitive powders in its own glovebox.",
-  "- **Ridgeline Fabrication** machines airtight holders for the Bruker D8 dome mount in about 4 business days.",
+  "- **Ridgeline Fabrication** machines airtight sample holders and transfer vessels in 3–5 business days.",
   "- **Calder Computational** only does computation, so I've left it unticked.",
   "",
   "The brief tells them the sample count, the Nov 6 date and that the powders are air-sensitive, and leaves out the dopant compositions. Each organization's ask carries its share of your budget, which only your representative sees. Here it is for your OK.",
@@ -220,10 +220,10 @@ export const FIRST_REPLY = [
 export const CLOSING_SUMMARY = [
   "Both are booked:",
   "",
-  "- **Northlake** runs XRD and SEM/EDS on all 12 powders for **$1,410**, with results by Nov 6. Ship the powders sealed under argon to arrive by Nov 3.",
-  "- **Ridgeline** makes the airtight holder with a Kalrez seal for **$325**, shipping in 4 business days.",
+  "- **Northlake** runs XRD in its Wed Nov 4 priority block and SEM/EDS from Nov 3 on all 12 powders for **$1,434**, with reports by Nov 5. Bring the sealed vials over by Nov 3.",
+  "- **Ridgeline** makes the sealed transfer holder with a Kalrez seal for **$325**, delivered to the core on Nov 2.",
   "",
-  "That's **$1,735** in total, inside your $2,000 budget.",
+  "That's **$1,759** in total, inside your $2,000 budget.",
 ].join("\n");
 
 /** How a card was turned down: its Decline, with an optional reason, or a message typed while it waited. */
@@ -320,7 +320,7 @@ const NORTHLAKE_GO_AHEAD: QuestionSpec = {
   threadId: NORTHLAKE_THREAD_ID,
   from: orgs.northlake,
   question:
-    "Northlake proposes $1,410 for XRD and SEM/EDS on all 12 powders, with results by Nov 6. The powders would need to arrive by Nov 3, sealed under argon. Go ahead?",
+    "Northlake quotes two options for XRD and SEM/EDS on all 12 powders: standard, $1,284 with reports by Nov 13, or priority, $1,434 with reports by Nov 5. Both are over the $1,000 I may commit alone. Which should I book?",
   askedAt: "go_ahead",
   answeredBy: "closed",
   answer: ANSWERS.northlake,
@@ -331,7 +331,7 @@ const RIDGELINE_GO_AHEAD: QuestionSpec = {
   escalationId: RIDGELINE_GO_AHEAD_ID,
   threadId: RIDGELINE_THREAD_ID,
   from: orgs.ridgeline,
-  question: "Ridgeline quotes $325 for the airtight holder with a Kalrez seal, shipping in 4 business days. Go ahead?",
+  question: "Ridgeline quotes $325 for the sealed transfer holder with a Kalrez seal, delivered Nov 2. Go ahead?",
   askedAt: "go_ahead",
   answeredBy: "closed",
   answer: ANSWERS.ridgeline,
@@ -520,24 +520,24 @@ export const LINES = {
   northlakeOpening:
     "Henderson Lab needs powder XRD and SEM/EDS on 12 air-sensitive Na-ion cathode powders, with results by Nov 6.",
   ridgelineOpening:
-    "Henderson Lab needs an airtight powder holder for a Bruker D8 dome mount, for air-sensitive powders.",
+    "Henderson Lab needs a sealed holder made to carry 12 air-sensitive powders under argon into an instrument.",
   northlakeChecking: "Thanks. Let me check the XRD calendar for a slot before Nov 6 and come back to you.",
   ridgelineAsks:
     "Happy to make it. Which seal should it use: Viton, included, or Kalrez for $85 more? We recommend Kalrez for long storage.",
-  ridgelineQuote: "With a Kalrez seal the holder is $325 in total, and it ships in 4 business days.",
+  ridgelineQuote: "With a Kalrez seal the holder is $325 in total, delivered to the core on Mon Nov 2.",
   northlakeQuote:
-    "We can meet Nov 6: XRD on the morning of Wed Nov 4 and SEM/EDS from Nov 3, $1,410 for all 12 powders.",
-  northlakeConfirmed: "Confirmed. Please ship the 12 powders sealed under argon to arrive by Tue Nov 3.",
-  ridgelineConfirmed: "Confirmed. We'll start the holder today and ship it in 4 business days.",
+    "Standard is $1,284 with reports by Fri Nov 13; priority, with the XRD in the Wed Nov 4 block, is $1,434 with reports by Thu Nov 5.",
+  northlakeConfirmed: "Booked the priority option. Please bring the 12 sealed vials by Tue Nov 3.",
+  ridgelineConfirmed: "Confirmed. We'll start the holder today and deliver it to the core on Mon Nov 2.",
 } as const;
 
 export const SUMMARIES = {
   henderson: {
-    northlake: "Booked XRD and SEM/EDS on 12 powders for $1,410, results by Nov 6. Ship under argon by Nov 3.",
-    ridgeline: "Ordered the airtight holder with a Kalrez seal for $325, shipping in 4 business days.",
+    northlake: "Booked XRD and SEM/EDS on 12 powders for $1,434, XRD in the Nov 4 priority block, reports by Nov 5.",
+    ridgeline: "Ordered the sealed transfer holder with a Kalrez seal for $325, delivered to the core on Nov 2.",
   },
-  northlake: "Henderson Lab booked XRD and SEM/EDS on 12 powders for $1,410, using the Wed Nov 4 slot.",
-  ridgeline: "Henderson Lab ordered one airtight D8 holder with a Kalrez seal, $325.",
+  northlake: "Henderson Lab booked XRD and SEM/EDS on 12 powders for $1,434, in the Wed Nov 4 priority block.",
+  ridgeline: "Henderson Lab ordered one Apreo 2 transfer holder with a Kalrez seal, $325.",
 } as const;
 
 function recipient(

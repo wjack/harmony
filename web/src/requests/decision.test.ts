@@ -78,7 +78,7 @@ describe("cardTitle", () => {
 describe("reasonLine", () => {
   it("says why the item needs a person, and nothing when it's only Ask mode", () => {
     const { escalation } = item(THREAD.henderson);
-    expect(reasonLine(escalation)).toMatch(/^The answer mentions an internal reserve XRD slot/);
+    expect(reasonLine(escalation)).toMatch(/^The answer says another client released the Nov 4 XRD block/);
     // A held message in Ask mode: the card's foot already says which mode.
     expect(reasonLine(item(THREAD.vantage).escalation)).toBeNull();
     expect(reasonLine({ ...escalation, reason: "  " })).toBeNull();
@@ -116,7 +116,7 @@ describe("lookedAtSummary", () => {
     const [rev] = item(THREAD.henderson).escalation.drafts;
     if (rev === undefined) throw new Error("no draft");
     expect(lookedAtSummary(rev)).toBe(
-      "XRD availability before Nov 6 · Public calendar · XRD reserve-slot schedule · External academic price list",
+      "XRD availability before Nov 6 · Public calendar · Raj's note, Nov 4 XRD block · Price list, external academic",
     );
     const untitled = { ...rev, activity: [{ tool: "read_document", label: "Read a document", detail: null }] };
     expect(lookedAtSummary(untitled)).toBe("Read a document");

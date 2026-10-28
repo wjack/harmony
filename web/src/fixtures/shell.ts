@@ -182,7 +182,7 @@ export const inbox: Inbox = {
       "XRD and SEM/EDS for 12 air-sensitive powders",
       orgs.henderson,
       "Can you run XRD before Nov 6?",
-      "The draft uses the reserve block on Wed Nov 4, which isn't in what Northlake shares, so a person decides.",
+      "The draft says which client freed the Nov 4 block, which isn't in what Northlake shares, so a person decides.",
       3,
     ),
     inboxItem(

@@ -500,7 +500,7 @@ describe("the decision card", () => {
     expect(within(decision).getByText("Claude needs your answer before replying to Henderson Lab")).toBeTruthy();
     expect(within(decision).getByRole("heading", { level: 2 }).textContent).toBe(HENDERSON_SHORT_QUESTION);
     expect(
-      within(decision).getByText(/Northlake shares what's open on the public calendar, not internal reserve slots\.$/),
+      within(decision).getByText(/Northlake shares what's open on the public calendar, not other clients or their bookings\.$/),
     ).toBeTruthy();
     expect(button(decision, "Reassign")).toBeTruthy();
 
@@ -509,7 +509,7 @@ describe("the decision card", () => {
     const lookedAt = within(decision).getByRole("region", { name: "What Claude looked at" });
     const line = within(lookedAt).getByRole("button", { name: /^Looked at: / });
     expect(line.textContent).toBe(
-      "Looked at: XRD availability before Nov 6 · Public calendar · XRD reserve-slot schedule · External academic price list",
+      "Looked at: XRD availability before Nov 6 · Public calendar · Raj's note, Nov 4 XRD block · Price list, external academic",
     );
     fireEvent.click(line);
     expect(within(lookedAt).getAllByRole("listitem")).toHaveLength(4);
