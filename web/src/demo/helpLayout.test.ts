@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { placeCallouts, type Box, type CalloutSpec } from "./helpLayout";
+import { placeCallouts, RING, ringDistance, type Box, type CalloutSpec } from "./helpLayout";
 
 const box = (left: number, top: number, right: number, bottom: number): Box => ({ left, top, right, bottom });
 
@@ -79,5 +79,25 @@ describe("placeCallouts", () => {
     const placed = (key: string) => placements.find((placement) => placement.key === key)?.box;
     expect(placed("network")?.top).toBeGreaterThan(31);
     expect(placed("requests")?.left).toBeGreaterThan(264);
+  });
+
+  it.each(WINDOWS)("keeps neighboring rings apart in $name", ({ viewport, specs, obstacles }) => {
+    // The demo bar's buttons sit 4 px apart, closer than two full rings.
+    const rings = placeCallouts(specs, viewport, obstacles).map((placement) => placement.ring);
+    for (const [i, ring] of rings.entries()) {
+      for (const other of rings.slice(i + 1)) expect(overlaps(ring, other)).toBe(false);
+    }
+  });
+});
+
+describe("ringDistance", () => {
+  it("rings controls with room in full, and close ones less, the same for all", () => {
+    expect(ringDistance([box(0, 0, 100, 24), box(120, 0, 200, 24)])).toBe(RING);
+    expect(ringDistance([box(0, 0, 100, 24), box(108, 0, 200, 24)])).toBe(2);
+    // Controls 4 px apart are ringed at their edges; overlapping ones too.
+    expect(ringDistance([box(0, 0, 100, 24), box(104, 0, 200, 24)])).toBe(0);
+    expect(ringDistance([box(0, 0, 100, 24), box(90, 0, 200, 24)])).toBe(0);
+    // Far apart one way is apart, however they line up the other.
+    expect(ringDistance([box(0, 0, 100, 24), box(50, 200, 150, 224)])).toBe(RING);
   });
 });

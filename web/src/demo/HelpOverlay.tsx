@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 import { useRealtime } from "../app/context";
 import type { RealtimeStatus } from "../realtime/dispatcher";
-import { grow, placeCallouts, RING, type Box, type Placement, type Side, type Size } from "./helpLayout";
+import { placeCallouts, type Box, type Placement, type Side, type Size } from "./helpLayout";
 import { finishIntroHelp, useDemoState } from "./store";
 
 interface Callout {
@@ -174,8 +174,8 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
         <defs>
           <mask id="help-spotlight">
             <rect width="100%" height="100%" fill="white" />
-            {placements.map(({ key, target }) => (
-              <rect key={key} {...ringRect(target)} fill="black" />
+            {placements.map(({ key, target, ring }) => (
+              <rect key={key} {...ringRect(target, ring)} fill="black" />
             ))}
           </mask>
           <marker
@@ -191,9 +191,9 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
           </marker>
         </defs>
         <rect width="100%" height="100%" mask="url(#help-spotlight)" className="fill-scrim/60" />
-        {placements.map(({ key, target, arrow }) => (
+        {placements.map(({ key, target, ring, arrow }) => (
           <g key={key} strokeWidth={1.5} className="fill-none stroke-accent">
-            <rect {...ringRect(target)} />
+            <rect {...ringRect(target, ring)} />
             <path d={arrow} strokeDasharray="4 4" markerEnd="url(#help-arrowhead)" />
           </g>
         ))}
@@ -232,9 +232,12 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
   );
 }
 
-function ringRect(target: Box) {
-  const { left, top, right, bottom } = grow(target, RING);
-  return { x: left, y: top, width: right - left, height: bottom - top, rx: 8 };
+/** The demo bar's buttons round their corners this much. */
+const CORNER = 6;
+
+/** The ring as an SVG rect, its corners concentric with the control's. */
+function ringRect(target: Box, { left, top, right, bottom }: Box) {
+  return { x: left, y: top, width: right - left, height: bottom - top, rx: CORNER + target.left - left };
 }
 
 function firstOnScreen(elements: NodeListOf<Element>, viewport: Size): Box | null {

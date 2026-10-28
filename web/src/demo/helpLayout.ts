@@ -4,7 +4,8 @@
  * moves only as far as it must to stay clear of the other callouts, every control,
  * every arrow and the viewport's edges, sooner aside than further out, so the bar's
  * callouts keep to one row while they fit. One that finds no room is left out: an
- * extra one first, since they are placed last.
+ * extra one first, since they are placed last. Every ring sits the same distance out
+ * from its control, closer in where two controls are too close for two full rings.
  */
 
 /** Viewport pixels, as `getBoundingClientRect()` gives them. */
@@ -35,6 +36,8 @@ export interface CalloutSpec extends Size {
 export interface Placement {
   key: string;
   target: Box;
+  /** The ring drawn around the control. */
+  ring: Box;
   /** The callout, at its measured size. */
   box: Box;
   /** The arrow's SVG path, from the callout to its control. */
@@ -54,8 +57,10 @@ interface Curve {
   to: Point;
 }
 
-/** The ring's distance outside its control. */
+/** The ring's distance outside its control, where its neighbors leave room. */
 export const RING = 4;
+/** Kept between two controls' rings, so each reads as its own. */
+const APART = 4;
 /** Between a control and its callout, where the arrow runs. */
 const GAP = 36;
 /** Kept clear around callouts and controls. */
@@ -67,8 +72,8 @@ const REACH = 240;
 const STEP = 12;
 /** An arrow leaves its callout at least this far from a corner. */
 const INSET = 20;
-/** Its head stops this far short of the control, just outside the ring. */
-const TIP = RING + 3;
+/** Its head stops this far outside the ring. */
+const TIP = 3;
 /** Where along an arrow it is checked for running into things. */
 const SAMPLES = Array.from({ length: 15 }, (_, i) => (i + 1) / 16);
 
@@ -98,23 +103,41 @@ export function placeCallouts(
     (a, b) => Number(a.extra === true) - Number(b.extra === true) || edgeRoom(a, viewport) - edgeRoom(b, viewport),
   );
   const keepOff = [...specs.map((spec) => spec.target), ...obstacles].map((box) => grow(box, SPACE));
+  const ring = ringDistance(specs.map((spec) => spec.target));
   for (const spec of order) {
-    const others = specs.filter((other) => other !== spec).map((other) => grow(other.target, RING));
+    const others = specs.filter((other) => other !== spec).map((other) => grow(other.target, ring));
     for (const box of candidates(spec, viewport)) {
       if (keepOff.some((other) => overlaps(box, other))) continue;
       if (placed.some((other) => overlaps(box, grow(other.box, SPACE)))) continue;
       // Neither its arrow nor an earlier one may cross a callout or another control.
-      const curve = arrowCurve(spec, box);
+      const curve = arrowCurve(spec, box, ring + TIP);
       const arrow = SAMPLES.map((t) => pointOn(curve, t));
       const crossed = [...others, ...placed.map((other) => grow(other.box, RING))];
       if (arrow.some((point) => crossed.some((other) => contains(other, point)))) continue;
       if (placed.some((other) => other.arrow.some((point) => contains(grow(box, RING), point)))) continue;
       placed.push({ box, arrow });
-      placements.push({ key: spec.key, target: spec.target, box, arrow: pathOf(curve) });
+      placements.push({ key: spec.key, target: spec.target, ring: grow(spec.target, ring), box, arrow: pathOf(curve) });
       break;
     }
   }
   return placements;
+}
+
+/**
+ * How far outside its control every ring sits: `RING`, or less, down to none, where two
+ * controls are closer than two rings and `APART` between them.
+ */
+export function ringDistance(targets: readonly Box[]): number {
+  let distance = RING;
+  for (const [i, a] of targets.entries()) {
+    for (const b of targets.slice(i + 1)) distance = Math.min(distance, (separation(a, b) - APART) / 2);
+  }
+  return Math.max(0, distance);
+}
+
+/** The gap between two boxes, across or down, whichever is wider; below zero when they overlap. */
+function separation(a: Box, b: Box): number {
+  return Math.max(b.left - a.right, a.left - b.right, b.top - a.bottom, a.top - b.bottom);
 }
 
 export function grow(box: Box, by: number): Box {
@@ -151,14 +174,14 @@ function* candidates({ side, target, width, height }: CalloutSpec, viewport: Siz
  * From the callout's edge facing the control to just outside its ring: straight when
  * they line up, else an S that leaves and arrives square to each.
  */
-function arrowCurve({ side, target }: CalloutSpec, box: Box): Curve {
+function arrowCurve({ side, target }: CalloutSpec, box: Box, tip: number): Curve {
   if (side === "below") {
-    const to = { x: (target.left + target.right) / 2, y: target.bottom + TIP };
+    const to = { x: (target.left + target.right) / 2, y: target.bottom + tip };
     const from = { x: clamp(to.x, box.left + INSET, box.right - INSET), y: box.top };
     const bend = (from.y - to.y) / 2;
     return { from, c1: { x: from.x, y: from.y - bend }, c2: { x: to.x, y: to.y + bend }, to };
   }
-  const to = { x: target.right + TIP, y: (target.top + target.bottom) / 2 };
+  const to = { x: target.right + tip, y: (target.top + target.bottom) / 2 };
   const from = { x: box.left, y: clamp(to.y, box.top + INSET, box.bottom - INSET) };
   const bend = (from.x - to.x) / 2;
   return { from, c1: { x: from.x - bend, y: from.y }, c2: { x: to.x + bend, y: to.y }, to };
