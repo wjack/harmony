@@ -112,7 +112,9 @@ CONSULT_TOOL: Final[ToolDefinition] = {
                 "type": "string",
                 "description": (
                     "A self-contained question: what you need and why, with the details "
-                    "of the conversation that matter."
+                    "of the conversation that matter. A person may read it, so lay it "
+                    "out: a one-line lead saying what you need, then short paragraphs, "
+                    "with each separate question on its own line."
                 ),
             }
         },
