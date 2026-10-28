@@ -13,9 +13,9 @@ members:
 
 settings:
   public_summary: >-
-    Calder Computational runs DFT and machine-learned potentials for battery materials:
-    structure prediction, and voltage and stability screening, in about two weeks. We
-    have no laboratory instruments.
+    Calder Computational runs finite-element and topology-optimization studies for
+    lattice and frame designs: stiffness, strength and fatigue-life predictions, in
+    about two weeks. We have no laboratory instruments.
   instructions: >-
     You represent Calder Computational. Be clear that we do computation only and have
     no laboratory instruments. Consult for rates, scheduling and anything else.
@@ -31,12 +31,12 @@ knowledge:
   - slug: about
     title: About Calder
     kind: profile
-    body: Computational materials screening for battery developers. No lab instruments.
+    body: Simulation of lattice and frame designs for product developers. No lab instruments.
   - slug: services-and-rates
     title: Services and rates
     kind: price-list
-    body: DFT screening $900 per composition family; turnaround 2 weeks.
+    body: Finite-element study $900 per lattice design family; turnaround 2 weeks.
   - slug: capacity
     title: Compute capacity
     kind: note
-    body: Cluster allocation renews Nov 15; until then we can take one new family a week.
+    body: Cluster allocation renews Nov 15; until then we can take one new study a week.

@@ -157,7 +157,7 @@ class Escalation:
     thread_id: UUID
     question: str
     reason: str
-    # Henderson Lab's review of Northlake's quote.
+    # Henderson Frame Lab's review of Northlake's quote.
     review: bool = False
     kind: EscalationKind = "consult"
     resolution: ResolveEscalation | None = None
@@ -171,12 +171,12 @@ class Escalation:
 class FakeStory:
     """A world that plays the suggested story as the backend would, a poll at a time.
 
-    Once the outreach is approved, Henderson Lab's review of Northlake's quote reaches
+    Once the outreach is approved, Henderson Frame Lab's review of Northlake's quote reaches
     its assignee (Alex, in the chat), and on the next poll Ridgeline's thread closes with
     nobody asked. Once the review is answered, Northlake's thread closes. Once every
     thread has closed the request closes, and on the next poll Claude sums up.
 
-    As in the real contract, a request's `waiting_on` names only Henderson Lab's own
+    As in the real contract, a request's `waiting_on` names only Henderson Frame Lab's own
     assignees, an inline question shows only the chat owner's escalations, and an
     inbox's `needs_you` only the acting member's: the player finds an escalation on
     Northlake's side by reading Northlake's members' inboxes.
@@ -204,7 +204,7 @@ class FakeStory:
     stalled: bool = False
     # Claude never sums up once the request closes.
     silent: bool = False
-    # Who Henderson Lab's review of Northlake's quote is routed to.
+    # Who Henderson Frame Lab's review of Northlake's quote is routed to.
     review_assignee: str = "alex"
     # A Northlake member its side asks before it quotes, off the story's path.
     northlake_asks: str | None = None
@@ -392,7 +392,7 @@ class FakeStory:
             else:
                 self._review()
             return
-        # Ridgeline's questions were answered from Henderson Lab's records, and its quote
+        # Ridgeline's questions were answered from Henderson Frame Lab's records, and its quote
         # was within what the representative may accept.
         self.ended.setdefault("ridgeline", "closed")
         for e in list(self.escalations.values()):
@@ -474,7 +474,7 @@ class FakeStory:
 
     def _recipient(self, slug: str) -> RecipientStatus:
         """As `domain.requests.status` builds it: an ended thread first, then an open
-        escalation on either side; `waiting_on` names Henderson Lab's assignees only. A
+        escalation on either side; `waiting_on` names Henderson Frame Lab's assignees only. A
         recipient without a thread (Calder, here) is only screened."""
         thread = self.threads.get(slug)
         if thread is None:
@@ -1162,9 +1162,9 @@ def openers() -> dict[str, str]:
 
 def test_the_opener_patterns_pass_the_cassette_openers() -> None:
     said = openers()
-    # Henderson Lab's own affiliation and its powders' handling are its own business.
+    # Henderson Frame Lab's own affiliation and its coupons' test order are its own business.
     assert "Northlake University" in said["ridgeline"]
-    assert "air-free handling" in said["northlake"]
+    assert "the CT has to come first" in said["northlake"]
     assert opener_leak("harmony-demo", "northlake", said["northlake"]) is None
     assert opener_leak("harmony-demo", "ridgeline", said["ridgeline"]) is None
     assert opener_leak("harmony-demo", "calder", said["calder"]) is None
@@ -1173,15 +1173,15 @@ def test_the_opener_patterns_pass_the_cassette_openers() -> None:
 @pytest.mark.parametrize(
     ("recipient", "opener", "leak"),
     [
-        ("ridgeline", "We also need SEM/EDS on the powders.", "EDS"),
+        ("ridgeline", "We also need compression tests on the coupons.", "compression"),
         (
             "ridgeline",
-            "Northlake's characterization core will run the XRD.",
+            "Northlake's characterization core will run the CT.",
             "characterization core",
         ),
-        ("ridgeline", "We need XRD on 12 powders and a holder.", "XRD on 12"),
+        ("ridgeline", "Northlake Characterization Core scans them.", "Northlake Characteri"),
         ("northlake", "Ridgeline is making the holder.", "Ridgeline"),
-        ("northlake", "We're having a transfer holder machined.", "holder"),
+        ("northlake", "We're having a stacked holder machined.", "holder"),
     ],
 )
 def test_the_opener_patterns_catch_another_recipients_part(
@@ -1192,7 +1192,7 @@ def test_the_opener_patterns_catch_another_recipients_part(
 
 _TURN = UUID(int=21)
 _CARD_CALL = "toolu_card"
-_NOTHING_NEW_TEXT = "No new message from Henderson Lab since your last turn."
+_NOTHING_NEW_TEXT = "No new message from Henderson Frame Lab since your last turn."
 
 
 def _empty(step_idx: int, *opening: dict[str, JsonValue], notices: bool = False) -> EmptyEndTurn:
@@ -1529,7 +1529,7 @@ def test_a_poller_from_an_exited_local_process_is_stale() -> None:
         (["harmony-demo", "--live", "--worker", "external"], "drop --worker external"),
         (["harmony-demo", "--worker", "elsewhere"], "in-process or external"),
         (["harmony-demo", "--as", "maya"], "the cassettes play alex's chat (chat:alex:1)"),
-        (["harmony-demo", "--as", "helen", "--live"], "the story is Henderson Lab's request"),
+        (["harmony-demo", "--as", "helen", "--live"], "the story is Henderson Frame Lab's request"),
         (["harmony-demo", "--as", "nobody"], "play it as one of alex, maya"),
         (["harmony-demo", "--message", "Book it by {someday}"], "--message:"),
         (["harmony-demo", "--message", "Hi", "--as", "nobody"], "no member 'nobody'"),

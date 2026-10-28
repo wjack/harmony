@@ -252,10 +252,10 @@ def test_the_chat_searches_once_per_part_then_proposes_the_request(scenario: Sce
     title = brief_title(request.brief)
     assert request.brief.startswith(title + "\n\n")
     assert len(title) <= 80
-    # The sample class and count, never the compositions (Henderson's records).
-    assert "12 layered-oxide sodium-ion cathode powders" in request.brief
-    assert "Mg/Ti" not in request.brief
-    assert "NaₓMn" not in request.brief
+    # The coupon class and count, never the designs (Henderson's records).
+    assert "12 lattice coupons, 20 mm cubes printed in Ti-6Al-4V titanium" in request.brief
+    assert "strut thickness" not in request.brief
+    assert "cell size" not in request.brief
 
 
 def test_the_request_has_a_title_and_each_recipient_its_own_title_and_ask() -> None:
@@ -264,14 +264,14 @@ def test_the_request_has_a_title_and_each_recipient_its_own_title_and_ask() -> N
     suggested."""
     (call,) = tool_calls(entry("internal", "henderson", CHAT, 1, 2))
     request = SendNetworkRequestInput.model_validate(call[1])
-    assert request.title == "Cathode characterization and holder"
+    assert request.title == "Lattice coupon testing and holder"
     rows = {r.org: r for r in request.recipients}
     assert {org: (r.title, r.suggested) for org, r in rows.items()} == {
-        "northlake": ("XRD and SEM/EDS quote", True),
-        "ridgeline": ("Airtight holder quote", True),
+        "northlake": ("CT and compression quote", True),
+        "ridgeline": ("CT holder quote", True),
         "calder": ("Modelling support enquiry", False),
     }
-    assert "XRD and SEM/EDS" in rows["northlake"].ask
+    assert "CT scans and compression tests" in rows["northlake"].ask
     assert "holder" in rows["ridgeline"].ask
     assert "modelling" in rows["calder"].ask
     # No combined budget anywhere a representative reads it: a share in each ask.
@@ -353,7 +353,7 @@ def test_each_thread_plays_the_story_turn_by_turn() -> None:
         ("northlake", 4, "close"),
         ("henderson", 6, "close"),
     ]
-    # Ridgeline asks for the instrument and seal, Henderson's records answer, and
+    # Ridgeline asks for the instrument and tube, Henderson's records answer, and
     # Henderson accepts the quote without consulting: it is within its authority.
     assert moves(RIDGELINE, threads) == [
         ("henderson", 1, "send_message"),
@@ -406,8 +406,8 @@ def test_prices_and_agreement_are_messages() -> None:
     northlake = said("northlake", NORTHLAKE)
     for figure in ("$1,284", "reports by Fri Nov 13", "$1,434", "reports by Thu Nov 5"):
         assert figure in northlake
-    assert "Apreo 2" in said("henderson", RIDGELINE)
-    assert "Kalrez" in said("henderson", RIDGELINE)
+    assert "Xradia 620 Versa" in said("henderson", RIDGELINE)
+    assert "carbon-fiber" in said("henderson", RIDGELINE)
     assert "$325" in said("ridgeline", RIDGELINE)
     assert "Mon Nov 2" in said("ridgeline", RIDGELINE)
     assert "priority option" in said("henderson", NORTHLAKE)
@@ -437,7 +437,7 @@ def test_representatives_never_hold_org_records() -> None:
         for item in spec.knowledge:
             assert " ".join(item.body.split()) not in said, (spec.slug, item.slug)
     northlake = rep_said("northlake")
-    for secret in ("~14 powders", "Raj", "Voltaic", "NDA", "standing"):
+    for secret in ("14 coupons", "Raj", "Voltaic", "NDA", "standing"):
         assert secret not in northlake
     henderson = rep_said("henderson")
     assert "2,000" not in henderson, "the budget stays with the lab"
@@ -497,13 +497,13 @@ def test_a_sharing_check_runs_exactly_where_auto_mode_needs_one(scenario: Scenar
 def test_henderson_answers_northlakes_questions_from_its_records(scenario: Scenario) -> None:
     henderson = org(scenario, "henderson")
     assert read_ids("henderson", NORTHLAKE) == [
-        record_ref("henderson", "samples-handling"),
-        record_ref("henderson", "transfer-holder"),
+        record_ref("henderson", "coupons"),
+        record_ref("henderson", "ct-holder"),
         record_ref("henderson", "dates"),
     ]
     answer = draft("henderson", NORTHLAKE)
     assert answer.needs_human is False
-    for detail in ("150 mg", "crimp-sealed", "Apreo 2", "Fri Nov 6", "Fri Nov 13"):
+    for detail in ("engraved", "Xradia 620 Versa", "carbon-fiber", "Fri Nov 6", "Fri Nov 13"):
         assert detail in answer.answer, detail
     # What making Nov 6 is worth is the lab's budget: it stays out.
     assert "$" not in answer.answer
@@ -519,12 +519,12 @@ def test_henderson_answers_ridgelines_questions_from_its_records(scenario: Scena
         for name, tool_input in tool_calls(e)
         if name == "search_org_knowledge"
     ]
-    assert any("seal" in query for query in queries)
-    assert read_ids("henderson", RIDGELINE) == [record_ref("henderson", "transfer-holder")]
+    assert any("tube" in query for query in queries)
+    assert read_ids("henderson", RIDGELINE) == [record_ref("henderson", "ct-holder")]
     answer = draft("henderson", RIDGELINE)
     assert answer.needs_human is False
-    assert "Apreo 2" in answer.answer
-    assert "Kalrez" in answer.answer
+    assert "Xradia 620 Versa" in answer.answer
+    assert "carbon-fiber" in answer.answer
     # The other recipient's name stays out of what reaches Ridgeline.
     assert org(scenario, "northlake").name not in answer.answer
     decision = decide(henderson.policy.autonomy, answer, sharing_check("henderson", RIDGELINE))
@@ -537,7 +537,7 @@ def test_northlakes_quote_is_published_so_nobody_is_asked(scenario: Scenario) ->
     assert read_ids("northlake", NORTHLAKE) == [
         record_ref("northlake", "public-calendar"),
         record_ref("northlake", "price-list"),
-        record_ref("northlake", "sem-air-free"),
+        record_ref("northlake", "compression-testing"),
     ]
     answer = draft("northlake", NORTHLAKE)
     assert answer.needs_human is False
@@ -679,7 +679,14 @@ EDITS = (
         "Don't say who books the afternoons. Just say they aren't available.",
         ("Voltaic", "NDA", "standing", "confidential"),
     ),
-    Edit("ridgeline", RIDGELINE, "henderson", 1, "Let's not give the Kalrez option", ("Kalrez",)),
+    Edit(
+        "ridgeline",
+        RIDGELINE,
+        "henderson",
+        1,
+        "Let's not give the carbon-fiber option",
+        ("carbon",),
+    ),
 )
 
 

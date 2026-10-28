@@ -16,7 +16,7 @@ import {
   redraftBrief,
   REQUEST_ID,
   RIDGELINE_GO_AHEAD_ID,
-  SEAL_QUESTION_ID,
+  TUBE_QUESTION_ID,
   SENT_REPLY,
   TURN,
 } from "../fixtures/chat";
@@ -164,11 +164,11 @@ describe("the outreach card's ticks", () => {
     const card = cardWith(cardRecipients);
     const draft = {
       ...initialDraft(card),
-      asks: { [northlake.org.id]: "Quote XRD only.", [ridgeline.org.id]: `${ridgeline.ask ?? ""} `, [calder.org.id]: "Hi" },
+      asks: { [northlake.org.id]: "Quote the CT only.", [ridgeline.org.id]: `${ridgeline.ask ?? ""} `, [calder.org.id]: "Hi" },
     };
     expect(approveBody(card, draft)).toEqual({
       recipients: [northlake.org.id, ridgeline.org.id],
-      asks: { [northlake.org.id]: "Quote XRD only." },
+      asks: { [northlake.org.id]: "Quote the CT only." },
     });
     expect(hasEdits(card, draft)).toBe(true);
     expect(hasEdits(card, initialDraft(card))).toBe(false);
@@ -412,9 +412,9 @@ describe("summarize", () => {
     const items = conversationAt(initialState("drafted")).items.slice(1, 5) as Parameters<typeof summarize>[0];
     expect(items.some((item) => item.type === "thinking_summary")).toBe(true);
     expect(summarize(items).text).toBe("Searched the network for 2 needs and your records");
-    expect(summarize([need("XRD"), need("XRD")]).text).toBe("Searched the network twice");
-    expect(summarize([need("XRD"), need("A holder"), need("XRD")]).text).toBe("Searched the network 3 times");
-    expect(summarize([need("XRD"), records]).text).toBe("Searched the network and your records");
+    expect(summarize([need("CT"), need("CT")]).text).toBe("Searched the network twice");
+    expect(summarize([need("CT"), need("A holder"), need("CT")]).text).toBe("Searched the network 3 times");
+    expect(summarize([need("CT"), records]).text).toBe("Searched the network and your records");
   });
 
   it("says what it thought in a step without tools, unless the reply opens with the same words", () => {
@@ -427,16 +427,16 @@ describe("summarize", () => {
   });
 
   it("shows one step with its outcome, never its detail", () => {
-    expect(summarize([need("XRD on 12 powders", "1 strong, 2 possible of 14")]).text).toBe(
+    expect(summarize([need("CT on 12 coupons", "1 strong, 2 possible of 14")]).text).toBe(
       "Searched the Harmony network · 1 strong, 2 possible of 14",
     );
-    expect(summarize([need("XRD on 12 powders")]).text).toBe("Searched the Harmony network");
+    expect(summarize([need("CT on 12 coupons")]).text).toBe("Searched the Harmony network");
   });
 
   it("joins the searches with the other steps, a repeated one named once with its count", () => {
     const checked = tool("Checked on the request", "done", { name: "get_request_status" });
     const read = tool("Read a document", "error", { name: "read_document" });
-    expect(summarize([need("XRD"), need("A holder"), records, checked, checked, read])).toEqual({
+    expect(summarize([need("CT"), need("A holder"), records, checked, checked, read])).toEqual({
       text: "Searched the network for 2 needs and your records, checked on the request twice and 1 more step",
       running: false,
       failed: true,
@@ -485,17 +485,17 @@ describe("live updates", () => {
 
   it("watches the questions the conversation shows", () => {
     expect(watchedIds(conversationAt(initialState("go_ahead")).items)).toEqual(
-      [SEAL_QUESTION_ID, NORTHLAKE_GO_AHEAD_ID, RIDGELINE_GO_AHEAD_ID].sort(),
+      [TUBE_QUESTION_ID, NORTHLAKE_GO_AHEAD_ID, RIDGELINE_GO_AHEAD_ID].sort(),
     );
   });
 
   it("refetches the conversation for its own entities only", () => {
-    const watched = new Set([SEAL_QUESTION_ID]);
+    const watched = new Set([TUBE_QUESTION_ID]);
     expect(concernsConversation(snapshot("conversation", CONVERSATION_ID), CONVERSATION_ID, watched)).toBe(true);
     expect(
       concernsConversation(snapshot("card", OUTREACH_CARD_ID, { conversation_id: CONVERSATION_ID }), CONVERSATION_ID, watched),
     ).toBe(true);
-    expect(concernsConversation(snapshot("escalation", SEAL_QUESTION_ID), CONVERSATION_ID, watched)).toBe(true);
+    expect(concernsConversation(snapshot("escalation", TUBE_QUESTION_ID), CONVERSATION_ID, watched)).toBe(true);
     expect(concernsConversation(snapshot("escalation", "someone-else"), CONVERSATION_ID, watched)).toBe(false);
     expect(concernsConversation(snapshot("conversation", "another"), CONVERSATION_ID, watched)).toBe(false);
   });

@@ -74,8 +74,8 @@ from tests.integration._worlds import demote_to_member
 
 THREAD_KEY = "rep-turn"  # the cassette's thread (tests/fixtures/cassettes/rep_turn.yaml)
 OPENING = (
-    "Hello, this is Claude for Henderson Lab. We need powder XRD on 12 air-sensitive "
-    "sodium-ion cathode powders by Nov 6. Can you help?"
+    "Hello, this is Claude for Henderson Frame Lab. We need CT scans and compression tests on "
+    "12 titanium lattice coupons by Nov 6. Can you help?"
 )
 HENDERSON, NORTHLAKE = demo_id("org", "henderson"), demo_id("org", "northlake")
 WAIT_S = 30.0
@@ -106,7 +106,7 @@ async def _stage(app: FastAPI, settings: Settings, sm: Sessionmaker) -> Stage:
                 world_id=world_id,
                 id=request_id,
                 requester_org_id=HENDERSON,
-                brief="Powder XRD on 12 air-sensitive cathode powders by Nov 6",
+                brief="CT and compression tests on 12 lattice coupons by Nov 6",
                 created_by_member_id=demo_id("member", "alex"),
             )
         )

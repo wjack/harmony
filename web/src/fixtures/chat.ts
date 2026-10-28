@@ -50,7 +50,7 @@ export const REDRAFT_CARD_ID = id("5c2");
 export const REQUEST_ID = id("6a1");
 export const NORTHLAKE_THREAD_ID = id("6b1");
 export const RIDGELINE_THREAD_ID = id("6b2");
-export const SEAL_QUESTION_ID = id("6e2");
+export const TUBE_QUESTION_ID = id("6e2");
 export const NORTHLAKE_GO_AHEAD_ID = id("6e3");
 export const RIDGELINE_GO_AHEAD_ID = id("6e4");
 
@@ -77,17 +77,17 @@ function ref(member: { id: string; slug: string; name: string }): MemberRef {
 // --- The brief and the recipients ----------------------------------------------------
 
 export const brief = [
-  "XRD and SEM/EDS on 12 air-sensitive Na-ion cathode powders, plus an airtight holder",
+  "CT scans and compression tests on 12 titanium lattice coupons, plus a CT holder",
   "",
-  "Henderson Lab needs powder XRD and SEM/EDS on 12 layered-oxide cathode powders (Na–Mn–Fe–Ni–O family), with results by Nov 6. The powders are stored under argon and take up moisture within minutes in air, so they need air-free handling from unpacking to measurement.",
+  "Henderson Frame Lab needs CT scans and compression tests on 12 lattice coupons, 20 mm cubes printed in Ti-6Al-4V titanium, with results by Nov 6. A compression test crushes the coupon, so each one is scanned first.",
   "",
-  "We also need a sealed holder made to carry the powders under argon for the transfer to the instruments, delivered before Nov 3.",
+  "We also need a holder made that stacks the 12 coupons for one CT session, delivered to the core before Nov 3.",
   "",
-  "Please reply with what you can do, the price and the dates. Alex can bring the samples over by Nov 3.",
+  "Please reply with what you can do, the price and the dates. Alex can drop the coupons off at the core by Nov 3.",
 ].join("\n");
 
 /** The request's name for Alex, as `story_suggested_chat.yaml` has Claude write it. */
-export const REQUEST_TITLE = "Cathode characterization and holder";
+export const REQUEST_TITLE = "Lattice coupon testing and holder";
 
 /**
  * Who Claude lists, with the subject each one reads and what only our representative
@@ -98,27 +98,27 @@ export const cardRecipients: CardRecipient[] = [
   {
     org: orgs.northlake,
     fit: "strong",
-    reason: "Powder XRD and SEM/EDS, and they load air-sensitive powders in their own glovebox.",
-    title: "XRD and SEM/EDS quote",
-    ask: "Quote powder XRD and SEM/EDS on all 12 powders, loaded air-free, with results by Nov 6. Up to about $1,600; check with Alex before committing more than $1,000.",
+    reason: "Micro-CT and compression testing on campus, and a CT session takes up to 16 coupons.",
+    title: "CT and compression quote",
+    ask: "Quote CT scans and compression tests on all 12 coupons, CT first, with results by Nov 6. Up to about $1,600; check with Alex before committing more than $1,000.",
     suggested: true,
     selected: true,
   },
   {
     org: orgs.ridgeline,
     fit: "strong",
-    reason: "Machines airtight sample holders and transfer vessels in 3–5 business days.",
-    title: "Airtight holder quote",
-    ask: "Quote one sealed transfer holder for the powders, with the seal options and a delivery date before Nov 3. Keep it under $400.",
+    reason: "Machines stacked CT holders and test fixtures in 3–5 business days.",
+    title: "CT holder quote",
+    ask: "Quote one stacked CT holder for the 12 coupons, with the tube options and a delivery date before Nov 3. Keep it under $400.",
     suggested: true,
     selected: true,
   },
   {
     org: orgs.calder,
     fit: "no",
-    reason: "Computation only: DFT screening, no lab instruments.",
+    reason: "Computation only: finite-element studies, no lab instruments.",
     title: "Modelling support enquiry",
-    ask: "Ask whether they could model moisture uptake in these layered oxides later in the project. Nothing to commit to now.",
+    ask: "Ask whether they could model how these lattices crush later in the project. Nothing to commit to now.",
     suggested: false,
     selected: true,
   },
@@ -126,24 +126,24 @@ export const cardRecipients: CardRecipient[] = [
 
 /**
  * Claude's redraft after Alex's message (`REDRAFT_MESSAGE`): the brief says how the
- * powders arrive, and both asks change; Calder's stays as it was.
+ * coupons are marked, and both asks change; Calder's stays as it was.
  */
-export const REDRAFT_MESSAGE = "Say the powders arrive in sealed vials under argon, and ask Ridgeline which seals they supply.";
+export const REDRAFT_MESSAGE = "Say each coupon is engraved with its ID, and ask Ridgeline which tubes they supply.";
 
 export const redraftBrief = brief.replace(
-  "so they need air-free handling from unpacking to measurement.",
-  "so they arrive in sealed vials under argon and need air-free handling from unpacking to measurement.",
+  "so each one is scanned first.",
+  "so each one is scanned first. Each coupon is engraved with its ID, so results can be reported by ID.",
 );
 
 const REDRAFT_ASKS: Readonly<Record<string, string>> = {
   [orgs.northlake.id]:
-    "Quote powder XRD and SEM/EDS on all 12 powders, opened from their sealed argon vials and loaded air-free, with results by Nov 6. Up to about $1,600; check with Alex before committing more than $1,000.",
+    "Quote CT scans and compression tests on all 12 coupons, each engraved with its ID, CT first, with results by Nov 6. Up to about $1,600; check with Alex before committing more than $1,000.",
   [orgs.ridgeline.id]:
-    "Quote one sealed transfer holder for the powders: which seal materials they supply, what each costs and the delivery date. Keep it under $400.",
+    "Quote one stacked CT holder for the 12 coupons: which tubes they supply, what each costs and the delivery date. Keep it under $400.",
 };
 
 export const REDRAFT_REPLY =
-  "I've said the powders arrive in sealed vials under argon, and asked Ridgeline which seals they supply. Here's the new draft for your OK.";
+  "I've said each coupon is engraved with its ID, and asked Ridgeline which tubes they supply. Here's the new draft for your OK.";
 
 /** Claude's one line after a Decline with a reason; with none it says nothing. */
 export const DECLINED_REPLY = "Understood, I won't send it. Tell me if you'd like a different request.";
@@ -155,9 +155,9 @@ export const screened: ScreenedCounts = { total: 14, strong: 2, possible: 4, no:
 
 /** What Alex answers, unless a gallery visitor types something else. */
 export const ANSWERS = {
-  seal: "Kalrez, please. The powders may sit under argon for a few weeks.",
+  tube: "Carbon fiber, please. We scan at 3 µm voxels to see strut defects.",
   northlake: "Yes, take priority.",
-  ridgeline: "Yes, go ahead with Ridgeline, with the Kalrez seal.",
+  ridgeline: "Yes, go ahead with Ridgeline, with the carbon-fiber tube.",
 } as const;
 
 // --- Items ---------------------------------------------------------------------------
@@ -198,10 +198,10 @@ function tool(
 /** The two needs Claude searches the network for, as it words them, and what each found. */
 export const SEARCHES = [
   {
-    need: "Powder XRD and SEM/EDS on 12 air-sensitive cathode powders, loaded air-free, results by Nov 6",
+    need: "CT scans and compression tests on 12 titanium lattice coupons, CT first, results by Nov 6",
     outcome: "1 strong, 2 possible of 14",
   },
-  { need: "A sealed holder to carry the powders under argon to the instruments", outcome: "1 strong, 1 possible of 14" },
+  { need: "A holder that stacks the 12 coupons for one CT session", outcome: "1 strong, 1 possible of 14" },
 ] as const;
 
 /** Running, the line reads as BE4 builds it: present tense, nothing found yet. */
@@ -210,18 +210,18 @@ export const RUNNING_SEARCH_LABEL = "Searching the Harmony network…";
 export const FIRST_REPLY = [
   "I screened the network and found two organizations that fit, plus one near miss:",
   "",
-  "- **Northlake Characterization Core** runs powder XRD and SEM/EDS, and loads air-sensitive powders in its own glovebox.",
-  "- **Ridgeline Fabrication** machines airtight sample holders and transfer vessels in 3–5 business days.",
+  "- **Northlake Characterization Core** runs micro-CT and compression testing, and scans up to 16 coupons in one session.",
+  "- **Ridgeline Fabrication** machines stacked CT holders and test fixtures in 3–5 business days.",
   "- **Calder Computational** only does computation, so I've left it unticked.",
   "",
-  "The brief tells them the sample count, the Nov 6 date and that the powders are air-sensitive, and leaves out the dopant compositions. Each organization's ask carries its share of your budget, which only your representative sees. Here it is for your OK.",
+  "The brief tells them the coupon count, the Nov 6 date and that each coupon is scanned before it's crushed, and leaves out the lattice designs. Each organization's ask carries its share of your budget, which only your representative sees. Here it is for your OK.",
 ].join("\n");
 
 export const CLOSING_SUMMARY = [
   "Both are booked:",
   "",
-  "- **Northlake** runs XRD in its Wed Nov 4 priority block and SEM/EDS from Nov 3 on all 12 powders for **$1,434**, with reports by Nov 5. Bring the sealed vials over by Nov 3.",
-  "- **Ridgeline** makes the sealed transfer holder with a Kalrez seal for **$325**, delivered to the core on Nov 2.",
+  "- **Northlake** scans all 12 coupons on Wed Nov 4 and tests them in its priority compression block that afternoon for **$1,434**, with all reports by Nov 6. Drop the coupons at the core's front desk by Nov 3.",
+  "- **Ridgeline** makes the stacked CT holder with a carbon-fiber tube for **$325**, delivered to the core on Nov 2.",
   "",
   "That's **$1,759** in total, inside your $2,000 budget.",
 ].join("\n");
@@ -303,15 +303,15 @@ interface QuestionSpec {
   minutes: number;
 }
 
-const SEAL: QuestionSpec = {
-  escalationId: SEAL_QUESTION_ID,
+const TUBE: QuestionSpec = {
+  escalationId: TUBE_QUESTION_ID,
   threadId: RIDGELINE_THREAD_ID,
   from: orgs.ridgeline,
   question:
-    "Ridgeline asks which seal material the holder should use: Viton, which is included, or Kalrez for $85 more, which they recommend for long storage under argon. Which would you like?",
+    "Ridgeline asks which tube the holder should use: aluminum, which is included, or carbon fiber for $85 more, which they recommend for scans finer than 5 µm voxels. Which would you like?",
   askedAt: "question",
   answeredBy: "go_ahead",
-  answer: ANSWERS.seal,
+  answer: ANSWERS.tube,
   minutes: 18,
 };
 
@@ -320,7 +320,7 @@ const NORTHLAKE_GO_AHEAD: QuestionSpec = {
   threadId: NORTHLAKE_THREAD_ID,
   from: orgs.northlake,
   question:
-    "Northlake quotes two options for XRD and SEM/EDS on all 12 powders: standard, $1,284 with reports by Nov 13, or priority, $1,434 with reports by Nov 5. Both are over the $1,000 I may commit alone. Which should I book?",
+    "Northlake quotes two options for CT and compression tests on all 12 coupons: standard, $1,284 with reports by Nov 13, or priority, $1,434 with compression reports by Nov 5 and CT by Nov 6. Both are over the $1,000 I may commit alone. Which should I book?",
   askedAt: "go_ahead",
   answeredBy: "closed",
   answer: ANSWERS.northlake,
@@ -331,14 +331,14 @@ const RIDGELINE_GO_AHEAD: QuestionSpec = {
   escalationId: RIDGELINE_GO_AHEAD_ID,
   threadId: RIDGELINE_THREAD_ID,
   from: orgs.ridgeline,
-  question: "Ridgeline quotes $325 for the sealed transfer holder with a Kalrez seal, delivered Nov 2. Go ahead?",
+  question: "Ridgeline quotes $325 for the stacked CT holder with a carbon-fiber tube, delivered Nov 2. Go ahead?",
   askedAt: "go_ahead",
   answeredBy: "closed",
   answer: ANSWERS.ridgeline,
   minutes: 6,
 };
 
-const QUESTIONS: readonly QuestionSpec[] = [SEAL, NORTHLAKE_GO_AHEAD, RIDGELINE_GO_AHEAD];
+const QUESTIONS: readonly QuestionSpec[] = [TUBE, NORTHLAKE_GO_AHEAD, RIDGELINE_GO_AHEAD];
 
 /** The member's answer to a question, or null while it's open. */
 function answerTo(state: ChatState, spec: QuestionSpec): string | null {
@@ -435,11 +435,11 @@ export function conversationAt(state: ChatState): ConversationDetail {
   items.push(
     thinking(
       TURN.search,
-      "Split the ask into characterization and a machined holder, then checked Henderson's sample notes and budget.",
+      "Split the ask into testing and a machined holder, then checked Henderson's coupon notes and budget.",
       42,
     ),
     tool(TURN.search, "search_org_knowledge", "Searched your organization's knowledge", "done", 42, {
-      detail: "air-sensitive samples, sample holders, budget",
+      detail: "lattice coupons, CT holders, budget",
       outcome: "2 matches",
     }),
   );
@@ -518,26 +518,25 @@ function detail(
 /** What each thread's newest message says, and each side's closing summary, as the story goes. */
 export const LINES = {
   northlakeOpening:
-    "Henderson Lab needs powder XRD and SEM/EDS on 12 air-sensitive Na-ion cathode powders, with results by Nov 6.",
-  ridgelineOpening:
-    "Henderson Lab needs a sealed holder made to carry 12 air-sensitive powders under argon into an instrument.",
-  northlakeChecking: "Thanks. Let me check the XRD calendar for a slot before Nov 6 and come back to you.",
+    "Henderson Frame Lab needs CT scans and compression tests on 12 titanium lattice coupons, with results by Nov 6.",
+  ridgelineOpening: "Henderson Frame Lab needs a holder made that stacks 12 lattice coupons for one CT session.",
+  northlakeChecking: "Thanks. Let me check the compression calendar for a slot before Nov 6 and come back to you.",
   ridgelineAsks:
-    "Happy to make it. Which seal should it use: Viton, included, or Kalrez for $85 more? We recommend Kalrez for long storage.",
-  ridgelineQuote: "With a Kalrez seal the holder is $325 in total, delivered to the core on Mon Nov 2.",
+    "Happy to make it. Which tube should it use: aluminum, included, or carbon fiber for $85 more? We recommend carbon fiber for fine scans.",
+  ridgelineQuote: "With a carbon-fiber tube the holder is $325 in total, delivered to the core on Mon Nov 2.",
   northlakeQuote:
-    "Standard is $1,284 with reports by Fri Nov 13; priority, with the XRD in the Wed Nov 4 block, is $1,434 with reports by Thu Nov 5.",
-  northlakeConfirmed: "Booked the priority option. Please bring the 12 sealed vials by Tue Nov 3.",
+    "Standard is $1,284 with reports by Fri Nov 13; priority, with the compression tests in the Wed Nov 4 block, is $1,434 with compression reports by Thu Nov 5 and CT reports by Fri Nov 6.",
+  northlakeConfirmed: "Booked the priority option. Please drop the 12 coupons at our front desk by Tue Nov 3.",
   ridgelineConfirmed: "Confirmed. We'll start the holder today and deliver it to the core on Mon Nov 2.",
 } as const;
 
 export const SUMMARIES = {
   henderson: {
-    northlake: "Booked XRD and SEM/EDS on 12 powders for $1,434, XRD in the Nov 4 priority block, reports by Nov 5.",
-    ridgeline: "Ordered the sealed transfer holder with a Kalrez seal for $325, delivered to the core on Nov 2.",
+    northlake: "Booked CT and compression tests on 12 coupons for $1,434, compression in the Nov 4 priority block, reports by Nov 6.",
+    ridgeline: "Ordered the stacked CT holder with a carbon-fiber tube for $325, delivered to the core on Nov 2.",
   },
-  northlake: "Henderson Lab booked XRD and SEM/EDS on 12 powders for $1,434, in the Wed Nov 4 priority block.",
-  ridgeline: "Henderson Lab ordered one Apreo 2 transfer holder with a Kalrez seal, $325.",
+  northlake: "Henderson Frame Lab booked CT and compression tests on 12 coupons for $1,434, in the Wed Nov 4 priority block.",
+  ridgeline: "Henderson Frame Lab ordered one RV-16 CT holder with a carbon-fiber tube, $325.",
 } as const;
 
 function recipient(
@@ -629,9 +628,9 @@ function ridgelineAt(state: ChatState, base: CardRecipient): RecipientStatus {
       : recipient(base, "replied", threadId, { latest_line: answerTo(state, goAhead), last_activity_at: minutesAgo(0) });
   }
   if (reached(state.stage, "question")) {
-    const answer = answerTo(state, SEAL);
+    const answer = answerTo(state, TUBE);
     return answer === null
-      ? recipient(base, "needs_human", threadId, { ...waitingOnAlex(SEAL), latest_line: LINES.ridgelineAsks })
+      ? recipient(base, "needs_human", threadId, { ...waitingOnAlex(TUBE), latest_line: LINES.ridgelineAsks })
       : recipient(base, "replied", threadId, { latest_line: answer, last_activity_at: minutesAgo(0) });
   }
   return recipient(base, "messaged", threadId, { latest_line: LINES.ridgelineOpening });

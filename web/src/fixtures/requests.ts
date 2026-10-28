@@ -1,6 +1,6 @@
 /**
  * The Requests inbox's fixtures: Northlake's side of the harmony-demo story
- * (docs/REVISION_UNSTRUCTURED.md §10). Helen's inbox holds Henderson Lab's XRD request,
+ * (docs/REVISION_UNSTRUCTURED.md §10). Helen's inbox holds Henderson Frame Lab's CT request,
  * where Claude's draft says which client freed the Nov 4 block (from Raj's note) and the
  * sharing check stops it, and a reply to Vantage held for review because Northlake
  * trusts Vantage on Ask.
@@ -107,24 +107,24 @@ function read(title: string): ActivityLine {
 // --- Drafts ------------------------------------------------------------------------------
 
 export const HENDERSON_QUESTION =
-  "Can we run XRD and SEM/EDS on 12 air-sensitive powders before Nov 6, and at what price?";
+  "Can we run CT and compression tests on 12 lattice coupons before Nov 6, and at what price?";
 
 /** The answerer's short form of the question, the decision card's title. */
 export const HENDERSON_SHORT_QUESTION =
-  "Can we run all 12 by Nov 6, at what price, and how do we keep SEM samples inert?";
+  "Can we run all 12 by Nov 6, at what price, and with CT before the compression tests?";
 
 const HENDERSON_ANSWER =
-  "Yes. Another client released our Wednesday, Nov 4 XRD block on Friday, so we can run your powders there, and SEM/EDS is open from Nov 3, so results would be ready by Thursday, Nov 5.\n\n" +
-  "At our published academic prices that's $1,434: 12 × $45 XRD and 12 × $60 SEM/EDS, each 10% off for 10 or more samples, plus $150 for air-free handling and the $150 priority fee. " +
-  "The powders need to arrive sealed under argon by Tuesday, Nov 3; we open the vials in our glovebox.";
+  "Yes. Another client released our Wednesday, Nov 4 compression block on Friday, so we can scan your coupons that morning and test them in the block that afternoon. Compression reports would be ready by Thursday, Nov 5, and CT reports by Friday, Nov 6.\n\n" +
+  "At our published academic prices that's $1,434: 12 × $45 compression and 12 × $60 CT, each 10% off for 10 or more coupons, plus $150 for intake and setup and the $150 priority fee. " +
+  "The coupons need to reach our front desk by 17:00 on Tuesday, Nov 3, each engraved with its ID.";
 
 const HENDERSON_SHARING_REASON =
-  "The answer says another client released the Nov 4 XRD block. Northlake shares what's open on the public calendar, not other clients or their bookings.";
+  "The answer says another client released the Nov 4 compression block. Northlake shares what's open on the public calendar, not other clients or their bookings.";
 
 /** Why routing gave Henderson's item to each member, in the answerer's words to them. */
 export const HENDERSON_WHY = {
   helen: "you schedule the instruments and their bookings",
-  raj: "you run XRD and SEM",
+  raj: "you run the CT",
 } as const;
 
 /** Claude's first draft for Henderson (the escalation's rev 1). */
@@ -135,12 +135,12 @@ export function hendersonDraft(createdAt: string): EscalationDraft {
     short_question: HENDERSON_SHORT_QUESTION,
     route: { assignees: [{ slug: "helen", why: HENDERSON_WHY.helen }] },
     rationale:
-      "The public calendar has a priority XRD block open on Wed, Nov 4, 09:00 to 13:00, enough for about 14 powders; Raj's note says a client released it on Friday. " +
-      "The price is the published academic list: (12 × $45 + 12 × $60), 10% off each, plus $150 handling and the $150 priority fee = $1,434.",
+      "The public calendar has a priority compression block open on Wed, Nov 4, 13:00 to 17:00, enough for up to 14 coupons, and a CT session that morning; Raj's note says a client released the block on Friday. " +
+      "The price is the published academic list: (12 × $45 + 12 × $60), 10% off each, plus $150 intake and the $150 priority fee = $1,434.",
     activity: [
-      searched("XRD availability before Nov 6"),
+      searched("Compression availability before Nov 6"),
       read("Public calendar"),
-      read("Raj's note, Nov 4 XRD block"),
+      read("Raj's note, Nov 4 compression block"),
       read("Price list, external academic"),
     ],
     rewritten_by: null,
@@ -150,17 +150,17 @@ export function hendersonDraft(createdAt: string): EscalationDraft {
 
 /** Henderson's answer as Claude rewrites it after an Edit (the fixture can't think). */
 export const HENDERSON_REWRITE =
-  "Yes. We can run XRD in our priority block on Wednesday, Nov 4 and SEM/EDS from Nov 3, with results to you by Thursday, Nov 5. " +
+  "Yes. We can scan your coupons on the morning of Wednesday, Nov 4 and test them in our priority compression block that afternoon, with results to you by Friday, Nov 6. " +
   "At our published academic prices that's $1,434 for all 12.\n\n" +
-  "Please bring the powders sealed under argon by Tuesday, Nov 3; we'll open them in our glovebox.";
+  "Please drop the coupons at our front desk by 17:00 on Tuesday, Nov 3.";
 
 /** Vantage's held reply as Claude rewrites it after an Edit. */
 const VANTAGE_REWRITE =
   "We don't share who books our instruments or what clients pay. " +
-  "Our public calendar shows which Thursday SEM slots are open, and our external academic price list is on our directory listing.";
+  "Our public calendar shows which Thursday CT slots are open, and our external academic price list is on our directory listing.";
 
 /** What Helen tells Claude in the fixtures' Edits. */
-export const EDIT_INSTRUCTION = "Keep it shorter, and give the shipping deadline its own paragraph.";
+export const EDIT_INSTRUCTION = "Keep it shorter, and give the drop-off deadline its own paragraph.";
 
 /** What Helen types to reopen a conversation in the fixtures. */
 export const REOPEN_INSTRUCTION = "Offer them our general capabilities sheet instead.";
@@ -426,7 +426,7 @@ function hendersonThread({ at }: Clock): ThreadRecord {
   const henderson = orgs.henderson;
   return thread({
     threadId: THREAD.henderson,
-    title: "XRD and SEM/EDS quote",
+    title: "CT and compression quote",
     requester: henderson,
     state: "awaiting_principal",
     createdAt: at(12),
@@ -436,9 +436,9 @@ function hendersonThread({ at }: Clock): ThreadRecord {
         1,
         henderson,
         "agent",
-        "Hello from Claude for Henderson Lab, writing for Alex Chen in Prof. Maya Henderson's group.\n\n" +
-          "We need powder XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders (layered oxides), with results by Friday, Nov 6. " +
-          "The samples have to stay under argon; we can bring them over sealed.\n\n" +
+        "Hello from Claude for Henderson Frame Lab, writing for Alex Chen in Prof. Maya Henderson's group.\n\n" +
+          "We need CT scans and compression tests on 12 titanium lattice coupons (20 mm cubes), with results by Friday, Nov 6. " +
+          "Each coupon is engraved with its ID, and Alex can drop them off at your front desk.\n\n" +
           "Can you run both before Nov 6, and what would it cost?",
         at(12),
         "1",
@@ -462,7 +462,7 @@ function hendersonThread({ at }: Clock): ThreadRecord {
         seq: 1,
         author_kind: "member",
         author: helen,
-        body: "@raj can you run the priority block on Wednesday morning? It'd be 12 powders.",
+        body: "@raj can you run the priority block on Wednesday afternoon? It'd be 12 coupons, scanned that morning.",
         mentions: [raj],
         created_at: at(7),
       },
@@ -471,7 +471,7 @@ function hendersonThread({ at }: Clock): ThreadRecord {
         seq: 2,
         author_kind: "member",
         author: raj,
-        body: "Yes, 9 to 1 works if the powders are in the glovebox by Tuesday evening. I'll hold it until noon tomorrow.",
+        body: "Yes, 1 to 5 works if the coupons are at the front desk by 5 on Tuesday. I'll hold it until noon tomorrow.",
         mentions: [],
         created_at: at(4),
       },
@@ -483,7 +483,7 @@ function vantageThread({ at }: Clock): ThreadRecord {
   const vantage = orgs.vantage;
   return thread({
     threadId: THREAD.vantage,
-    title: "Thursday SEM availability",
+    title: "Thursday CT availability",
     requester: vantage,
     state: "awaiting_principal",
     createdAt: at(46),
@@ -492,8 +492,8 @@ function vantageThread({ at }: Clock): ThreadRecord {
         1,
         vantage,
         "agent",
-        "Hi, this is Claude for Vantage Market Intelligence. We're mapping characterization capacity in the region. " +
-          "Which clients currently hold your Thursday SEM slots, and roughly what do they pay per hour?",
+        "Hi, this is Claude for Vantage Market Intelligence. We're mapping CT and testing capacity in the region. " +
+          "Which clients currently hold your Thursday CT slots, and roughly what do they pay per hour?",
         at(46),
         "2",
       ),
@@ -505,10 +505,10 @@ function vantageThread({ at }: Clock): ThreadRecord {
 
 function pacificThread({ at }: Clock): ThreadRecord {
   const pacific = orgs.pacific;
-  const answer = "About a week from receipt; $120 per sample at list price.";
+  const answer = "About a week from receipt; $120 per part at list price.";
   return thread({
     threadId: THREAD.pacific,
-    title: "SEM cross-sections of coated foils",
+    title: "Scouting CT of printed nodes",
     requester: pacific,
     state: "active",
     createdAt: at(95),
@@ -517,7 +517,7 @@ function pacificThread({ at }: Clock): ThreadRecord {
         1,
         pacific,
         "agent",
-        "Claude for Pacific Beamline. We'd like SEM cross-sections of four coated copper foils before our December beamtime. What's your lead time for FIB-free cross-sections?",
+        "Claude for Pacific Beamline. We'd like scouting CT scans of four printed titanium nodes before our December beamtime, to pick which go on the beamline. What's your lead time?",
         at(95),
         "4",
       ),
@@ -525,7 +525,7 @@ function pacificThread({ at }: Clock): ThreadRecord {
         2,
         northlake,
         "agent",
-        "Broad-ion-beam cross-sections run about a week from receipt. Four foils would be $480 at list price ($120 each). Do you want them imaged at 5 kV and 15 kV?",
+        "Scouting scans run about a week from receipt. Four nodes would be $480 at list price ($120 each). Do you want them scanned at 10 µm and 3 µm voxels?",
         at(93),
         "4",
       ),
@@ -533,7 +533,7 @@ function pacificThread({ at }: Clock): ThreadRecord {
     ],
     access: [routed(helen)],
     consults: [
-      consult(CONSULT.pacific, "What's our lead time and price for broad-ion-beam SEM cross-sections?", at(94), {
+      consult(CONSULT.pacific, "What's our lead time and price for scouting CT scans of printed parts?", at(94), {
         status: "released",
         answer,
         needs_human: false,
@@ -551,7 +551,7 @@ function calderThread({ at }: Clock): ThreadRecord {
   const calder = orgs.calder;
   return thread({
     threadId: THREAD.calder,
-    title: "Reference XRD patterns for DFT validation",
+    title: "Reference compression tests for FE validation",
     requester: calder,
     state: "active",
     createdAt: at(60 * 5),
@@ -560,7 +560,7 @@ function calderThread({ at }: Clock): ThreadRecord {
         1,
         calder,
         "agent",
-        "Claude for Calder Computational. We need high-resolution XRD on eight reference oxides to validate DFT lattice parameters, ideally in December. Is that something you take on?",
+        "Claude for Calder Computational. We need compression tests on eight reference lattice coupons to validate our finite-element models, ideally in December. Is that something you take on?",
         at(60 * 5),
         "5",
       ),
@@ -579,20 +579,20 @@ function calderThread({ at }: Clock): ThreadRecord {
 
 function ridgelineThread({ at }: Clock): ThreadRecord {
   const ridgeline = orgs.ridgeline;
-  const answer = "Yes: we can image all four this week. $640 at list price ($160 each), images within two days of receipt.";
+  const answer = "Yes: we can scan all four this week. $640 at list price ($160 each), scans within two days of receipt.";
   const draft: EscalationDraft = {
     draft_rev: 1,
     answer,
-    short_question: "Can we image four PEEK holders this week, and at what price?",
-    route: { assignees: [{ slug: "helen", why: "you schedule the SEM" }] },
-    rationale: "SEM is open from Nov 3 on the public calendar, and the list price for secondary-electron imaging is $160 per sample.",
-    activity: [searched("SEM calendar this week"), searched("SEM price list")],
+    short_question: "Can we scan four holder tubes this week, and at what price?",
+    route: { assignees: [{ slug: "helen", why: "you schedule the CT" }] },
+    rationale: "CT is open from Nov 3 on the public calendar, and the list price for a full-length tube scan is $160 per part.",
+    activity: [searched("CT calendar this week"), searched("CT price list")],
     rewritten_by: null,
     created_at: at(60 * 73),
   };
   return thread({
     threadId: THREAD.ridgeline,
-    title: "SEM on machined PEEK holder surfaces",
+    title: "CT on machined holder tubes",
     requester: ridgeline,
     state: "closed",
     createdAt: at(60 * 74),
@@ -601,7 +601,7 @@ function ridgelineThread({ at }: Clock): ThreadRecord {
         1,
         ridgeline,
         "agent",
-        "Claude for Ridgeline Fabrication. Can you image the machined sealing faces of four PEEK sample holders? We need to check tool marks before anodizing the next batch.",
+        "Claude for Ridgeline Fabrication. Can you CT-scan four machined aluminum holder tubes? We need to check their wall thickness before anodizing the next batch.",
         at(60 * 74),
         "6",
       ),
@@ -611,11 +611,11 @@ function ridgelineThread({ at }: Clock): ThreadRecord {
     ],
     access: [routed(helen)],
     consults: [
-      consult(CONSULT.ridgeline, "Can we image four machined PEEK holders this week, and at what price?", at(60 * 73 + 1), {
+      consult(CONSULT.ridgeline, "Can we scan four machined holder tubes this week, and at what price?", at(60 * 73 + 1), {
         status: "released",
         answer,
         needs_human: true,
-        needs_human_reason: "It books SEM time this week, which commits the core.",
+        needs_human_reason: "It books CT time this week, which commits the core.",
         released_text: answer,
         released_by: "member",
         released_by_member: helen,
@@ -629,7 +629,7 @@ function ridgelineThread({ at }: Clock): ThreadRecord {
           ESCALATION.ridgeline,
           "consult",
           CONSULT.ridgeline,
-          "It books SEM time this week, which commits the core.",
+          "It books CT time this week, which commits the core.",
           draft,
         ),
         helen,
@@ -637,7 +637,7 @@ function ridgelineThread({ at }: Clock): ThreadRecord {
       ),
     ],
     closeSummary:
-      "Ridgeline Fabrication booked SEM on four machined PEEK holders: $640 at list price, images within two days of receipt. Helen approved the slot. They're shipping the holders today.",
+      "Ridgeline Fabrication booked CT on four machined holder tubes: $640 at list price, scans within two days of receipt. Helen approved the slot. They're shipping the tubes today.",
   });
 }
 
@@ -817,7 +817,7 @@ export function checking(world: RequestsWorld, threadId: string): RequestsWorld 
   record.detail.state = "awaiting_principal";
   record.detail.side_to_move = "responder";
   record.workspace.consults.push(
-    consult(id("9c9"), "Can we hold SEM time the week of Nov 16 for four foils, at 5 kV and 15 kV?", at(0), {}),
+    consult(id("9c9"), "Can we hold CT time the week of Nov 16 for four nodes, at 10 µm and 3 µm?", at(0), {}),
   );
   return world;
 }

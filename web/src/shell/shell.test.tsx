@@ -212,7 +212,7 @@ it("points the acting member's own cue for a question in their chat at that chat
 
   const toastRegion = screen.getByRole("status");
   expect(await within(toastRegion).findByText("Ridgeline Fabrication's question needs your answer.")).toBeTruthy();
-  expect(within(toastRegion).queryByText(/Henderson Lab needs you/)).toBeNull();
+  expect(within(toastRegion).queryByText(/Henderson needs you/)).toBeNull();
   fireEvent.click(within(toastRegion).getByRole("button", { name: "Answer in the chat" }));
   expect(await screen.findByText(`Chat at /chat/${QUESTION_CHAT}`)).toBeTruthy();
 
@@ -226,7 +226,7 @@ it("opens a question in the assignee's chat there when a chip switches to them",
   act(() => {
     sources.latest.send(needsHuman(8, members.alex.slug, QUESTION, "henderson"));
   });
-  fireEvent.click(screen.getByRole("button", { name: /Henderson Lab needs a human.*Switch to Alex/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Henderson needs a human.*Switch to Alex/ }));
 
   await screen.findByRole("button", { name: "Account: Alex Chen" });
   expect(await screen.findByText(`Chat at /chat/${QUESTION_CHAT}`)).toBeTruthy();
@@ -507,7 +507,7 @@ it("lists only what needs the member and All requests above Recents, in one scro
   expect(within(needs).getAllByRole("link").at(-1)?.getAttribute("href")).toBe("/requests");
 
   // Alex's own side asked this one: he answers it in the chat that sent the request.
-  const asked = within(needs).getByRole("link", { name: /XRD and SEM for 12 Na-ion cathode powders/ });
+  const asked = within(needs).getByRole("link", { name: /Stacked CT holder for 12 lattice coupons/ });
   expect(asked.getAttribute("href")).toBe(`/chat/${QUESTION_CHAT}`);
 
   fireEvent.click(asked);
@@ -529,7 +529,7 @@ it("opens Helen's items in Requests, and leaves only the badge on the rail", asy
   // Neither has been opened in this browser: each link says it's unread, not a bare dot.
   expect(within(needs).getAllByRole("link", { name: /, unread$/ })).toHaveLength(2);
   expect(within(needs).queryByLabelText("Unread")).toBeNull();
-  fireEvent.click(within(needs).getByRole("link", { name: /Thursday SEM availability/ }));
+  fireEvent.click(within(needs).getByRole("link", { name: /Thursday CT availability/ }));
   expect(await screen.findByText(`Thread at /requests/${THREAD(2)}`)).toBeTruthy();
 
   act(() => {

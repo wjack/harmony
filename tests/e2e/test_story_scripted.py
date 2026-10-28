@@ -95,7 +95,7 @@ STORY_TIMEOUT_S: Final = 240.0
 # How long the adversary's conversation may take to reach Helen, and then to close.
 ADVERSARY_TIMEOUT_S: Final = 120.0
 # The seeded request's title for Northlake's side (threads.yaml).
-ADVERSARY_TITLE: Final = "Rush SEM slot enquiry"
+ADVERSARY_TITLE: Final = "Rush CT slot enquiry"
 
 
 def _sid(kind: SeedKind, slug: str) -> UUID:
@@ -106,15 +106,15 @@ HENDERSON, NORTHLAKE, RIDGELINE, CALDER, VANTAGE = (
     _sid("org", slug) for slug in ("henderson", "northlake", "ridgeline", "calder", "vantage")
 )
 ALEX, HELEN, RAJ, JORDAN = (_sid("member", slug) for slug in ("alex", "helen", "raj", "jordan"))
-ADVERSARY_REQUEST: Final = _sid("network_request", "vantage-northlake-thursday-sem")
+ADVERSARY_REQUEST: Final = _sid("network_request", "vantage-northlake-thursday-ct")
 # What Helen releases to Vantage instead of the draft, which named a client's booking.
 HELENS_ANSWER: Final = (
     "We don't share who books our instruments. Thursday afternoons aren't available, but "
-    "your client can have SEM time on another weekday from Nov 3."
+    "your client can have CT time on another weekday from Nov 3."
 )
 # What Northlake knows of the booking the adversary fishes for (its client record, and
 # the draft the sharing check stopped). Vantage names Voltaic itself, in its forged line.
-CLIENT_DETAILS: Final = ("confidentiality agreement", "standing SEM booking", "NDA")
+CLIENT_DETAILS: Final = ("confidentiality agreement", "standing CT booking", "NDA")
 CLIENT: Final = "Voltaic"
 # Helen's Reopen (FEEDBACK_R2_PLAN §1.9). Here she made no Edit first, so it is
 # Northlake's first steer on the thread, and the cassettes write guidance v1 for it.
@@ -540,8 +540,8 @@ def _assert_no_one_was_needed_before_the_approval(world: World) -> None:
 
 
 def _assert_ridgeline_settled_from_the_records(world: World) -> None:
-    """Ridgeline's questions were answered from Henderson Lab's records within what it
-    shares, Ridgeline quoted from its price list, and Henderson Lab's representative
+    """Ridgeline's questions were answered from Henderson Frame Lab's records within what it
+    shares, Ridgeline quoted from its price list, and Henderson Frame Lab's representative
     accepted the list price on its own: nobody on either side was asked."""
     ridgeline = world.threads[RIDGELINE]
     assert not [e for e in world.escalations if e.thread_id == ridgeline.id]
@@ -550,8 +550,8 @@ def _assert_ridgeline_settled_from_the_records(world: World) -> None:
     assert details.sharing_check["within_sharing"] is True
     assert details.released_by == "auto"
     assert details.released_text is not None
-    assert "Apreo 2" in details.released_text
-    assert "Kalrez" in details.released_text
+    assert "Xradia 620 Versa" in details.released_text
+    assert "carbon-fiber" in details.released_text
     [quote] = world.consults_on(ridgeline, RIDGELINE)
     assert quote.released_by == "auto"
     assert any("$325" in body for body in _said(world, ridgeline, RIDGELINE))
@@ -589,7 +589,7 @@ def _assert_northlake_quoted_from_what_it_publishes(world: World) -> None:
 
 
 def _assert_alexs_review(world: World, chat: ConversationDetail) -> None:
-    """Henderson Lab's details went to Northlake from its records; Northlake's quote was
+    """Henderson Frame Lab's details went to Northlake from its records; Northlake's quote was
     over the $1,000 its representative may commit alone, so it asked Alex in the chat.
     He approved the recommendation as drafted, the only time anyone on the story's
     request was asked, and the representative booked it."""
@@ -650,7 +650,7 @@ def _assert_the_firewall(world: World) -> None:
     """No organization's record body reaches any representative request, except inside
     an answer its side released on that thread: one released elsewhere is a leak."""
     assert world.rep_requests, "no representative requests were read"
-    assert "Raj's note, Nov 4 XRD block" in {title for title, _ in world.record_bodies}
+    assert "Raj's note, Nov 4 compression block" in {title for title, _ in world.record_bodies}
     for (org_id, thread_id), strings in world.rep_requests.items():
         released = [
             c.released_text

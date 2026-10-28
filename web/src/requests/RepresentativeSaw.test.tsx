@@ -13,7 +13,7 @@ afterEach(cleanup);
 const FROZEN = "Our external academic price list. Not: staff notes or off-list pricing.";
 const SHARING_NOTICE =
   "Notice from Harmony: your organization changed what you may pass on to this organization. " +
-  "It now reads as follows, in place of what your prompt says:\n\nOpen SEM slots on weekdays too.";
+  "It now reads as follows, in place of what your prompt says:\n\nOpen CT slots on weekdays too.";
 
 const SAW: RepresentativeContext = {
   parts: [{ kind: "sharing", label: "What it may pass on", text: FROZEN }],
@@ -45,7 +45,7 @@ it("lists a sharing notice sent after the prompt froze, beside the part it repla
   expect(within(drawer).getByRole("region", { name: "Its prompt" }).textContent).toContain(FROZEN);
   const notices = within(drawer).getByRole("region", { name: "Notices since" });
   expect(within(notices).getByText("What it may pass on changed")).toBeTruthy();
-  expect(notices.textContent).toContain("Open SEM slots on weekdays too.");
+  expect(notices.textContent).toContain("Open CT slots on weekdays too.");
 });
 
 it("says plainly when nothing was sent since", () => {

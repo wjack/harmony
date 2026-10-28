@@ -86,7 +86,7 @@ export function onlyUs(us: OrgRef): string {
   return `only ${shortOrgName(us.name)} sees this`;
 }
 
-/** "Henderson Lab's", "Cascade Thin Films'". */
+/** "Henderson Frame Lab's", "Cascade Thin Films'". */
 export function possessive(name: string): string {
   return name.endsWith("s") ? `${name}'` : `${name}'s`;
 }

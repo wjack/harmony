@@ -1,5 +1,5 @@
 # Granite Precision Machining, background (docs/SCENARIO.md): a possible fit for the
-# holder, but it doesn't make vacuum or sealed parts.
+# holder, but it works only from the customer's drawings.
 slug: granite
 name: Granite Precision Machining
 kind: fabrication
@@ -15,10 +15,11 @@ settings:
   public_summary: >-
     Granite Precision Machining does general CNC machining in aluminum, steel and
     plastics from your drawings in the Pacific Northwest, usually in 5–7 business days:
-    fixtures, brackets and one-off parts. We don't make vacuum or sealed parts.
+    fixtures, brackets and one-off parts. We work only from your drawings and keep no
+    catalog of instrument parts.
   instructions: >-
-    You represent Granite Precision Machining. Say plainly that we don't make sealed or
-    vacuum parts. Consult for prices and scheduling.
+    You represent Granite Precision Machining. Say plainly that we quote only from the
+    customer's drawings. Consult for prices and scheduling.
 
 policy:
   autonomy: skip
@@ -32,7 +33,7 @@ knowledge:
   - slug: about
     title: About Granite
     kind: profile
-    body: General CNC machining from customer drawings; no vacuum or sealed parts.
+    body: General CNC machining from customer drawings; no catalog parts.
   - slug: price-list
     title: Shop rates
     kind: price-list

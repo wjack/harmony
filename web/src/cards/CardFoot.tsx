@@ -12,7 +12,7 @@ export interface CardFootProps {
   declineDisabled?: boolean;
   /** Context, on the left of the hint row: a mode line. */
   hintLeft?: ReactNode;
-  /** What approving does, on the right: "Claude replies to Henderson Lab with this answer". */
+  /** What approving does, on the right: "Claude replies to Henderson Frame Lab with this answer". */
   hintRight?: ReactNode;
 }
 

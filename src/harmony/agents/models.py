@@ -130,7 +130,7 @@ class MemberRef(_Model):
 
 class RouteAssignee(_Model):
     member: str = Field(description="A member slug.")
-    # One short clause addressed to them: "you run XRD and SEM".
+    # One short clause addressed to them: "you run the CT".
     why: str
 
 

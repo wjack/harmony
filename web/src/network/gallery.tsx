@@ -168,7 +168,7 @@ export default [
   ),
   page(
     "Network view: Ridgeline's question waits on you",
-    "As Alex: Henderson's own representative asked him about the seal; he answers in the chat.",
+    "As Alex: Henderson's own representative asked him about the tube; he answers in the chat.",
     "question",
     { selected: orgs.ridgeline.id, typing: typingThreads.question },
   ),

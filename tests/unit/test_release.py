@@ -169,7 +169,7 @@ def test_a_trusted_organizations_sharing_is_added_for_it_only() -> None:
     organization, then the trusted organization's own, for it."""
 
     def texts(org: RepPolicy, row: TrustedOrganization | None) -> list[str]:
-        parts = context.sharing_parts(org, row, counterparty_name="Henderson Lab")
+        parts = context.sharing_parts(org, row, counterparty_name="Henderson Frame Lab")
         return [part.text for part in context.context_parts("\n\n".join(parts))]
 
     org = policy(sharing=f"  {DEFAULT_SHARING}\n")

@@ -1,12 +1,12 @@
 # Northlake Characterization Core, the main responder (docs/SCENARIO.md).
 # Everything it quotes is published: the price list with its volume discount and
-# priority fee, and the public calendar with both the standard and the priority XRD
-# block. So its answer to Henderson Lab passes the sharing check and nobody is asked.
-# Raj's note says why the Nov 4 block is open (another client released it); the
-# sharing description keeps other clients out of every answer, so the note never
+# priority fee, and the public calendar with both the standard and the priority
+# compression block. So its answer to Henderson Frame Lab passes the sharing check and nobody
+# is asked. Raj's note says why the Nov 4 block is open (another client released it);
+# the sharing description keeps other clients out of every answer, so the note never
 # reaches the representative.
 #
-# The public calendar also says SEM is unavailable on Thursday afternoons through
+# The public calendar also says CT is unavailable on Thursday afternoons through
 # December (ARCHITECTURE.md §2.1, §11.6). Who books those afternoons is in the
 # client-voltaic record, which the sharing description keeps out of every answer.
 slug: northlake
@@ -25,17 +25,19 @@ members:
       assignee.
   - slug: raj
     name: Raj Patel
-    title: Staff scientist, XRD and SEM
+    title: Staff scientist, CT and mechanical testing
     role: admin
-    profile: Runs the instruments; sample prep and air-free handling questions.
+    profile: Runs the instruments; coupon prep and drop-off questions.
 
 settings:
   public_summary: >-
     Northlake Characterization Core is a shared-instrument facility at Northlake
-    University, open to external academic and industry users: powder XRD (Bruker D8,
-    with air-free dome holders), SEM with EDS (Thermo Apreo 2) and XPS. Typical
-    turnaround is 5–10 business days, with priority XRD blocks for a published fee. We
-    don't do synthesis, sample shipping or data interpretation beyond standard reports.
+    University, open to external academic and industry users: micro-CT (Zeiss Xradia
+    620 Versa) and compression and tensile testing (Instron 5985, up to 250 kN) of
+    metal and polymer parts, 3D-printed lattices included, and SEM. Typical
+    turnaround is 5–10 business days, with priority compression-test blocks for a
+    published fee. We don't do printing, part shipping or data interpretation beyond
+    standard reports.
   instructions: >-
     You represent the Northlake Characterization Core to external users. Consult the
     core for prices, availability and anything else you don't know; never guess. Once
@@ -48,92 +50,91 @@ policy:
   sharing_description: >-
     Our external academic price list with its published fees and terms, what is open
     on the public instrument calendar and how booking works, the customer's own quote
-    and booking, sample-prep, air-free handling and delivery requirements (our
-    glovebox, who receives deliveries, what we supply, and which holders fit our
-    instruments, Ridgeline's included), and typical turnaround. Not: other clients or
-    their bookings, staff notes, or off-list pricing.
+    and booking, coupon prep and drop-off (where we receive parts, the order we test
+    in, what we supply, and which holders fit our instruments, Ridgeline's included),
+    and typical turnaround. Not: other clients or their bookings, staff notes, or
+    off-list pricing.
   routing_prompt: >-
-    Instrument scheduling and off-list pricing exceptions go to Helen. Sample-prep and
-    air-free handling questions go to Raj. Anything over $5,000 needs Helen.
+    Instrument scheduling and off-list pricing exceptions go to Helen. Coupon prep and
+    drop-off questions go to Raj. Anything over $5,000 needs Helen.
   default_assignee: helen
 
-# An example of the Trusted organizations list. Ridgeline machines transfer holders
-# for our SEM, so it may also hear the Apreo 2 airlock's dimensions; its mode is the
-# default.
+# An example of the Trusted organizations list. Ridgeline machines stacked holders for
+# our CT, so it may also hear the Versa's mount dimensions; its mode is the default.
 trusted_organizations:
   - org: ridgeline
     sharing_description: >-
-      Our Apreo 2 airlock dimensions and holder O-ring requirements, so they can
-      machine transfer holders that fit our SEM.
+      Our Xradia Versa mount dimensions and holder requirements, so they can machine
+      stacked holders that fit our CT.
 
 knowledge:
   - slug: facility-overview
     title: Facility overview
     kind: profile
     body: >-
-      Shared-instrument facility at Northlake University: powder XRD, SEM with EDS and
-      XPS, open to external academic and industry users.
+      Shared-instrument facility at Northlake University: micro-CT, mechanical testing
+      and SEM, open to external academic and industry users. We scan and test metal
+      and polymer parts, 3D-printed titanium and aluminum lattices included.
   - slug: price-list
     title: Price list, external academic
     kind: price-list
     body: >-
-      Powder XRD $45 per sample. SEM/EDS $60 per sample. Air-free transfer and handling
-      $150 flat per batch: one fee for samples delivered together, whatever the
-      techniques. Standard report included. Published terms for academic
-      users: 10 or more samples on one technique get 10% off that technique, applied
-      automatically, and a priority XRD block is a $150 flat fee. Quotes valid 14 days.
+      Compression test $45 per coupon. CT scan $60 per coupon. Intake and setup $150
+      flat per batch: one fee for coupons delivered together, whatever the tests.
+      Standard report included. Published terms for academic
+      users: 10 or more coupons on one test get 10% off that test, applied
+      automatically, and a priority compression block is a $150 flat fee. Quotes valid
+      14 days.
   - slug: public-calendar
     title: Public calendar
     kind: schedule
     body: >-
-      Next standard XRD block: Tue Nov 10, with reports by Fri Nov 13. Priority XRD
-      block open: Wed Nov 4, 09:00–13:00, for up to 14 powders, with reports by Thu
-      Nov 5. SEM/EDS open from Tue Nov 3, except Thursday afternoons through December:
-      sessions run 09:00–13:00 and 13:00–17:00, each taking up to 16 powders on one
-      stub, with reports two business days after it (a session on Wed Nov 4 reports by
-      Fri Nov 6). We don't hold slots: a customer who accepts a quote is booked into
-      its open slots.
-  - slug: air-free-handling
-    title: Air-free handling, XRD
+      Next standard compression block: Tue Nov 10, with reports by Fri Nov 13. Priority
+      compression block open: Wed Nov 4, 13:00–17:00, for up to 14 coupons, with reports
+      by Thu Nov 5. CT open from Tue Nov 3, except Thursday afternoons through December:
+      sessions run 09:00–13:00 and 13:00–17:00, each taking up to 16 coupons in one
+      stacked holder, with reports two business days after it (a session on Wed Nov 4
+      reports by Fri Nov 6). We don't hold slots: a customer who accepts a quote is
+      booked into its open slots.
+  - slug: compression-testing
+    title: Compression testing
     kind: procedure
     body: >-
-      We load air-sensitive powders into our own air-free dome holders in our
-      glovebox, at no extra charge: customers bring no XRD holders. The dome holders
-      seal with Viton or Kalrez O-rings. Customers deliver samples sealed under Ar.
-  - slug: sem-air-free
-    title: SEM/EDS on air-sensitive powders
+      We test coupons in compression between our own hardened platens on the Instron
+      5985, at no extra charge: customers bring no fixtures. A compression test crushes
+      the coupon, so a coupon booked for CT too is scanned first, in an earlier session.
+  - slug: ct-holders
+    title: CT on coupon batches
     kind: procedure
     body: >-
-      We mount air-sensitive powders on carbon tape in the glovebox and move them to
-      the Apreo 2 in a sealed transfer holder that fits its airlock. We don't supply
-      holders; Ridgeline Fabrication's listed Apreo 2 holder fits as delivered. Vials
-      hand-delivered on campus are opened in our glovebox.
-  - slug: glovebox-receiving
-    title: Glovebox and receiving
+      We scan a batch of coupons in one session in a stacked holder that fits the
+      Versa's stage mount. We don't supply holders; Ridgeline Fabrication's listed
+      Versa holder fits as delivered. Scans finer than 5 µm voxels need a carbon-fiber
+      tube: an aluminum one blurs them.
+  - slug: drop-off
+    title: Drop-off
     kind: procedure
     body: >-
-      Our glovebox runs on argon, with O2 and H2O held below 0.5 ppm and logged
-      continuously. Air-sensitive samples stay under argon from receipt to
-      measurement: vials are opened only in the glovebox, XRD runs in sealed dome
-      holders, and SEM stubs go to the Apreo 2 in a sealed transfer holder. Hand
-      deliveries on campus: Room 112, Physical Sciences Building, weekdays 9:00–17:00,
-      for Raj. Samples for a session must be in by 17:00 the business day before.
-  - slug: apreo-airlock
-    title: Apreo 2 airlock, holder fit
+      Coupons and holders are received at the core's front desk: Room 112, Physical
+      Sciences Building, Northlake campus, weekdays 9:00–17:00. Coupons for a session
+      must be in by 17:00 the business day before. Label or engrave each coupon with an
+      ID; we report results by ID.
+  - slug: versa-mount
+    title: Xradia Versa, holder fit
     kind: spec
     body: >-
-      Transfer holders for the Apreo 2 airlock: KF40 port, body at most 50 mm across
-      and 30 mm tall, one 2-030 O-ring on the lid.
-  - slug: nov-4-xrd-block
-    title: Raj's note, Nov 4 XRD block
+      Stacked holders for the Xradia 620 Versa: M6 kinematic base, tube at most 40 mm
+      across and 300 mm tall.
+  - slug: nov-4-compression-block
+    title: Raj's note, Nov 4 compression block
     kind: note
     author: raj
-    body: The Nov 4 block was held for Voltaic's re-run; they released it Friday.
+    body: The Nov 4 block was held for Voltaic's re-test; they released it Friday.
   - slug: client-voltaic
     title: "Client: Voltaic Motors"
     kind: client
     body: >-
-      Standing SEM booking every Thursday afternoon through December. Under NDA; never
+      Standing CT booking every Thursday afternoon through December. Under NDA; never
       discuss.
   - slug: pricing-policy
     title: Pricing policy

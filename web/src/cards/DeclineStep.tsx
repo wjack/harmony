@@ -8,7 +8,7 @@ import { FootShell } from "./FootShell";
 export interface DeclineStepProps {
   /** A reason is needed before Decline (the request view's items, not outreach). */
   required: boolean;
-  /** Who sees the reason: "Claude may pass this reason on to Henderson Lab." */
+  /** Who sees the reason: "Claude may pass this reason on to Henderson Frame Lab." */
   caption: ReactNode;
   /** The decline is on its way: the step is locked. */
   pending?: boolean;

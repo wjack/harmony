@@ -38,7 +38,7 @@ DANA: Final = sid("member", "dana")
 JORDAN: Final = sid("member", "jordan")
 PRICE_LIST: Final = sid("knowledge_item", "northlake/price-list")
 CALENDAR: Final = sid("knowledge_item", "northlake/public-calendar")
-RAJS_NOTE: Final = sid("knowledge_item", "northlake/nov-4-xrd-block")
+RAJS_NOTE: Final = sid("knowledge_item", "northlake/nov-4-compression-block")
 CLIENT: Final = sid("knowledge_item", "northlake/client-voltaic")
 
 

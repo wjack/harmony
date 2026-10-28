@@ -23,7 +23,7 @@ export function ProfilePane({ draft, edit, editable }: PaneProps) {
               onChange={(event) => {
                 edit({ publicSummary: event.target.value });
               }}
-              placeholder="A university characterization core running XRD, SEM and XPS for academic and industry groups. Typical turnaround is a week; priority by arrangement."
+              placeholder="A university characterization core running micro-CT and mechanical testing for academic and industry groups. Typical turnaround is a week; priority by arrangement."
             />
           )}
         </Field>

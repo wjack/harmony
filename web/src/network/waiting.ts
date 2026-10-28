@@ -90,7 +90,7 @@ export function resolveWait(node: NetworkNode, { requester, actor, directory, re
 }
 
 /**
- * The node card's line: "Helen · 4m", "You · 4m", "Alex (Henderson Lab) · 4m" or
+ * The node card's line: "Helen · 4m", "You · 4m", "Alex (Henderson) · 4m" or
  * "Northlake's team"; null when not even the side is known.
  */
 export function waitMeta(wait: Wait, now: number): string | null {

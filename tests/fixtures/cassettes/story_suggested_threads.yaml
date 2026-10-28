@@ -10,29 +10,32 @@
 # The orgs' records and written authority settle almost everything: one person is
 # asked, Alex, to review Northlake's quote.
 #
-# henderson.northlake: Northlake's representative asks how the powders arrive, how they
-# stay under argon and how firm Nov 6 is. Henderson's representative consults; its
-# answerer has it all in the lab's records, the sharing check passes it, and it goes
-# back with no person. Northlake's representative consults its side: the answerer
-# quotes both options from the public calendar and the published prices (standard
-# $1,284, reports Fri Nov 13; priority $1,434, Wed Nov 4 block, reports Thu Nov 5), and
-# the sharing check passes it: everything is published, and Raj's note about who freed
-# the Nov 4 block stays out. Both options are over the $1,000 Henderson's representative
-# may commit alone, so it consults; the answerer recommends priority from the lab's
-# dates and spending notes and routes it to Alex, who approves it as drafted. Northlake
-# confirms the booking at published prices and closes, and Henderson closes too.
+# henderson.northlake: Northlake's representative asks how the coupons are marked, how
+# they reach the core, how they'll be held for the CT and how firm Nov 6 is.
+# Henderson's representative consults; its answerer has it all in the lab's records, the
+# sharing check passes it, and it goes back with no person. Northlake's representative
+# consults its side: the answerer quotes both options from the public calendar and the
+# published prices (CT first either way, in the Wed Nov 4 morning session; standard
+# $1,284, compression Tue Nov 10, reports Fri Nov 13; priority $1,434, the Wed Nov 4
+# afternoon block, reports Thu Nov 5), and the sharing check passes it: everything is
+# published, and Raj's note about who freed the Nov 4 block stays out. Both options are
+# over the $1,000 Henderson's representative may commit alone, so it consults; the
+# answerer recommends priority from the lab's dates and spending notes and routes it to
+# Alex, who approves it as drafted. Northlake confirms the booking at published prices
+# and closes, and Henderson closes too.
 #
-# henderson.ridgeline: Ridgeline asks which instrument the holder fits and which seal.
-# Henderson's answerer finds both in the lab's records (Northlake's Apreo 2 airlock, a
-# Kalrez seal), and the answer goes back with no person. Ridgeline's answerer quotes
-# from the price list: $240 + $85 for Kalrez = $325, delivered Mon Nov 2. Henderson's
-# representative accepts on its own (list price, within its ask, under $1,000), and
-# Ridgeline confirms at list price and closes; Henderson closes too.
+# henderson.ridgeline: Ridgeline asks which instrument the holder fits and which tube.
+# Henderson's answerer finds both in the lab's records (Northlake's Xradia 620 Versa, a
+# carbon-fiber tube for 3 µm scans), and the answer goes back with no person.
+# Ridgeline's answerer quotes from the price list: $240 + $85 for carbon fiber = $325,
+# delivered Mon Nov 2. Henderson's representative accepts on its own (list price,
+# within its ask, under $1,000), and Ridgeline confirms at list price and closes;
+# Henderson closes too.
 #
 # henderson.calder: not in the story (Calder is a weak fit, listed but not suggested),
 # but the outreach card lets a visitor include it, so its side is scripted too. Its ask
-# is a modelling enquiry; Calder says what it could do, that it would need the
-# compositions to scope it, and closes.
+# is a modelling enquiry; Calder says what it could do, that it would need the lattice
+# designs to scope it, and closes.
 #
 # Each answerer's route names who decides with why, addressed to them, and a one-line
 # short question for the reviewer.
@@ -47,11 +50,11 @@ entries:
         name: send_message
         input:
           text: >-
-            Hello, this is Claude for Henderson Lab at Northlake University. We need powder
-            XRD and SEM/EDS on 12 layered-oxide sodium-ion cathode powders, with standard
-            reports by Fri Nov 6. The powders are air-sensitive and kept under argon, so
-            they need air-free handling throughout. Can you run both on that timeline? If
-            so, please quote with dates and tell us how you'd like the samples delivered.
+            Hello, this is Claude for Henderson Frame Lab at Northlake University. We need CT
+            scans and compression tests on 12 titanium lattice coupons, 20 mm cubes printed
+            in Ti-6Al-4V, with standard reports by Fri Nov 6. The compression tests crush
+            the coupons, so the CT has to come first. Can you run both on that timeline? If
+            so, please quote with dates and tell us how you'd like the coupons delivered.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 1, step: 1}
     content:
       - type: thinking
@@ -59,50 +62,53 @@ entries:
     content:
       - type: thinking
         thinking: >-
-          Before the core can check the instruments and quote, it will want the sample
-          amounts, how they arrive and stay under argon, and how firm the date is. Ask.
+          Before the core can check the instruments and quote, it will want to know how
+          the coupons are marked, how they arrive and how they'll be held for the CT, and
+          how firm the date is. Ask.
       - type: tool_use
         name: send_message
         input:
           text: >-
             Thanks, we'd be glad to help. So we can check the instruments and quote, could
-            you tell us roughly how much of each powder there is, how the samples will
-            reach us, how they'll stay under argon on the way into each instrument, and
-            whether Nov 6 is firm or a later date would also work?
+            you tell us how each coupon is marked, how the coupons will reach us, how
+            they'll be held for the CT scans, and whether Nov 6 is firm or a later date
+            would also work?
   - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 1, step: 1}
     content:
       - type: thinking
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 2, step: 0}
     content:
       - type: thinking
-        thinking: The brief doesn't cover amounts, delivery or date flexibility. Ask the lab.
+        thinking: >-
+          The brief doesn't cover markings, delivery, the CT mounting or date
+          flexibility. Ask the lab.
       - type: tool_use
         name: consult
         input:
           question: >-
-            Northlake Characterization Core asks, before it quotes: how much of each powder
-            there is, how the samples will reach them, how they'll stay under argon on the
-            way into each instrument, and whether Nov 6 is firm or a later date would also
-            work. The brief doesn't say. What should I tell them?
+            Northlake Characterization Core asks, before it quotes: how each coupon is
+            marked, how the coupons will reach them, how they'll be held for the CT scans,
+            and whether Nov 6 is firm or a later date would also work. The brief doesn't
+            say. What should I tell them?
   - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 0}
     content:
       - type: thinking
-        thinking: Sample amounts, delivery and dates. Look for the project's notes.
+        thinking: Markings, drop-off, the CT mounting and dates. Look for the project's notes.
       - type: tool_use
         name: search_org_knowledge
-        input: {query: NAC-12 samples vials delivery holder dates}
+        input: {query: LTC-12 coupons drop-off holder dates}
   - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 1}
     content:
       - type: tool_use
         name: read_document
-        input: {id: "kn:c66e628f-4aea-5877-a7d8-7ca76ac55d39"}
+        input: {id: "kn:899bd5c5-cdbf-5d0b-828a-897f00f87ad3"}
   - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 2}
     content:
       - type: thinking
-        thinking: Vials, amounts and delivery are covered. Now how they get into the SEM.
+        thinking: Markings and drop-off are covered. Now how they're held for the CT.
       - type: tool_use
         name: read_document
-        input: {id: "kn:40f41261-e4c3-530a-abba-911ea3012050"}
+        input: {id: "kn:8d83a472-3158-5c9f-9e11-27aa417c8dd4"}
   - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 1, step: 3}
     content:
       - type: tool_use
@@ -113,19 +119,19 @@ entries:
       - type: thinking
         thinking: >-
           Everything they asked is on file and within what the lab shares: how the
-          samples are packed and delivered, the holder, the dates and a contact. What
+          coupons are marked and delivered, the CT holder, the dates and a contact. What
           making Nov 6 is worth is the lab's budget, so it stays out.
       - type: text
         text: |-
           {
-            "answer": "There are about 150 mg of each powder, in crimp-sealed glass vials under argon. The lab is on Northlake campus too, so Alex Chen will walk the sealed vials over himself; no courier. For the SEM, the lab is having a sealed transfer holder made for the Apreo 2 airlock, delivered to the core. The goal is results by Fri Nov 6; results by Fri Nov 13 would still work. Contact: alex.chen@henderson-lab.example.",
+            "answer": "Each coupon is a 20 mm titanium cube engraved with its ID. The lab is on Northlake campus too, so Alex Chen will drop the coupons off at the core himself, any weekday, as early as the core needs them; no courier. For the CT, the lab is having a stacked holder made for the core's Zeiss Xradia 620 Versa, with a carbon-fiber tube, that carries all 12 coupons through one scan session; it will be delivered to the core. The compression tests need nothing from the lab: the core tests the coupons between its own platens. The goal is CT and compression results by Fri Nov 6; results by Fri Nov 13 would still work. Contact: alex.chen@henderson-lab.example.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
-              "assignees": [{"member": "alex", "why": "they're your samples and your request"}]
+              "assignees": [{"member": "alex", "why": "they're your coupons and your request"}]
             },
-            "rationale": "From the lab's NAC-12 notes on samples and handling, the transfer holder and dates. It leaves out what making Nov 6 is worth to the lab, which is budget.",
-            "short_question": "Give Northlake the sample, handling and date details from the lab's notes?"
+            "rationale": "From the lab's LTC-12 notes on the coupons and drop-off, the CT holder and dates. It leaves out what making Nov 6 is worth to the lab, which is budget.",
+            "short_question": "Give Northlake the coupon, drop-off and date details from the lab's notes?"
           }
   - match: {org: henderson, role: sharing_check, thread: "henderson.northlake", turn: 1, step: 0}
     content:
@@ -133,7 +139,7 @@ entries:
         text: |-
           {
             "within_sharing": true,
-            "reason": "How the samples are packed, delivered and handled, the instrument holder, dates and a contact email, all of which Henderson Lab shares. Nothing about compositions or the budget."
+            "reason": "How the coupons are marked and get to the core, the instrument holder, dates and a contact email, all of which Henderson Frame Lab shares. Nothing about the lattice designs, print settings or the budget."
           }
   # Turn 3 opens with the released answer.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 3, step: 0}
@@ -143,12 +149,14 @@ entries:
         name: send_message
         input:
           text: >-
-            There are about 150 mg of each powder, in crimp-sealed glass vials under
-            argon. We're on Northlake campus too, so Alex Chen will walk the sealed vials
-            over himself. For the SEM, we're having a sealed transfer holder made for your
-            Apreo 2 airlock, delivered to you. We'd like results by Fri Nov 6, but Fri Nov
-            13 would still work. Alex's email is alex.chen@henderson-lab.example. What can
-            you do, and at what price?
+            Each coupon is a 20 mm titanium cube engraved with its ID. We're on Northlake
+            campus too, so Alex Chen will drop them off at the core himself, any weekday,
+            as early as you need them. For the CT, we're having a stacked holder made for
+            your Zeiss Xradia 620 Versa, with a carbon-fiber tube, that carries all 12
+            coupons through one scan session; it will be delivered to you. As we
+            understand it, the compression tests need nothing from us beyond the coupons.
+            We'd like results by Fri Nov 6, but Fri Nov 13 would still work. Alex's email
+            is alex.chen@henderson-lab.example. What can you do, and at what price?
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 3, step: 1}
     content:
       - type: thinking
@@ -160,18 +168,19 @@ entries:
         name: consult
         input:
           question: >-
-            Henderson Lab (Northlake University) has 12 air-sensitive powders, about 150 mg
-            each, in crimp-sealed vials under argon, walked over from their lab on campus.
-            Their own sealed transfer holder for our Apreo 2 airlock will be delivered to
-            us. They'd like powder XRD and SEM/EDS reports by Fri Nov 6, but Fri Nov 13
-            also works. What can we do, and at what price?
+            Henderson Frame Lab (Northlake University) has 12 titanium lattice coupons, 20 mm
+            cubes engraved with IDs, which Alex Chen will drop off from their lab on
+            campus. Their own stacked CT holder for our Xradia 620 Versa, with a
+            carbon-fiber tube, will be delivered to us. They'd like CT and compression-test
+            reports by Fri Nov 6, but Fri Nov 13 also works. What can we do, and at what
+            price?
   - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 0}
     content:
       - type: thinking
-        thinking: The XRD date decides the options. Check the calendar first.
+        thinking: The compression date decides the options. Check the calendar first.
       - type: tool_use
         name: search_org_knowledge
-        input: {query: XRD block November calendar}
+        input: {query: compression block CT session November calendar}
   - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 1}
     content:
       - type: tool_use
@@ -181,40 +190,44 @@ entries:
     content:
       - type: thinking
         thinking: >-
-          Two options: the standard block on Tue Nov 10 with reports by Fri Nov 13, or the
-          priority block on Wed Nov 4 with reports by Thu Nov 5, which fits all 12. Raj's
-          note in the search results says which client freed Nov 4; that's theirs, and
-          the calendar already lists the block. Now the prices.
+          Two options for the compression tests: the standard block on Tue Nov 10 with
+          reports by Fri Nov 13, or the priority block on Wed Nov 4, 13:00–17:00, with
+          reports by Thu Nov 5, which fits all 12. Raj's note in the search results says
+          which client freed Nov 4; that's theirs, and the calendar already lists the
+          block. Now the prices.
       - type: tool_use
         name: read_document
         input: {id: "kn:d8571c44-0258-5cee-b333-638d7c4f1e45"}
   - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 3}
     content:
       - type: thinking
-        thinking: And what we need for SEM on air-sensitive powders.
+        thinking: And how the CT and the compression tests fit together on the same coupons.
       - type: tool_use
         name: read_document
-        input: {id: "kn:3b3740ae-ad2f-5bfe-9486-0bb0f3123d13"}
+        input: {id: "kn:ff1f62a1-66a6-551d-9997-633e3bda3c29"}
   - match: {org: northlake, role: answerer, thread: "henderson.northlake", turn: 1, step: 4}
     content:
       - type: thinking
         thinking: >-
-          12 samples on each technique take the published 10% off: XRD $540 - $54 = $486,
-          SEM/EDS $720 - $72 = $648, plus $150 air-free handling: $1,284 standard. Priority
-          adds the $150 fee: $1,434. All published, so quoting it commits nothing off the
-          list, and the representative may confirm a booking at these prices once we say
-          the slot is open.
+          A compression test crushes the coupon, so the CT goes first: the Wed Nov 4
+          morning session, 09:00–13:00, ahead of either compression block, with CT
+          reports by Fri Nov 6. The coupons and holder are due by 17:00 the business day
+          before, Tue Nov 3. 12 coupons on each test take the published 10% off:
+          compression $540 - $54 = $486, CT $720 - $72 = $648, plus $150 intake and setup:
+          $1,284 standard. Priority adds the $150 fee: $1,434. All published, so quoting it
+          commits nothing off the list, and the representative may confirm a booking at
+          these prices once we say the slot is open.
       - type: text
         text: |-
           {
-            "answer": "We have two options for all 12 powders at our published academic prices. Standard: powder XRD in the next standard block, Tue Nov 10, and SEM/EDS from Tue Nov 3, with reports by Fri Nov 13: $1,284. That is XRD 12 × $45 = $540 and SEM/EDS 12 × $60 = $720, each 10% off for 10 or more samples ($486 and $648), plus $150 for air-free handling. Priority: the XRD in the priority block on Wed Nov 4, 09:00–13:00, which is open, with reports by Thu Nov 5: $1,434, the same plus the $150 priority fee. Either way the sealed vials should reach us by Tue Nov 3; we open them in our glovebox, mount the powders air-free, and move them to the SEM in their sealed transfer holder. Quotes are valid 14 days.",
+            "answer": "We have two options for all 12 coupons at our published academic prices. A compression test crushes the coupon, so either way we scan first: CT in the Wed Nov 4 session, 09:00–13:00, in their stacked holder, with CT reports by Fri Nov 6. Standard: compression tests in the next standard block, Tue Nov 10, with reports by Fri Nov 13: $1,284. That is compression 12 × $45 = $540 and CT 12 × $60 = $720, each 10% off for 10 or more coupons ($486 and $648), plus $150 intake and setup for the batch. Priority: the compression tests in the priority block on Wed Nov 4, 13:00–17:00, which is open, with reports by Thu Nov 5: $1,434, the same plus the $150 priority fee. Either way, the coupons and the holder should reach our front desk, Room 112, Physical Sciences Building, by 17:00 on Tue Nov 3. We test the coupons between our own platens, so the compression tests need nothing else from them. Quotes are valid 14 days.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
               "assignees": [{"member": "helen", "why": "you schedule the instruments"}]
             },
-            "rationale": "Both options come from the public calendar and the published academic terms: the 10% volume discount on each technique, the $150 air-free handling fee and the $150 priority fee. Nothing is off-list, and the instructions let the representative confirm a published-price booking once we've said a slot is open. Raj's note on who freed the Nov 4 block stays out.",
-            "short_question": "Quote Henderson Lab standard ($1,284) or priority ($1,434) XRD with SEM/EDS?"
+            "rationale": "Both options come from the public calendar and the published academic terms: the 10% volume discount on each test, the $150 intake and setup fee and the $150 priority fee. Nothing is off-list, and the instructions let the representative confirm a published-price booking once we've said a slot is open. Raj's note on who freed the Nov 4 block stays out.",
+            "short_question": "Quote Henderson Frame Lab standard ($1,284) or priority ($1,434) CT and compression?"
           }
   - match: {org: northlake, role: sharing_check, thread: "henderson.northlake", turn: 1, step: 0}
     content:
@@ -222,7 +235,7 @@ entries:
         text: |-
           {
             "within_sharing": true,
-            "reason": "Prices and published terms from the external academic price list, what is open on the public calendar, and air-free handling requirements, all of which Northlake shares. Nothing about other clients or their bookings."
+            "reason": "Prices and published terms from the external academic price list, what is open on the public calendar, and coupon prep and drop-off, all of which Northlake shares. Nothing about other clients or their bookings."
           }
   # Turn 3 opens with the released answer.
   - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 3, step: 0}
@@ -232,15 +245,18 @@ entries:
         name: send_message
         input:
           text: >-
-            Thanks. We have two options for all 12 powders at our published academic
-            prices. Standard: powder XRD in our next standard block, Tue Nov 10, and SEM/EDS
-            from Tue Nov 3, with reports by Fri Nov 13, for $1,284. That's XRD 12 × $45 and
-            SEM/EDS 12 × $60, each 10% off for 10 or more samples, plus $150 for air-free
-            handling. Priority: the XRD in our priority block on Wed Nov 4, 09:00–13:00,
-            with reports by Thu Nov 5, for $1,434, the same plus our $150 priority fee.
-            Either way, please bring the sealed vials by Tue Nov 3; we open them in our
-            glovebox, mount the powders air-free and use your transfer holder for the SEM.
-            The quote is valid 14 days. Which would you like?
+            Thanks. We have two options for all 12 coupons at our published academic
+            prices. A compression test crushes the coupon, so either way we scan first: CT
+            in our Wed Nov 4 session, 09:00–13:00, in your stacked holder, with CT reports
+            by Fri Nov 6. Standard: compression tests in our next standard block, Tue Nov
+            10, with reports by Fri Nov 13, for $1,284. That's compression 12 × $45 and CT
+            12 × $60, each 10% off for 10 or more coupons, plus $150 intake and setup.
+            Priority: the compression tests in our priority block on Wed Nov 4,
+            13:00–17:00, with reports by Thu Nov 5, for $1,434, the same plus our $150
+            priority fee. Either way, the coupons and the holder need to be at our front
+            desk, Room 112, Physical Sciences Building, by 17:00 on Tue Nov 3. We test
+            between our own platens, so you needn't bring anything else. The quote is
+            valid 14 days. Which would you like?
   - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 3, step: 1}
     content:
       - type: thinking
@@ -254,11 +270,12 @@ entries:
         name: consult
         input:
           question: >-
-            Northlake Characterization Core quotes two options for the XRD and SEM/EDS on
-            the 12 powders, at its published academic prices: standard, $1,284, with the
-            XRD on Tue Nov 10 and reports by Fri Nov 13; or priority, $1,434, with the XRD
-            in a priority block on Wed Nov 4 and reports by Thu Nov 5. The vials go to them
-            by Tue Nov 3 either way. Both are over the $1,000 I may commit alone. Which
+            Northlake Characterization Core quotes two options for the CT and compression
+            tests on the 12 coupons, at its published academic prices: standard, $1,284,
+            with the CT on Wed Nov 4 and the compression tests on Tue Nov 10, reports by
+            Fri Nov 13; or priority, $1,434, with both on Wed Nov 4, compression reports by
+            Thu Nov 5 and CT reports by Fri Nov 6. The coupons go to their front desk by
+            Tue Nov 3 either way. Both are over the $1,000 I may commit alone. Which
             should I book?
   - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 2, step: 0}
     content:
@@ -266,7 +283,7 @@ entries:
         thinking: A choice of dates and price. Check what the dates are for, then spending.
       - type: tool_use
         name: search_org_knowledge
-        input: {query: NAC-12 dates spending}
+        input: {query: LTC-12 dates spending}
   - match: {org: henderson, role: answerer, thread: "henderson.northlake", turn: 2, step: 1}
     content:
       - type: tool_use
@@ -287,14 +304,14 @@ entries:
       - type: text
         text: |-
           {
-            "answer": "Book the priority option: $1,434, with the XRD in the Wed Nov 4 block and reports by Thu Nov 5.",
+            "answer": "Book the priority option: $1,434, with the compression tests in the Wed Nov 4 priority block and all reports by Fri Nov 6.",
             "needs_human": true,
             "needs_human_reason": "$1,434 is over the $1,000 the lab's representative may commit to one organization without Alex's review.",
             "route": {
               "assignees": [{"member": "alex", "why": "it's your request, and orders over $1,000 on it are yours to review"}]
             },
-            "rationale": "Take priority: $150 more than the $1,284 standard option makes the Nov 9 group meeting, within the up to $200 the lab's dates note set aside for it. Standard, with reports by Fri Nov 13, would still serve the quarterly report if Alex would rather save the $150. Either is inside the discretionary budget.",
-            "short_question": "Book Northlake's priority option, $1,434 with reports by Nov 5?"
+            "rationale": "Take priority: $150 more than the $1,284 standard option makes the Nov 9 group meeting, within the up to $200 the lab's dates note set aside for it. Standard, with compression reports by Fri Nov 13, would still serve the quarterly report if Alex would rather save the $150. Either is inside the discretionary budget.",
+            "short_question": "Book Northlake's priority option, $1,434 with all reports by Nov 6?"
           }
   # Turn 5 opens with Alex's answer.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 5, step: 0}
@@ -304,9 +321,11 @@ entries:
         name: send_message
         input:
           text: >-
-            Thank you. Let's go with the priority option, please: powder XRD in the Wed
-            Nov 4 block and SEM/EDS from Tue Nov 3, $1,434, with reports by Thu Nov 5. Alex
-            will bring the 12 sealed vials over by Tue Nov 3.
+            Thank you. Let's go with the priority option, please: the CT in your Wed Nov 4
+            morning session and the compression tests in your priority block that
+            afternoon, $1,434, with compression reports by Thu Nov 5 and CT reports by Fri
+            Nov 6. Alex will drop the 12 coupons off at your front desk by 17:00 on Tue
+            Nov 3.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 5, step: 1}
     content:
       - type: thinking
@@ -320,22 +339,24 @@ entries:
         name: send_message
         input:
           text: >-
-            Booked: powder XRD on all 12 powders in our priority block on Wed Nov 4,
-            09:00–13:00, and SEM/EDS from Tue Nov 3, $1,434, with standard reports by Thu
-            Nov 5. Please bring the sealed vials by Tue Nov 3. Thanks, and good luck with
-            the measurements.
+            Booked: CT on all 12 coupons in our Wed Nov 4 session, 09:00–13:00, and
+            compression tests in our priority block that afternoon, 13:00–17:00, $1,434,
+            with compression reports by Thu Nov 5 and CT reports by Fri Nov 6. Please have
+            the coupons and the holder at our front desk, Room 112, Physical Sciences
+            Building, by 17:00 on Tue Nov 3. Thanks, and good luck with the tests.
   - match: {org: northlake, role: representative, thread: "henderson.northlake", turn: 4, step: 1}
     content:
       - type: tool_use
         name: close
         input:
           summary: >-
-            Booked Henderson Lab (Alex Chen, alex.chen@henderson-lab.example) into the Wed
-            Nov 4 priority XRD block, 09:00–13:00, and SEM/EDS from Tue Nov 3, for 12
-            air-sensitive powders: $1,434 at published academic prices (10% volume
-            discount on each technique, $150 air-free handling, $150 priority fee).
-            Reports due Thu Nov 5. Vials hand-delivered by Tue Nov 3; their transfer holder
-            for the Apreo 2 is delivered to us.
+            Booked Henderson Frame Lab (Alex Chen, alex.chen@henderson-lab.example) for 12
+            titanium lattice coupons: CT in the Wed Nov 4 session, 09:00–13:00, then
+            compression tests in the Wed Nov 4 priority block, 13:00–17:00: $1,434 at
+            published academic prices (10% volume discount on each test, $150 intake and
+            setup, $150 priority fee). Compression reports due Thu Nov 5, CT reports Fri
+            Nov 6. Coupons dropped off at the front desk by Tue Nov 3; their stacked holder
+            for the Versa is delivered to us.
   # The closed notice opens Henderson's last turn.
   - match: {org: henderson, role: representative, thread: "henderson.northlake", turn: 6, step: 0}
     content:
@@ -344,10 +365,12 @@ entries:
         name: close
         input:
           summary: >-
-            Northlake Characterization Core booked the priority option: powder XRD in the
-            Wed Nov 4 block and SEM/EDS from Tue Nov 3, $1,434, with standard reports by
-            Thu Nov 5, in time for the Nov 9 group meeting. Alex approved priority over the
-            $1,284 standard option. He brings the sealed vials over by Tue Nov 3.
+            Northlake Characterization Core booked the priority option: the CT on Wed Nov 4
+            morning and the compression tests in the priority block that afternoon,
+            $1,434, with compression reports by Thu Nov 5 and CT reports by Fri Nov 6, in
+            time for the Nov 9 group meeting. Alex approved priority over the $1,284
+            standard option. He drops the coupons off at the core's front desk by Tue Nov
+            3.
 
   # --- henderson.ridgeline
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 1, step: 0}
@@ -357,10 +380,10 @@ entries:
         name: send_message
         input:
           text: >-
-            Hello, this is Claude for Henderson Lab at Northlake University. We need a
-            sealed holder made to carry 12 air-sensitive sodium-ion cathode powders under
-            argon into an instrument for analysis. It needs to arrive before Tue Nov 3.
-            Could you quote one, with a delivery date?
+            Hello, this is Claude for Henderson Frame Lab at Northlake University. We need a
+            holder made that stacks 12 titanium lattice coupons, 20 mm cubes, so all 12 go
+            through one micro-CT scan session. It needs to arrive before Tue Nov 3. Could
+            you quote one, with a delivery date?
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 1, step: 1}
     content:
       - type: thinking
@@ -368,61 +391,61 @@ entries:
     content:
       - type: thinking
         thinking: >-
-          No instrument model or drawings, and no seal material: I need both before the
+          No instrument model or drawings, and no tube material: I need both before the
           shop can quote.
       - type: tool_use
         name: send_message
         input:
           text: >-
-            Thanks, we can make that. Before we can quote it, we need two things: which
-            instrument and airlock the holder has to fit (the model, or drawings), and the
-            seal material you'd like, which depends on how long the powders will sit in
-            it.
+            Thanks, we can make that. Before we can quote it, we need two things: which CT
+            instrument and stage mount the holder has to fit (the model, or drawings), and
+            the tube material you'd like, which depends on how fine you'll scan.
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 1, step: 1}
     content:
       - type: thinking
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 2, step: 0}
     content:
       - type: thinking
-        thinking: The brief names neither the instrument nor a seal. Ask the lab.
+        thinking: The brief names neither the instrument nor a tube material. Ask the lab.
       - type: tool_use
         name: consult
         input:
           question: >-
-            Ridgeline Fabrication can make the sealed holder, but to quote it needs the
-            instrument and airlock it has to fit (the model or drawings) and the seal
-            material, which depends on how long the powders will sit in it. The brief
-            doesn't say. What should I tell them?
+            Ridgeline Fabrication can make the stacked holder, but to quote it needs the CT
+            instrument and mount it has to fit (the model or drawings) and the tube
+            material, which depends on how fine we'll scan. The brief doesn't say. What
+            should I tell them?
   - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
       - type: thinking
         thinking: Look for the holder in the lab's records.
       - type: tool_use
         name: search_org_knowledge
-        input: {query: transfer holder seal instrument}
+        input: {query: CT holder tube instrument}
   - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 1}
     content:
       - type: tool_use
         name: read_document
-        input: {id: "kn:40f41261-e4c3-530a-abba-911ea3012050"}
+        input: {id: "kn:8d83a472-3158-5c9f-9e11-27aa417c8dd4"}
   - match: {org: henderson, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 2}
     content:
       - type: thinking
         thinking: >-
-          Alex's holder note has all of it: the Apreo 2 airlock, a Kalrez seal for weeks
-          under argon, delivered to the core. Instrument, mounting and handling details are
-          shared, so no one needs to be asked.
+          Alex's holder note has all of it: the core's Zeiss Xradia 620 Versa, all 12
+          coupons in one scan session, a carbon-fiber tube because the lab scans at 3 µm
+          voxels, delivered to the core. Instrument and mounting details are shared, so
+          no one needs to be asked.
       - type: text
         text: |-
           {
-            "answer": "The holder is for the airlock of a Thermo Fisher Apreo 2 SEM. The seal should be Kalrez: the powders may sit in the holder under argon for weeks. Please deliver it to the characterization core on Northlake campus, where the SEM is.",
+            "answer": "The holder is for a Zeiss Xradia 620 Versa micro-CT, and should carry all 12 coupons through one scan session. It should have a carbon-fiber tube: the lab scans at 3 µm voxels to see strut defects. Please deliver it to the characterization core's front desk on Northlake campus: Room 112, Physical Sciences Building.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
-              "assignees": [{"member": "alex", "why": "they're your samples and your request"}]
+              "assignees": [{"member": "alex", "why": "they're your coupons and your request"}]
             },
-            "rationale": "All from Alex's note on the NAC-12 transfer holder: the instrument, the Kalrez seal for long storage under argon, and delivery to the core. Instrument, mounting and handling details are within what the lab shares.",
-            "short_question": "Tell Ridgeline the holder is for an Apreo 2 airlock, with Kalrez?"
+            "rationale": "All from Alex's note on the LTC-12 CT holder: the instrument, the carbon-fiber tube for 3 µm scans, and delivery to the core. Instrument, mounting and delivery details are within what the lab shares.",
+            "short_question": "Tell Ridgeline the holder is for the Xradia Versa, with a carbon-fiber tube?"
           }
   - match: {org: henderson, role: sharing_check, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
@@ -430,7 +453,7 @@ entries:
         text: |-
           {
             "within_sharing": true,
-            "reason": "Instrument and mounting details and how the samples are handled and delivered, which Henderson Lab shares. Nothing about compositions or the budget."
+            "reason": "Instrument and mounting details and where the holder is delivered, which Henderson Frame Lab shares. Nothing about the lattice designs, print settings or the budget."
           }
   # Turn 3 opens with the released answer.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 3, step: 0}
@@ -440,10 +463,11 @@ entries:
         name: send_message
         input:
           text: >-
-            It's for the airlock of a Thermo Fisher Apreo 2 SEM, and we'd like a Kalrez
-            seal: the powders may sit in it under argon for weeks. Please deliver it to the
-            characterization core on Northlake campus, where the SEM is, before Tue Nov 3.
-            What would that cost, and when could it arrive?
+            It's for a Zeiss Xradia 620 Versa micro-CT, and it should carry all 12 coupons
+            through one scan session. We'd like a carbon-fiber tube: we scan at 3 µm voxels
+            to see strut defects. Please deliver it to the characterization core's front
+            desk on Northlake campus, Room 112, Physical Sciences Building, before Tue Nov
+            3. What would that cost, and when could it arrive?
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 3, step: 1}
     content:
       - type: thinking
@@ -455,16 +479,16 @@ entries:
         name: consult
         input:
           question: >-
-            Henderson Lab wants a sealed SEM transfer holder for a Thermo Fisher Apreo 2
-            airlock, with a Kalrez seal (the powders may sit in it under argon for weeks),
-            delivered to the characterization core on Northlake campus before Tue Nov 3.
-            What's the price, and when could it be delivered?
+            Henderson Frame Lab wants a stacked CT holder for a Zeiss Xradia 620 Versa that
+            carries 12 coupons through one scan session, with a carbon-fiber tube (they
+            scan at 3 µm voxels), delivered to the characterization core on Northlake
+            campus before Tue Nov 3. What's the price, and when could it be delivered?
   - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
       - type: thinking
       - type: tool_use
         name: search_org_knowledge
-        input: {query: Apreo transfer holder Kalrez price}
+        input: {query: Versa stacked CT holder carbon-fiber price}
   - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 1}
     content:
       - type: tool_use
@@ -479,14 +503,14 @@ entries:
       - type: text
         text: |-
           {
-            "answer": "The sealed SEM transfer holder for the Thermo Fisher Apreo 2 airlock, aluminum body, is $240 with a Viton seal, and Kalrez in its place adds $85: $325 in total. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. Kalrez is what we recommend for long storage under argon.",
+            "answer": "The RV-16 stacked CT holder for the Zeiss Xradia 620 Versa is made to the core's mount spec and carries up to 16 coupons up to 20 mm across in one scan session. It's $240 with an aluminum tube, and a carbon-fiber tube in its place adds $85: $325 in total. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. Carbon fiber is what we recommend for scans finer than 5 µm voxels.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
               "assignees": [{"member": "dana", "why": "you handle quotes and scheduling"}]
             },
-            "rationale": "The Apreo 2 holder from the price list with the Kalrez option, at the standard lead time and free campus delivery. Nothing here goes beyond the price list.",
-            "short_question": "Quote Henderson Lab $325 for the Kalrez-sealed Apreo 2 holder, delivered Nov 2?"
+            "rationale": "The RV-16 holder from the price list with the carbon-fiber tube option, at the standard lead time and free campus delivery. Nothing here goes beyond the price list.",
+            "short_question": "Quote Henderson Frame Lab $325 for the carbon-fiber RV-16 holder, delivered Nov 2?"
           }
   - match: {org: ridgeline, role: sharing_check, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
@@ -494,31 +518,31 @@ entries:
         text: |-
           {
             "within_sharing": true,
-            "reason": "Only a price, a seal option, a lead time and delivery from Ridgeline's price list, which its sharing description covers."
+            "reason": "Only a price, a tube option, a lead time and delivery from Ridgeline's price list, and which instrument the listed holder fits, which its sharing description covers."
           }
-  # Dana's Edit on Ridgeline's side, its first steer: "Let's not give the Kalrez
+  # Dana's Edit on Ridgeline's side, its first steer: "Let's not give the carbon-fiber
   # option". Its guidance; and, with Ridgeline set to Ask so the quote waits for her,
   # the answerer's rev 2 of it. `harmony run --edit ridgeline:henderson:N:...` (no item)
   # plays the guidance alone.
   - match: {org: ridgeline, role: steer, thread: "henderson.ridgeline", turn: 1, step: 0}
     content:
       - type: text
-        text: '{"guidance": "Don''t propose the Kalrez seal option."}'
+        text: '{"guidance": "Don''t propose the carbon-fiber tube option."}'
   - match: {org: ridgeline, role: answerer, thread: "henderson.ridgeline", turn: 1, step: 8}
     content:
       - type: thinking
-        thinking: No Kalrez option, so the holder alone with its standard Viton seal.
+        thinking: No carbon-fiber option, so the holder alone with its standard aluminum tube.
       - type: text
         text: |-
           {
-            "answer": "The sealed SEM transfer holder for the Thermo Fisher Apreo 2 airlock, aluminum body, is $240 with its standard Viton seal. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3.",
+            "answer": "The RV-16 stacked CT holder for the Zeiss Xradia 620 Versa is made to the core's mount spec and carries up to 16 coupons up to 20 mm across in one scan session. It's $240 with its standard aluminum tube. It's ready in 4 business days and delivered free on Northlake campus the next business day, so ordered today it reaches the characterization core on Mon Nov 2, ahead of Nov 3.",
             "needs_human": false,
             "needs_human_reason": null,
             "route": {
               "assignees": [{"member": "dana", "why": "you handle quotes and scheduling"}]
             },
-            "rationale": "The Apreo 2 holder from the price list without the Kalrez option, as Dana asked, at the standard lead time and free campus delivery.",
-            "short_question": "Quote Henderson Lab $240 for the holder with its standard seal, delivered Nov 2?"
+            "rationale": "The RV-16 holder from the price list without the carbon-fiber option, as Dana asked, at the standard lead time and free campus delivery.",
+            "short_question": "Quote Henderson Frame Lab $240 for the holder with its standard tube, delivered Nov 2?"
           }
   # Turn 3 opens with the released answer.
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 3, step: 0}
@@ -528,12 +552,14 @@ entries:
         name: send_message
         input:
           text: >-
-            We make exactly that. A sealed transfer holder for the Apreo 2 airlock, with
-            an aluminum body, is $240 with a Viton seal, and Kalrez in its place adds $85:
-            $325 in total. It's ready in 4 business days and we deliver free on Northlake
-            campus the next business day, so if you confirm today it reaches the
-            characterization core on Mon Nov 2, ahead of Nov 3. Kalrez is what we'd
-            recommend for weeks under argon. Shall we go ahead?
+            We make exactly that. Our RV-16 stacked CT holder for the Xradia 620 Versa is
+            made to the core's mount spec and carries up to 16 coupons up to 20 mm across
+            in one scan session. It's $240 with an aluminum tube, and a carbon-fiber tube
+            in its place adds $85: $325 in total. It's ready in 4 business days and we
+            deliver free on Northlake campus the next business day, so if you confirm
+            today it reaches the characterization core on Mon Nov 2, ahead of Nov 3. We
+            recommend carbon fiber for scans finer than 5 µm voxels, so it suits your 3 µm
+            scans. Shall we go ahead?
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 3, step: 1}
     content:
       - type: thinking
@@ -547,9 +573,9 @@ entries:
         name: send_message
         input:
           text: >-
-            Yes, please go ahead: the sealed transfer holder for the Apreo 2 airlock with a
-            Kalrez seal, $325, delivered to the characterization core on Northlake campus
-            on Mon Nov 2. Thank you.
+            Yes, please go ahead: the RV-16 stacked CT holder for the Xradia 620 Versa with
+            a carbon-fiber tube, $325, delivered to the characterization core's front desk
+            on Northlake campus on Mon Nov 2. Thank you.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 4, step: 1}
     content:
       - type: thinking
@@ -561,19 +587,19 @@ entries:
         name: send_message
         input:
           text: >-
-            Confirmed: one sealed transfer holder for the Apreo 2 airlock with a Kalrez
-            seal, $325, delivered to the characterization core on Northlake campus on Mon
-            Nov 2. Thanks for the order.
+            Confirmed: one RV-16 stacked CT holder for the Xradia 620 Versa with a
+            carbon-fiber tube, $325, delivered to the characterization core's front desk,
+            Room 112, Physical Sciences Building, on Mon Nov 2. Thanks for the order.
   - match: {org: ridgeline, role: representative, thread: "henderson.ridgeline", turn: 4, step: 1}
     content:
       - type: tool_use
         name: close
         input:
           summary: >-
-            Order from Henderson Lab: one sealed SEM transfer holder for the Thermo Fisher
-            Apreo 2 airlock, aluminum body, Kalrez seal, $325 at list price. Ready Fri Oct
-            30, delivered free to the characterization core on Northlake campus on Mon
-            Nov 2.
+            Order from Henderson Frame Lab: one RV-16 stacked CT holder for the Zeiss Xradia 620
+            Versa, carbon-fiber tube, $325 at list price. Ready Fri Oct 30, delivered free
+            to the characterization core's front desk on Northlake campus (Room 112,
+            Physical Sciences Building) on Mon Nov 2.
   - match: {org: henderson, role: representative, thread: "henderson.ridgeline", turn: 5, step: 0}
     content:
       - type: thinking
@@ -581,10 +607,10 @@ entries:
         name: close
         input:
           summary: >-
-            Ridgeline Fabrication is making the sealed transfer holder for the Apreo 2
-            airlock with a Kalrez seal, $325 at list price, delivered to the core on Mon
-            Nov 2. Accepted without asking Alex: list price, within the holder's limit and
-            under the $1,000 review line.
+            Ridgeline Fabrication is making the stacked CT holder for the core's Xradia 620
+            Versa with a carbon-fiber tube, $325 at list price, delivered to the core on
+            Mon Nov 2. Accepted without asking Alex: list price, within the holder's limit
+            and under the $1,000 review line.
 
   # --- henderson.calder
   - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 1, step: 0}
@@ -594,10 +620,11 @@ entries:
         name: send_message
         input:
           text: >-
-            Hello, this is Claude for Henderson Lab at Northlake University. We're working
-            on 12 air-sensitive layered-oxide sodium-ion cathode powders, and wondered
-            whether modelling could support the work, such as DFT voltage or stability
-            screening. Is that something you do, and what would it involve?
+            Hello, this is Claude for Henderson Frame Lab at Northlake University. We're testing
+            12 3D-printed titanium lattice coupons, and wondered whether modelling could
+            support the work, such as finite-element predictions of each design's
+            stiffness and crush strength. Is that something you do, and what would it
+            involve?
   - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 1, step: 1}
     content:
       - type: thinking
@@ -608,19 +635,20 @@ entries:
         name: send_message
         input:
           text: >-
-            Thanks for asking. Yes: voltage and stability screening of layered-oxide
-            cathodes with DFT and machine-learned potentials is routine for us. To scope
-            it we'd need the compositions and the structures you're considering. If you
-            can share those later, get in touch and we'll quote.
+            Thanks for asking. Yes: finite-element predictions of stiffness and strength
+            for lattice designs are routine for us. To scope it we'd need the designs
+            themselves, such as the cell sizes and strut thicknesses. If you can share
+            those later, get in touch and we'll quote.
   - match: {org: calder, role: representative, thread: "henderson.calder", turn: 1, step: 1}
     content:
       - type: tool_use
         name: close
         input:
           summary: >-
-            Henderson Lab asked whether modelling could support its sodium-ion cathode
-            work. We said voltage and stability screening is routine for us but needs the
-            compositions to scope; they shared none, so there's nothing to quote yet.
+            Henderson Frame Lab asked whether modelling could support its titanium lattice work.
+            We said finite-element stiffness and strength predictions are routine for us
+            but need the lattice designs to scope; they shared none, so there's nothing to
+            quote yet.
   - match: {org: henderson, role: representative, thread: "henderson.calder", turn: 2, step: 0}
     content:
       - type: thinking
@@ -628,5 +656,6 @@ entries:
         name: close
         input:
           summary: >-
-            Calder Computational can screen voltage and stability with DFT, but needs the
-            compositions to scope it, which the brief keeps private. Nothing agreed.
+            Calder Computational can predict stiffness and crush strength with
+            finite-element models, but needs the lattice designs to scope it, which the
+            brief keeps private. Nothing agreed.

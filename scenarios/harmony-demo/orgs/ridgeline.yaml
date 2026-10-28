@@ -1,7 +1,7 @@
 # Ridgeline Fabrication, a responder (docs/SCENARIO.md). It needs the instrument and the
-# seal material before it quotes an airtight part; Henderson Lab's records have both.
-# Its price list has the holder the story needs, so it quotes and confirms the order at
-# list price without asking anyone.
+# tube material before it quotes a holder; Henderson Frame Lab's records have both. Its price
+# list has the holder the story needs, so it quotes and confirms the order at list
+# price without asking anyone.
 slug: ridgeline
 name: Ridgeline Fabrication
 kind: fabrication
@@ -16,20 +16,20 @@ members:
 
 settings:
   public_summary: >-
-    Ridgeline Fabrication does precision machining for labs: vacuum and airtight sample
-    holders, transfer vessels and custom fixtures, usually in 3–5 business days. To
-    quote an airtight part we need drawings or the instrument model, and the seal
-    material.
+    Ridgeline Fabrication does precision machining for labs: listed holders for
+    common instruments, stacked micro-CT holders included, plus test fixtures and
+    custom mounts, usually in 3–5 business days. To quote a holder we need drawings or
+    the instrument model, and the material.
   instructions: >-
-    You represent Ridgeline Fabrication. Before quoting an airtight part, make sure you
-    have drawings or the instrument model, and the seal material. Consult the shop for
-    prices and lead times. You may confirm an order at list price, the published rush
+    You represent Ridgeline Fabrication. Before quoting a holder, make sure you have
+    drawings or the instrument model, and the material. Consult the shop for prices
+    and lead times. You may confirm an order at list price, the published rush
     included; consult only for work that isn't on the price list.
 
 policy:
   autonomy: auto
   sharing_description: >-
-    Our price list (prices, seal options, lead times, the rush and delivery), the
+    Our price list (prices, tube options, lead times, the rush and delivery), the
     ready and delivery dates it gives an order, whether the rush is open, which
     instruments our listed holders fit and what they carry, how an order fits the
     dates and budget the customer gave us, and what we need to quote a part. Not:
@@ -46,13 +46,13 @@ knowledge:
     title: Price list
     kind: price-list
     body: >-
-      RT-A2 sealed SEM transfer holder for the Thermo Fisher Apreo 2 airlock, aluminum
-      body, made to the core's airlock spec (KF40 port, one 2-030 O-ring on the lid),
-      carries one standard SEM stub (any number of powder mounts on it): $240, ready in
-      4 business days, Viton seal included. Kalrez seal in its place
-      +$85, recommended for long storage under argon. Free delivery on Northlake campus
-      the next business day after it's ready. Rush: ready in 3 business days for +$60,
-      when the lathe is free. Other holders and fixtures are quoted from drawings.
+      RV-16 stacked CT holder for the Zeiss Xradia 620 Versa, made to the core's mount
+      spec (M6 kinematic base, 40 mm tube), carries up to 16 coupons up to 20 mm across
+      in one scan session: $240, ready in 4 business days, aluminum tube included.
+      Carbon-fiber tube in its place +$85, recommended for scans finer than 5 µm
+      voxels. Free delivery on Northlake campus the next business day after it's
+      ready. Rush: ready in 3 business days for +$60, when the lathe is free. Other
+      holders and fixtures are quoted from drawings.
   - slug: shop-load
     title: Shop load
     kind: note

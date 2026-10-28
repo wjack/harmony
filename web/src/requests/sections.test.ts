@@ -18,9 +18,9 @@ describe("matches", () => {
   const henderson = first(helens.needs_you.filter((item) => item.thread_id === THREAD.henderson));
 
   it("finds a request by its title or its counterparty, ignoring case", () => {
-    expect(matches(henderson, "sem/eds", "all")).toBe(true);
+    expect(matches(henderson, "COMPRESSION", "all")).toBe(true);
     expect(matches(henderson, "  henderson ", "all")).toBe(true);
-    expect(matches(henderson, "PEEK", "all")).toBe(false);
+    expect(matches(henderson, "tubes", "all")).toBe(false);
   });
 
   it("filters by direction: inbound is ours to answer, outbound is ours to ask", () => {

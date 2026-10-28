@@ -113,7 +113,7 @@ def test_the_story_hedges_what_live_models_may_do() -> None:
     assert story is not None
     bodies = {step.id: _flat(step.body) for step in story.steps}
     assert bodies["approve-outreach"].startswith(
-        "Read the brief and each organization's ask: the shared brief gives the sample "
+        "Read the brief and each organization's ask: the shared brief gives the coupon "
         "class and count, and each ask holds that organization's part and its limit. Edit "
         "either if you like."
     )
@@ -139,24 +139,24 @@ def test_every_seeded_request_has_a_title() -> None:
     scenario = load_scenario("harmony-demo")
     titles = {thread.slug: thread.request.title for thread in scenario.threads}
     assert titles == {
-        "henderson-northlake-precursor-xrd": "Powder XRD on 6 precursors",
-        "ridgeline-northlake-seal-sem": "SEM on argon-stored seals",
+        "henderson-northlake-test-ct": "CT on 6 test coupons",
+        "ridgeline-northlake-bracket-ct": "CT on two welded brackets",
     }
     (probe,) = scenario.requests
-    assert probe.title == "Rush SEM slot enquiry"
+    assert probe.title == "Rush CT slot enquiry"
     (recipient,) = probe.recipients
-    assert (recipient.org, recipient.title) == ("northlake", "Rush SEM slot enquiry")
+    assert (recipient.org, recipient.title) == ("northlake", "Rush CT slot enquiry")
     assert recipient.ask is not None
     assert "Thursday" in recipient.ask
 
 
 def test_a_seeded_message_runs_long_enough_to_check_it_shows_in_full() -> None:
-    """The web's requests spec opens the seal thread as Raj to check that a long message
-    shows in full, not cut short: one of at least 900 characters, many lines at any
-    width. Its text is free."""
+    """The web's requests spec opens the brackets thread as Raj to check that a long
+    message shows in full, not cut short: one of at least 900 characters, many lines at
+    any width. Its text is free."""
     scenario = load_scenario("harmony-demo")
-    seal = next(t for t in scenario.threads if t.slug == "ridgeline-northlake-seal-sem")
-    assert max(len(m.body) for m in seal.messages if m.sender == "northlake") >= 900
+    brackets = next(t for t in scenario.threads if t.slug == "ridgeline-northlake-bracket-ct")
+    assert max(len(m.body) for m in brackets.messages if m.sender == "northlake") >= 900
 
 
 def test_the_demo_network_has_the_featured_and_background_orgs() -> None:
@@ -181,15 +181,15 @@ def test_northlake_shares_its_published_terms_but_not_other_clients() -> None:
     assert _flat(northlake.policy.sharing_description) == (
         "Our external academic price list with its published fees and terms, what is open "
         "on the public instrument calendar and how booking works, the customer's own quote "
-        "and booking, sample-prep, air-free handling and delivery requirements (our "
-        "glovebox, who receives deliveries, what we supply, and which holders fit our "
-        "instruments, Ridgeline's included), and typical turnaround. Not: other clients or "
-        "their bookings, staff notes, or off-list pricing."
+        "and booking, coupon prep and drop-off (where we receive parts, the order we test "
+        "in, what we supply, and which holders fit our instruments, Ridgeline's included), "
+        "and typical turnaround. Not: other clients or their bookings, staff notes, or "
+        "off-list pricing."
     )
 
 
 def test_the_trusted_organization_example_leaves_the_story_to_the_sharing_check() -> None:
-    """Northlake trusts Ridgeline with its airlock dimensions, in its default mode.
+    """Northlake trusts Ridgeline with its CT's mount dimensions, in its default mode.
     Henderson is trusted by no one, so its consults meet each org's default."""
     scenario = load_scenario("harmony-demo")
     trusted = [(org.slug, row) for org in scenario.orgs for row in org.trusted_organizations]
@@ -197,53 +197,54 @@ def test_the_trusted_organization_example_leaves_the_story_to_the_sharing_check(
         ("northlake", "ridgeline", None)
     ]
     ((_, row),) = trusted
-    assert _flat(row.sharing_description).startswith("Our Apreo 2 airlock dimensions")
-    assert "Apreo 2 airlock" in _records(scenario, "northlake")["apreo-airlock"]
+    assert _flat(row.sharing_description).startswith("Our Xradia Versa mount dimensions")
+    assert "Xradia 620 Versa" in _records(scenario, "northlake")["versa-mount"]
 
 
 def test_the_records_hold_what_the_story_turns_on() -> None:
     """The cassettes' answerers read these: Henderson's records answer what the
-    counterparties ask (instrument, seal, samples, dates), Northlake's published
+    counterparties ask (instrument, tube, coupons, dates), Northlake's published
     calendar and terms give both options, and the list prices add up to the quotes
     ($1,284 standard, $1,434 priority, $325, $1,759 with priority)."""
     scenario = load_scenario("harmony-demo")
     henderson = _records(scenario, "henderson")
-    assert "Thermo Fisher Apreo 2 airlock, with a Kalrez seal" in henderson["transfer-holder"]
-    assert "about 150 mg each, are in crimp-sealed glass vials" in henderson["samples-handling"]
-    assert "alex.chen@henderson-lab.example" in henderson["samples-handling"]
+    assert "Zeiss Xradia 620 Versa, with a carbon-fiber tube" in henderson["ct-holder"]
+    assert "we scan at 3 µm voxels" in henderson["ct-holder"]
+    assert "Alex drops them off at the core himself" in henderson["coupons"]
+    assert "alex.chen@henderson-lab.example" in henderson["coupons"]
     dates = henderson["dates"]
     assert "results by Fri Nov 6, for the group meeting on Mon Nov 9" in dates
     assert "Results by Fri Nov 13 still work" in dates
     assert "worth up to about $200 extra" in dates
     assert "About $2,000 discretionary" in henderson["budget"]
     assert "Alex reviews any single order over $1,000" in henderson["budget"]
-    assert "ready now" in henderson["samples-handling"]
-    assert "One holder is enough" in henderson["transfer-holder"]
+    assert "ready now" in henderson["coupons"]
+    assert "One holder is enough" in henderson["ct-holder"]
 
     northlake = _records(scenario, "northlake")
     calendar = northlake["public-calendar"]
-    assert "Next standard XRD block: Tue Nov 10, with reports by Fri Nov 13." in calendar
-    priority = "Wed Nov 4, 09:00–13:00, for up to 14 powders, with reports by Thu Nov 5"
+    assert "Next standard compression block: Tue Nov 10, with reports by Fri Nov 13." in calendar
+    priority = "Wed Nov 4, 13:00–17:00, for up to 14 coupons, with reports by Thu Nov 5"
     assert priority in calendar
     assert "a session on Wed Nov 4 reports by Fri Nov 6" in calendar
     prices = northlake["price-list"]
-    assert "Powder XRD $45 per sample. SEM/EDS $60 per sample." in prices
-    assert "Air-free transfer and handling $150 flat per batch: one fee" in prices
-    assert "10 or more samples on one technique get 10% off that technique" in prices
-    assert "a priority XRD block is a $150 flat fee" in prices
+    assert "Compression test $45 per coupon. CT scan $60 per coupon." in prices
+    assert "Intake and setup $150 flat per batch: one fee" in prices
+    assert "10 or more coupons on one test get 10% off that test" in prices
+    assert "a priority compression block is a $150 flat fee" in prices
     assert "Helen decides only off-list exceptions." in northlake["pricing-policy"]
-    assert "O2 and H2O held below 0.5 ppm" in northlake["glovebox-receiving"]
-    assert "Room 112, Physical Sciences Building" in northlake["glovebox-receiving"]
+    assert "a coupon booked for CT too is scanned first" in northlake["compression-testing"]
+    assert "Room 112, Physical Sciences Building" in northlake["drop-off"]
     # Who freed the Nov 4 block: a client, so it stays out of every answer.
-    assert "Voltaic" in northlake["nov-4-xrd-block"]
+    assert "Voltaic" in northlake["nov-4-compression-block"]
     standard = (12 * 45 + 12 * 60) * 9 // 10 + 150
     assert standard == 1_284
     assert standard + 150 == 1_434
 
     ridgeline = _records(scenario, "ridgeline")["price-list"]
-    assert "carries one standard SEM stub (any number of powder mounts on it): $240" in ridgeline
-    assert "RT-A2 sealed SEM transfer holder" in ridgeline
-    assert "Kalrez seal in its place +$85" in ridgeline
+    assert "carries up to 16 coupons up to 20 mm across in one scan session: $240" in ridgeline
+    assert "RV-16 stacked CT holder" in ridgeline
+    assert "Carbon-fiber tube in its place +$85" in ridgeline
     assert "Free delivery on Northlake campus the next business day" in ridgeline
     assert 240 + 85 == 325
     assert 1_434 + 325 == 1_759
@@ -348,8 +349,8 @@ def _request(**overrides: Any) -> dict[str, Any]:
         "slug": "probe",
         "requester": "vantage",
         "created_by": "jordan",
-        "brief": "SEM capacity",
-        "recipients": [{"org": "northlake", "reason": "SEM."}],
+        "brief": "CT capacity",
+        "recipients": [{"org": "northlake", "reason": "CT."}],
         **overrides,
     }
 
@@ -363,11 +364,11 @@ def test_open_request_references_must_resolve(tmp_path: Path) -> None:
                 recipients=[
                     {"org": "vantage", "reason": "Itself."},
                     {"org": "atlantis", "reason": "Nowhere."},
-                    {"org": "northlake", "reason": "SEM."},
+                    {"org": "northlake", "reason": "CT."},
                     {"org": "northlake", "reason": "Again."},
                 ],
             ),
-            _request(slug="henderson-northlake-precursor-xrd", requester="atlantis"),
+            _request(slug="henderson-northlake-test-ct", requester="atlantis"),
         ],
     )
     problems = _problems(tmp_path, "threads.yaml")
@@ -375,7 +376,7 @@ def test_open_request_references_must_resolve(tmp_path: Path) -> None:
     assert "requests[0].recipients[0].org: a request goes to other orgs" in problems
     assert "requests[0].recipients[1].org: no org 'atlantis'" in problems
     assert "requests[0].recipients[3].org: duplicate 'northlake'" in problems
-    assert "requests[1].slug: duplicate 'henderson-northlake-precursor-xrd'" in problems
+    assert "requests[1].slug: duplicate 'henderson-northlake-test-ct'" in problems
     assert "requests[1].requester: no org 'atlantis'" in problems
 
 
@@ -405,17 +406,17 @@ async def test_the_vantage_request_is_seeded_open_as_an_approved_outreach_leaves
         assert list(threads) == [], "its workflow opens the threads"
     assert (request.status, request.conversation_id) == ("active", None)
     assert request.requester_org_id == seed_id(scenario.name, "org", "vantage")
-    assert request.title == "Rush SEM slot enquiry"
+    assert request.title == "Rush CT slot enquiry"
     # The requester representative's whole mandate, as approved.
     assert request.brief == spec.brief
     assert brief_title(request.brief) == (
-        "Rush SEM capacity for a battery OEM client, Thursday afternoons preferred"
+        "Rush CT capacity for an e-bike client, Thursday afternoons preferred"
     )
     (recipient,) = recipients_of(request)
     assert recipient.org_id == seed_id(scenario.name, "org", "northlake")
     (spec_recipient,) = spec.recipients
     assert (recipient.title, recipient.ask) == (spec_recipient.title, spec_recipient.ask)
-    assert recipient.title == "Rush SEM slot enquiry"
+    assert recipient.title == "Rush CT slot enquiry"
     # Its thread's cassette key, which story_adversary.yaml plays.
     assert keys.thread_key("vantage", "northlake") == "vantage.northlake"
 
@@ -430,10 +431,8 @@ async def test_a_seeded_thread_is_titled_by_its_request(
         )
         titles = dict(rows.all())
     assert titles == {
-        seed_id("harmony-demo", "thread", "henderson-northlake-precursor-xrd"): (
-            "Powder XRD on 6 precursors"
-        ),
-        seed_id("harmony-demo", "thread", "ridgeline-northlake-seal-sem"): (
-            "SEM on argon-stored seals"
+        seed_id("harmony-demo", "thread", "henderson-northlake-test-ct"): ("CT on 6 test coupons"),
+        seed_id("harmony-demo", "thread", "ridgeline-northlake-bracket-ct"): (
+            "CT on two welded brackets"
         ),
     }

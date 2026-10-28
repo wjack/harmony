@@ -22,7 +22,7 @@ describe("names", () => {
     expect(memberSubtitle(members.helen)).toBe("Core director · Northlake");
     expect(memberSubtitle({ ...members.raj, title: null })).toBe("Admin · Northlake");
     expect(memberSubtitle({ ...nonAdmin(members.raj), title: null })).toBe("Member · Northlake");
-    expect(memberSubtitle(members.alex)).toBe("PhD student · Henderson Lab");
+    expect(memberSubtitle(members.alex)).toBe("PhD student · Henderson");
   });
 });
 

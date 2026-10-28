@@ -182,9 +182,9 @@ def test_the_demo_scenario_is_structurally_complete() -> None:
     assert [row.org for row in northlake.trusted_organizations] == ["ridgeline"]
 
     # The story depends on Henderson's records answering what Ridgeline asks: the
-    # instrument and the seal material.
+    # instrument and the tube material.
     henderson_text = " ".join(item.body for item in orgs["henderson"].knowledge)
-    for words in ("Apreo 2 airlock", "Kalrez"):
+    for words in ("Xradia 620 Versa", "carbon-fiber tube"):
         assert words in henderson_text
 
 
@@ -197,7 +197,7 @@ def test_everyone_in_the_demo_is_an_admin() -> None:
 
 def test_the_demo_scenario_seeds_the_access_fixtures() -> None:
     threads = {thread.slug: thread for thread in load_scenario("harmony-demo").threads}
-    history = threads["henderson-northlake-precursor-xrd"]
+    history = threads["henderson-northlake-test-ct"]
     assert (history.requester, history.responder, history.state) == (
         "henderson",
         "northlake",

@@ -40,8 +40,8 @@ type Sessionmaker = async_sessionmaker[AsyncSession]
 
 SCENARIO: Final = "harmony-demo"
 MESSAGE: Final = (
-    "We need powder XRD and SEM/EDS on 12 air-sensitive cathode powders by Nov 6, "
-    "and an airtight holder to get them there under argon."
+    "We need CT scans and compression tests on 12 titanium lattice coupons by Nov 6, "
+    "and a holder that stacks them for the CT."
 )
 # Every field the engine report prints, in order (cli_run._engine_report).
 ENGINE_FIELDS: Final = (
@@ -86,7 +86,7 @@ CHECKS: Final = (
     "duplicate_auto_recipients:",
     "guidance_followed:",
 )
-EDIT: Final = "ridgeline:henderson:2:Let's not give the Kalrez option"
+EDIT: Final = "ridgeline:henderson:2:Let's not give the carbon-fiber option"
 RUN_TIMEOUT_S: Final = 240
 COUNTERPARTIES: Final = (
     "Northlake Characterization Core",
@@ -170,17 +170,17 @@ async def test_a_message_plays_headless_and_the_report_prints_every_field(
     # message, which doesn't mention it (whether it follows it is for a live run).
     followed = checks[checks.index("  guidance_followed: 1") + 1 :]
     assert followed[:3] == [
-        "    - Ridgeline Fabrication with Henderson Lab: sent without mentioning it; read "
+        "    - Ridgeline Fabrication with Henderson Frame Lab: sent without mentioning it; read "
         "whether it follows it",
-        "      instruction: Let's not give the Kalrez option",
-        "      guidance: Don't propose the Kalrez seal option.",
+        "      instruction: Let's not give the carbon-fiber option",
+        "      guidance: Don't propose the carbon-fiber tube option.",
     ]
     assert followed[3].startswith("      next message: ")
 
     # The chat's one request, followed to its end on every row the card listed. The
     # world's rows go with it once retired, so this reads the report.
     for responder in COUNTERPARTIES:
-        state = _section(output, f"Thread: Henderson Lab and {responder}")[0]
+        state = _section(output, f"Thread: Henderson Frame Lab and {responder}")[0]
         assert state.endswith("(closed)"), (responder, state)
     retired = re.search(r"^world ([0-9a-f-]{36}) retired$", output, re.MULTILINE)
     assert retired is not None, output

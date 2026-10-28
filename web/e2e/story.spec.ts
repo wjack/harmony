@@ -5,7 +5,7 @@
  * Alex sends the suggested message and approves the outreach for Northlake and Ridgeline
  * on its card at the end of the chat. The orgs' records answer each counterparty's
  * questions, so Ridgeline's conversation closes with nobody asked. Northlake's quote is
- * over the $1,000 Henderson Lab's representative may commit alone, so it reaches Alex
+ * over the $1,000 Henderson Frame Lab's representative may commit alone, so it reaches Alex
  * inline; he answers, both conversations close and Claude sums up. Then the network
  * view, what Northlake's representative saw, Vantage's probe waiting on Helen, and
  * Customize → Harmony's sharing.
@@ -29,9 +29,9 @@ const RIDGELINE = "Ridgeline Fabrication";
 const CALDER = "Calder Computational";
 const VANTAGE = "Vantage Market Intelligence";
 /** The request's title as Northlake's representative wrote it (the scripted cassette's). */
-const NORTHLAKE_TITLE = "XRD and SEM/EDS quote";
+const NORTHLAKE_TITLE = "CT and compression quote";
 /** The seeded Vantage request's title on Northlake's side (threads.yaml). */
-const VANTAGE_TITLE = "Rush SEM slot enquiry";
+const VANTAGE_TITLE = "Rush CT slot enquiry";
 
 test.describe.configure({ timeout: 6 * 60_000 });
 
@@ -214,7 +214,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
     const approve = page.getByRole("button", { name: "Approve and send" });
     const card = page.getByRole("region", { name: /^Harmony Network Request / }).filter({ has: approve });
     await expect(card).toBeVisible(TURNS);
-    await expect(card.getByRole("textbox", { name: "Brief" })).toHaveValue(/Henderson Lab/);
+    await expect(card.getByRole("textbox", { name: "Brief" })).toHaveValue(/Henderson Frame Lab/);
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) await expect(card).toContainText(org);
     await expect(card.getByRole("listitem").filter({ hasText: CALDER })).toContainText("Not a fit");
     await expect(card.getByRole("checkbox", { name: CALDER })).not.toBeChecked();
@@ -235,7 +235,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect.poll(async () => sentences(await claudeTexts(page).last().innerText()), TURNS).toBe(1);
   });
 
-  await test.step("Henderson Lab's records answer Ridgeline, and it closes with nobody asked", async () => {
+  await test.step("Henderson Frame Lab's records answer Ridgeline, and it closes with nobody asked", async () => {
     await expect(statusRow(page, RIDGELINE)).toContainText("Closed", TURNS);
     await expect(statusRow(page, RIDGELINE)).toContainText("$325");
     await expect(page.getByRole("textbox", { name: `Your answer about ${RIDGELINE}` })).toHaveCount(0);
@@ -276,7 +276,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
   });
 
   await test.step("back in the chat, Alex answers the review and both conversations close", async () => {
-    await openChat(page, "Find a lab that can run XRD");
+    await openChat(page, "Find a lab that can CT-scan");
     await answerInline(page, NORTHLAKE, "Yes, take priority.");
 
     await expect(statusRow(page, NORTHLAKE)).toContainText("Closed", TURNS);
@@ -365,17 +365,17 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
     await settings.getByRole("button", { name: /^Sharing/ }).click();
     const everyone = page.getByRole("textbox", { name: "Shared with everyone" });
-    const addition = " Open SEM slots on weekdays.";
+    const addition = " Open CT slots on weekdays.";
     const description = `${await everyone.inputValue()}${addition}`;
     await everyone.fill(description);
 
     await page.getByRole("button", { name: "Add organization" }).click();
-    await page.getByRole("menuitem", { name: "Henderson Lab" }).click();
-    const mode = page.getByRole("button", { name: /^Mode for Henderson Lab/ });
+    await page.getByRole("menuitem", { name: "Henderson Frame Lab" }).click();
+    const mode = page.getByRole("button", { name: /^Mode for Henderson Frame Lab/ });
     const henderson = page.getByRole("listitem").filter({ has: mode });
     await mode.click();
     await page.getByRole("menuitemradio", { name: /^Skip/ }).click();
-    const extra = "Priority XRD blocks as the public calendar shows them.";
+    const extra = "Priority compression blocks as the public calendar shows them.";
     await henderson.getByRole("textbox", { name: "Also share with them" }).fill(extra);
     await page.getByRole("button", { name: "Save changes" }).click();
     // The org's fields and the trusted organization are separate writes; the toast

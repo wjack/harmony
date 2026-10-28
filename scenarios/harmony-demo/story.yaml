@@ -11,7 +11,7 @@
 #
 # The orgs' records and written authority settle the request between their Claudes:
 # on the main path a person is asked only to approve the outreach and to review
-# Northlake's quote, which is over the $1,000 Henderson Lab's representative may
+# Northlake's quote, which is over the $1,000 Henderson Frame Lab's representative may
 # commit alone.
 #
 # The ScriptedModel cassettes that play this story are
@@ -24,31 +24,31 @@ as: alex
 # what the lab has this month (Henderson's Spending record); Claude splits it between
 # the asks, which is the limit each representative accepts quotes within.
 suggested_message: >-
-  Find a lab that can run XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode
-  powders by {+11d}, and get an airtight sample holder made for the transfer. Budget
-  is about $2,000.
+  Find a lab that can CT-scan and compression-test 12 titanium lattice coupons by
+  {+11d}, and get a holder made that stacks them for the CT. Budget is about $2,000.
 # Ringed and tagged "Suggested" in the network view. Calder is the near miss: it does
 # computation only, so it is screened as a weak fit and left out of the outreach.
 suggested_recipients: [northlake, ridgeline, calder]
 # Who's on the network, shown in "What's on screen" over every org's monogram.
 network: >-
-  Battery materials research: a university lab with new cathode powders to measure, the
-  instrument cores that measure them, shops that build lab hardware, and the suppliers,
-  testers, data and modeling groups, funder and broker around them.
+  Lighter bike frames: a university lab with new 3D-printed titanium lattices to test,
+  the instrument cores that scan and test them, shops that print, treat and machine
+  parts, and the suppliers, testers, data and modeling groups, funder and broker
+  around them.
 
 steps:
   - id: ask
     title: Ask Claude
     act_as: alex
     body: >-
-      As Alex Chen, a PhD student in the Henderson Lab, send the suggested message.
+      As Alex Chen, a PhD student in the Henderson Frame Lab, send the suggested message.
       Claude will likely search the network, screen the organizations it finds and draft
       a brief for the ones that look like a fit.
   - id: approve-outreach
     title: Approve the outreach
     act_as: alex
     body: >-
-      Read the brief and each organization's ask: the shared brief gives the sample
+      Read the brief and each organization's ask: the shared brief gives the coupon
       class and count, and each ask holds that organization's part and its limit. Edit
       either if you like. A near miss, for example Calder (computation only), is likely
       listed as a weak fit and left unticked.
@@ -57,8 +57,8 @@ steps:
     title: Let the records answer
     act_as: alex
     body: >-
-      Ridgeline will likely ask which instrument the holder must fit and which seal to
-      use, and Northlake how the powders arrive and how firm {+11d} is. Henderson Lab's
+      Ridgeline will likely ask which instrument the holder must fit and which tube to
+      use, and Northlake how the coupons arrive and how firm {+11d} is. Henderson Frame Lab's
       Claude can likely answer each from the lab's records, within what the lab shares,
       without asking you. Ridgeline's quote is likely about $325 at its list prices,
       which the representative may accept on its own, so that conversation can close
@@ -70,8 +70,8 @@ steps:
     done_on: needs_human
     body: >-
       Northlake will likely quote two options from its published prices: about $1,284
-      with reports by Fri Nov 13, or about $1,434 for a priority XRD block on Wed Nov 4
-      with reports by Thu Nov 5. Either is over the $1,000 Henderson Lab's
+      with reports by Fri Nov 13, or about $1,434 for a priority compression block on
+      Wed Nov 4 with reports by Thu Nov 5. Either is over the $1,000 Henderson Frame Lab's
       representative may commit alone, so it will likely ask you in the chat which to
       book.
     expect: {beat: inline_question, org: northlake, member: alex}
@@ -79,7 +79,7 @@ steps:
     title: Answer the review
     act_as: alex
     body: >-
-      Henderson Lab's Claude likely drafts a recommendation from the lab's records, for
+      Henderson Frame Lab's Claude likely drafts a recommendation from the lab's records, for
       example priority, since $150 is within what the lab set aside to make the Nov 9
       group meeting. Answer, for example, "Yes, take priority", or pick the standard
       option. The representative then likely confirms with Northlake.
@@ -107,7 +107,7 @@ steps:
     act_as: helen
     body: >-
       Off the main path, Vantage, a sourcing firm, may be asking Northlake who books its
-      Thursday SEM afternoons. If Northlake's Claude drafts an answer that hints at that
+      Thursday CT afternoons. If Northlake's Claude drafts an answer that hints at that
       client, the sharing check will likely stop it, and it waits for you under Needs
       you.
   - id: big-run
