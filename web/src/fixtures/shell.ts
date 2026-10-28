@@ -283,6 +283,7 @@ export function shellRoutes(actingAs: MemberView = members.alex): FixtureRoutes 
       session.member.slug === "helen" ? inbox : { ...inbox, needs_you: [] },
     "GET /api/demo/story": story,
     "GET /api/budget": budgets.ok,
+    "GET /api/demo/waiting": { accounts: [] },
   };
 }
 

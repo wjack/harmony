@@ -4,8 +4,9 @@ held message (docs/design/EDIT.md §3.3, §3.5).
 1. `write_guidance`: the org's internal Claude writes the guidance its representative
    follows for the rest of the thread, from prompts/steer_guidance.md. Its only inputs
    are members' words (the instruction, and the current guidance, written the same way)
-   and code-written names: no brief, sharing text, instructions, records, thread or
-   draft, so guidance carries nothing a member didn't type (EDIT.md §6).
+   and code-written names (both orgs', and the author's): no brief, sharing text,
+   instructions, records, thread or draft, so guidance carries nothing a member didn't
+   type (EDIT.md §6).
    `parse_guidance` then decides, in order: a refusal or an unusable output is
    rejected; so is guidance over `steers.GUIDANCE_MAX_CHARS`, or guidance that adds a
    number, date, email, link or name none of those words hold (`steers.added_details`);
@@ -205,7 +206,8 @@ async def _guidance_inputs(session: AsyncSession, parties: _Parties) -> Guidance
     return GuidanceInputs(
         prompt=prompt,
         current=current_text,
-        allowed=(steer.body, current_text, org_name, counterparty_name),
+        # The author's name is in the prompt ("Helen asked..."), so guidance may say it.
+        allowed=(steer.body, current_text, org_name, counterparty_name, parties.author.name),
         names=tuple(await steers.world_names(session, steer.world_id)),
     )
 

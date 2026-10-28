@@ -568,6 +568,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo/waiting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Waiting
+         * @description Every account with an open item assigned to it, the acting member's included.
+         */
+        get: operations["get_waiting_api_demo_waiting_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/gate": {
         parameters: {
             query?: never;
@@ -1085,6 +1105,18 @@ export interface components {
             suggested_recipients: components["schemas"]["OrgRef"][];
             /** Steps */
             steps: components["schemas"]["StoryStep"][];
+        };
+        /** DemoWaiting */
+        DemoWaiting: {
+            /** Accounts */
+            accounts: components["schemas"]["DemoWaitingAccount"][];
+        };
+        /** DemoWaitingAccount */
+        DemoWaitingAccount: {
+            member: components["schemas"]["MemberRef"];
+            org: components["schemas"]["OrgRef"];
+            /** Items */
+            items: number;
         };
         /**
          * DemoWhose
@@ -3767,7 +3799,7 @@ export interface operations {
                 after?: number | null;
                 /** @description The session epoch of the snapshot the client opens from; a stream for any other epoch is refused with 409. */
                 epoch?: number | null;
-                /** @description `network`: the network view's demo lens, which sees every event. Honoured in the network world only; in a desk world the stream is the acting member's. */
+                /** @description `network`: the network view's demo lens, which sees every event in the world (the view is a demo tool, opened from the demo bar). */
                 lens?: "network" | null;
                 world?: "desk" | "network";
             };
@@ -5135,6 +5167,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_waiting_api_demo_waiting_get: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoWaiting"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Validation Error */

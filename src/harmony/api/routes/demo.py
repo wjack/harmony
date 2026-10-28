@@ -5,6 +5,9 @@
   thread the acting member can't, so the not-found page can switch to one of them.
   Demo chrome (§11.4): names and orgs only, never a title, content or state, and only
   for ids in the session's own live world; any other id is a 404 like an unknown one
+- GET /api/demo/waiting: every account in the world with an open item assigned to it,
+  and how many, for the demo bar's Network view badge. Demo chrome: who and how many,
+  never what
 
 Read from the world's scenario (`scenarios/<name>/story.yaml`, E5): the suggested
 opening message for the composer (for the story's sender), the recipients the story
@@ -17,6 +20,7 @@ Owner: E4, reading E5's `story.yaml` (U1 builds the demo bar and walkthrough).
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from datetime import date
 from functools import cache
@@ -34,7 +38,7 @@ from harmony.api.routes.problems import invalid, member_ref, not_found, problems
 from harmony.auth.session import Actor, ActorDep
 from harmony.auth.views import OrgRef, member_rows, org_ref
 from harmony.db import repo
-from harmony.db.models import Conversation, Member, Org, Thread, ThreadAccess, World
+from harmony.db.models import Conversation, Escalation, Member, Org, Thread, ThreadAccess, World
 from harmony.domain import clock
 from harmony.seeds.dates import render_dates
 from harmony.seeds.loader import ScenarioNotFound, load_scenario
@@ -156,6 +160,39 @@ async def get_whose(
         if thread is not None and chat is None:
             return DemoWhose(kind="thread", orgs=await _thread_openers(db, actor.world_id, thread))
     raise invalid("give exactly one of chat and thread")
+
+
+class DemoWaitingAccount(_View):
+    member: MemberRef
+    org: OrgRef
+    # Open items assigned to this member.
+    items: int
+
+
+class DemoWaiting(_View):
+    accounts: list[DemoWaitingAccount]
+
+
+@router.get("/demo/waiting", response_model=DemoWaiting, responses=problems())
+async def get_waiting(actor: ActorDep, sessionmaker: SessionmakerDep) -> DemoWaiting:
+    """Every account with an open item assigned to it, the acting member's included."""
+    async with sessionmaker() as db:
+        counts: Counter[UUID] = Counter()
+        for escalation in await db.scalars(
+            repo.in_world(Escalation, actor.world_id).where(Escalation.status == "open")
+        ):
+            counts.update(UUID(str(member_id)) for member_id in escalation.assignees)
+        rows = await member_rows(db, actor.world_id, Member.id.in_(list(counts)))
+    return DemoWaiting(
+        accounts=[
+            DemoWaitingAccount(
+                member=MemberRef(id=member.id, slug=member.slug, name=member.name),
+                org=org_ref(org),
+                items=counts[member.id],
+            )
+            for member, org in rows
+        ]
+    )
 
 
 @cache

@@ -68,7 +68,9 @@ export function steerOutcome(steer: SteerView, budget: BudgetState, hasGuidance:
   }
   if (reason === "added_details") {
     return {
-      text: "Claude's guidance added details you didn't give, so it wasn't used. Nothing changed. Try rewording it.",
+      text: rewrote
+        ? "Claude rewrote the draft, but its guidance for the rest of the conversation added details you didn't give, so it wasn't kept."
+        : "Claude's guidance added details you didn't give, so it wasn't used. Nothing changed. Try rewording it.",
       tone: "failed",
       action: "try_again",
     };

@@ -23,4 +23,6 @@ export const queryKeys = {
   story: ["demo-story"] as const,
   /** `GET /api/budget`: the visitor's live-model budget. */
   budget: ["budget"] as const,
+  /** `GET /api/demo/waiting`: the accounts with an open item, for the demo bar. */
+  demoWaiting: ["demo-waiting"] as const,
 };

@@ -60,6 +60,7 @@ ROUTES: list[tuple[str, str]] = [
     ("GET", "/api/network"),
     ("GET", "/api/demo/story"),
     ("GET", "/api/demo/whose"),
+    ("GET", "/api/demo/waiting"),
 ]
 
 # Round 2's new routes (docs/FEEDBACK_R2_PLAN.md §1.3), with the JSON body each takes,

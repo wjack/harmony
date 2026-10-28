@@ -77,6 +77,10 @@ describe("steerOutcome", () => {
       tone: "failed",
       action: "try_again",
     });
+    const rewrote = steer({ status: "failed", guidance_outcome: "rejected", draft_outcome: "rewritten", failure_reason: "added_details" });
+    expect(steerOutcome(rewrote, "ok", false).text).toBe(
+      "Claude rewrote the draft, but its guidance for the rest of the conversation added details you didn't give, so it wasn't kept.",
+    );
   });
 
   it("names the spent budget instead of a retry that would fail", () => {

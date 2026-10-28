@@ -45,7 +45,7 @@ interface DecisionCardProps {
   memberId: string | undefined;
   /** The viewer can change what our side shares; anyone else reads it. */
   admin: boolean;
-  /** The box below holds an instruction to Claude that isn't sent yet. */
+  /** The box below holds an instruction to Claude that isn't sent yet: the draft it will rewrite is marked. */
   unsentEdit: boolean;
 }
 
@@ -73,8 +73,7 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
   else if (rewriting) hintRight = "You can approve once the new draft is here";
 
   let hintLeft: ReactNode;
-  if (unsentEdit) hintLeft = <CardHint tone="unsent_edit">Your instruction to Claude isn't sent yet · Tell Claude first?</CardHint>;
-  else if (held && autonomy !== undefined) {
+  if (held && autonomy !== undefined) {
     hintLeft = (
       <span>
         {modeLine(MODE_INFO[autonomy].label, them)} ·{" "}
@@ -106,7 +105,7 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
           <h2 className="text-ui-title font-medium break-words whitespace-pre-wrap text-ink">
             {cardTitle(escalation, rev, consult, them)}
           </h2>
-          {reason !== null && <CardHint tone="reason">{reason}</CardHint>}
+          {reason !== null && <CardHint>{reason}</CardHint>}
 
           <div className="mt-2 border-t border-border pt-3">
             <DraftLabel decision={decision} label={draftLabel(escalation)} unsentEdit={unsentEdit} />

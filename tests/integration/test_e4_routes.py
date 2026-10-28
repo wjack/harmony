@@ -27,6 +27,7 @@ from temporalio.worker import Worker
 
 from harmony.agents import consult as answerer
 from harmony.agents import context, transcript
+from harmony.agents import steer as steer_agent
 from harmony.agents.consult import ConsultDraft
 from harmony.agents.models import (
     CardResolution,
@@ -723,6 +724,28 @@ async def test_a_steer_is_its_sides_own_and_needs_a_running_thread(
         assert guidance["delivered_at"] is None
 
 
+async def test_guidance_may_name_the_member_who_asked_for_it(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    """The writer is told who asked, so "Helen says ..." adds nothing; Raj, unnamed, would."""
+    async with visitor(temporal_app) as v:
+        outreach, thread_id, _ = await _story(v, db_sessionmaker)
+        async with unit_of_work(db_sessionmaker, outreach.world_id) as uow:
+            steer = await steers.record(
+                uow,
+                steer_id=uuid4(),
+                thread_id=thread_id,
+                org_id=NORTHLAKE,
+                kind="edit",
+                author_member_id=HELEN,
+                body="We can meet the Nov 6th delivery",
+            )
+            inputs = await steer_agent.guidance_inputs(uow.session, steer)
+        check = {"allowed": inputs.allowed, "names": inputs.names}
+        assert steers.added_details("Helen Ward says Nov 6 can be met.", **check) == []
+        assert steers.added_details("Raj says Nov 6 can be met.", **check) == ["Raj"]
+
+
 @activity.defn(name="rep_turn")
 async def _endless_turn(turn: RepTurnInput) -> RepTurnResult:
     """The requester's first turn, still running when the worker stops."""
@@ -1355,6 +1378,23 @@ async def test_the_story_suggests_the_message_to_its_sender(app: FastAPI) -> Non
             "ridgeline",
             "calder",
         ]
+
+
+async def test_the_demo_names_every_account_with_an_open_item(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    async with visitor(app) as v:
+        await _world(v)
+        await v.act_as("alex")
+        assert (await v.json("GET", "/demo/waiting"))["accounts"] == []
+
+        await _story(v, db_sessionmaker)
+        await v.act_as("alex")
+        waiting = await v.json("GET", "/demo/waiting")
+        # Helen's item is Northlake's, but the demo bar names her to anyone: who, never what.
+        assert [
+            (row["member"]["slug"], row["org"]["slug"], row["items"]) for row in waiting["accounts"]
+        ] == [("helen", "northlake", 1)]
 
 
 class Unreachable:

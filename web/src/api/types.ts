@@ -67,6 +67,8 @@ export type ReopenBlock = NonNullable<ReopenOffer["block"]>;
 export type ThreadRunView = Schemas["ThreadRunView"];
 export type EndReason = NonNullable<ThreadSummary["end_reason"]>;
 export type DemoWhose = Schemas["DemoWhose"];
+/** `GET /api/demo/waiting`: every account with an open item assigned to it. */
+export type DemoWaiting = Schemas["DemoWaiting"];
 export type SteerStarted = Schemas["SteerStarted"];
 export type ReopenStarted = Schemas["ReopenStarted"];
 export type AddSteer = Schemas["AddSteer"];

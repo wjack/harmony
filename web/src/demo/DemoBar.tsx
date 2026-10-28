@@ -22,6 +22,7 @@ import { useFollowAlert } from "./accounts";
 import { alertsByAccount, clearAlertsFor, useNeedsHumanAlerts, type AccountAlerts } from "./alerts";
 import { findMember, orgName } from "./cast";
 import { openDemoControls, openResetConfirm } from "./store";
+import { useOthersWaiting } from "./waiting";
 import { formatWorldDate, useWorldDate } from "./worldClock";
 
 interface DemoBarProps {
@@ -37,7 +38,8 @@ interface DemoBarProps {
  * The slim bar above the cloned app (ARCHITECTURE.md §11.4). It is styled unlike the
  * product on purpose, so demo controls are never mistaken for Claude: who you're acting
  * as, the network view (which watches every side, so it is the demo's, not the
- * product's), the world date, budget, cross-account alerts and Reset.
+ * product's, and counts the other accounts with an item waiting on them), the world
+ * date, budget, cross-account alerts and Reset.
  *
  * The budget and Reset are pinned right and never leave it. Who and when take the room
  * the alerts leave, measured on their own group: short of it, their labels drop first
@@ -48,6 +50,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
   const worldDate = useWorldDate(session?.world);
   const alerts = useNeedsHumanAlerts();
   const navigate = useNavigate();
+  const othersWaiting = useOthersWaiting(session?.member.id ?? null);
 
   return (
     <header
@@ -77,6 +80,8 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
               void navigate("/network");
             }}
             icon={<Waypoints size={13} strokeWidth={1.75} />}
+            badge={othersWaiting}
+            badgeTitle={`${String(othersWaiting)} other ${othersWaiting === 1 ? "account needs" : "accounts need"} a human`}
           />
         )}
 
@@ -198,22 +203,36 @@ function BarButton({
   labelClassName,
   onClick,
   icon,
+  badge = 0,
+  badgeTitle,
 }: {
   label: string;
   /** Hides the label where the bar is short of room; the icon stays, and the button keeps its name. */
   labelClassName?: string;
   onClick: () => void;
   icon: ReactNode;
+  /** A count after the label, shown while above 0, with what it counts as the button's title. */
+  badge?: number;
+  badgeTitle?: string;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      title={badge > 0 ? badgeTitle : undefined}
       onClick={onClick}
       className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-2 text-demo-text transition-colors hover:bg-demo-surface"
     >
       <span className="text-demo-muted">{icon}</span>
       <span className={labelClassName}>{label}</span>
+      {badge > 0 && (
+        <span
+          data-badge
+          className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white tabular-nums"
+        >
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
