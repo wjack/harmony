@@ -20,12 +20,14 @@ Participant status (REVISION_UNSTRUCTURED.md §9), from thread and escalation st
   left out;
 - `messaged`: the thread is open and the responder hasn't written yet;
 - `replied`: the responder has written;
-- `needs_human`: an escalation on the thread is open (either side);
+- `needs_human`: an escalation of the viewing org's is open on the thread. The other
+  side's escalations are its own business and never show (nor on the snapshot);
 - `closed`: the thread ended (`closed` or `expired`).
 
-`waiting_on` names one org's assignee only (the requester's by default): who holds up
-the other side is theirs to know. The network view asks for the viewer's own org, or
-for any org on the network lens (`waiting_of`).
+`needs_human` and `waiting_on` read one org's escalations only (the requester's by
+default): who holds up the other side, or that anyone does, is theirs to know. The
+network view asks for the viewer's own org, or for any org on the network lens
+(`waiting_of`).
 
 Writes queue a `network_request` snapshot to the origin conversation's owner and to the
 requester org's scope on each of the request's threads.
@@ -74,7 +76,7 @@ from harmony.db.models import (
 from harmony.db.models.choices import EndReason, FailureReason, Fit, Side, ThreadState
 from harmony.db.uow import UnitOfWork
 from harmony.domain import cards
-from harmony.domain.threads import TERMINAL_STATES, requester_title
+from harmony.domain.threads import TERMINAL_STATES, requester_title, state_for
 from harmony.events.schemas import EventScope
 
 # A recipient's latest line on the request status card.
@@ -299,8 +301,8 @@ async def status(
     *,
     waiting_of: UUID | Literal["any"] | None = None,
 ) -> RequestStatusView:
-    """The per-recipient view (module docstring). `waiting_of`: whose assignees
-    `waiting_on` may name: that org's, any org's, or (None) the requester's."""
+    """The per-recipient view (module docstring). `waiting_of`: whose escalations
+    `needs_human` and `waiting_on` read: that org's, any org's, or (None) the requester's."""
     world_id = request.world_id
     waiting_org = request.requester_org_id if waiting_of is None else waiting_of
     threads = {thread.responder_org_id: thread for thread in await threads_of(session, request)}
@@ -372,7 +374,11 @@ async def status(
                 )
             )
             continue
-        escalations = [e for e in open_escalations if e.thread_id == thread.id]
+        escalations = [
+            e
+            for e in open_escalations
+            if e.thread_id == thread.id and (waiting_org == "any" or e.org_id == waiting_org)
+        ]
         rows.append(
             RecipientStatus(
                 org=org,
@@ -383,7 +389,7 @@ async def status(
                     thread, needs_human=bool(escalations), replied=thread.id in replied
                 ),
                 thread_id=thread.id,
-                thread_state=thread.state,
+                thread_state=state_for(thread, None if waiting_org == "any" else waiting_org),
                 waiting_on=_waiting_on(
                     escalations,
                     members,

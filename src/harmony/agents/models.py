@@ -108,7 +108,8 @@ EscalationStatus = Literal["open", "resolved", "cancelled"]
 # - `screened`: on the request, its thread not open yet;
 # - `messaged`: its thread is open and it hasn't written yet;
 # - `replied`: it has written;
-# - `needs_human`: an escalation on its thread is open (either side);
+# - `needs_human`: an escalation of the viewing org's is open on its thread (never the
+#   other side's: domain/requests.py);
 # - `closed`: its thread ended (closed, or expired).
 ParticipantStatus = Literal["screened", "messaged", "replied", "needs_human", "closed"]
 
