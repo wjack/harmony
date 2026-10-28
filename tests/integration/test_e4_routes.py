@@ -1857,10 +1857,10 @@ async def test_a_declined_chat_message_is_its_owners_to_send_again(
             return TurnRetried(message_ids=[retry.message_id])
 
         monkeypatch.setattr(conversations_route, "run_update", run_update)
-        retried = await v.json("POST", path, json={"text": "Find XRD time before Nov 6."})
+        retried = await v.json("POST", path, json={"text": "Find CT time before Nov 6."})
 
     (retry,) = sent
-    assert (retry.member_id, retry.text) == (ALEX, "Find XRD time before Nov 6.")
+    assert (retry.member_id, retry.text) == (ALEX, "Find CT time before Nov 6.")
     assert retried["message_ids"] == [str(retry.message_id)]
 
 

@@ -41,7 +41,7 @@ import type { ChatItem, ChatItemOf, ChatItemType, InlineQuestionItem, OutreachCa
 const noop = () => undefined;
 
 /** A follow-up of Alex's that the gallery has Claude decline. */
-const REFUSED_MESSAGE = "Also ask Northlake to run two of the powders open to air, so we can see how fast they break down.";
+const REFUSED_MESSAGE = "Also ask Northlake to test two of the coupons to failure, so we can see where they give.";
 const ALEX = members.alex.id;
 
 function itemsOf<T extends ChatItemType>(items: readonly ChatItem[], type: T): ChatItemOf<T>[] {

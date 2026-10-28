@@ -580,7 +580,7 @@ it("says when Claude couldn't reply, and not while it is working again", async (
 });
 
 describe("a message Claude declined", () => {
-  const MESSAGE = "Also ask Northlake to run two of the powders open to air.";
+  const MESSAGE = "Also ask Northlake to test two of the coupons to failure.";
   const RETRY = `POST /api/conversations/${CONVERSATION_ID}/retry`;
   const declined = () => screen.findByRole("group", { name: "Message Claude declined" });
 
@@ -615,14 +615,14 @@ describe("a message Claude declined", () => {
     const reworded = within(turn).getByRole<HTMLTextAreaElement>("textbox", { name: "Your message" });
     fireEvent.change(reworded, { target: { value: "  " } });
     expect(within(turn).getByRole<HTMLButtonElement>("button", { name: "Send" }).disabled).toBe(true);
-    fireEvent.change(reworded, { target: { value: "How fast do these powders degrade in air?" } });
+    fireEvent.change(reworded, { target: { value: "Where do the coupons give under compression?" } });
     fireEvent.keyDown(reworded, { key: "Enter" });
     await waitFor(() => {
       expect(screen.queryByRole("group", { name: "Message Claude declined" })).toBeNull();
     });
-    expect(screen.getByText("How fast do these powders degrade in air?")).toBeTruthy();
+    expect(screen.getByText("Where do the coupons give under compression?")).toBeTruthy();
     expect(screen.queryByText(MESSAGE)).toBeNull();
-    expect(writes).toEqual([{ route: RETRY, body: { text: "How fast do these powders degrade in air?" } }]);
+    expect(writes).toEqual([{ route: RETRY, body: { text: "Where do the coupons give under compression?" } }]);
   });
 
   it("keeps the line under the transcript when the turn can't be sent again", async () => {

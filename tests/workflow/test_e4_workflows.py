@@ -2724,7 +2724,7 @@ async def test_a_turn_refused_at_its_first_call_can_be_sent_again(
         )
         assert held.turn_failure == "refused"
 
-        retry = RetryTurn(member_id=ALEX, text="Find XRD time before Nov 6.", message_id=uuid4())
+        retry = RetryTurn(member_id=ALEX, text="Find CT time before Nov 6.", message_id=uuid4())
         retried = await handle.execute_update("retry_turn", retry, result_type=TurnRetried)
         assert retried.message_ids == [retry.message_id]
         # The message is queued again, so there's nothing left to retry.
@@ -2738,7 +2738,7 @@ async def test_a_turn_refused_at_its_first_call_can_be_sent_again(
         _, second = script.named("internal_turn")
         assert second.turn_id != first.turn_id
         assert [(m.message_id, m.text) for m in second.messages] == [
-            (retry.message_id, "Find XRD time before Nov 6.")
+            (retry.message_id, "Find CT time before Nov 6.")
         ]
         await replays(env, handle)
 

@@ -37,17 +37,17 @@ from tests.integration._worlds import create_world
 from tests.unit._turns import say
 
 THREAD: Final = "henderson.northlake"
-QUESTION: Final = "May I tell them what the powders are? They need it for the mounting plan."
+QUESTION: Final = "May I tell them the lattice designs? They need them for the mounting plan."
 DRAFT: Final = {
-    "answer": "Yes: they're sodium layered oxides with their dopant fractions.",
+    "answer": "Yes: here are the cell sizes and strut thicknesses for each coupon.",
     "needs_human": False,
     "needs_human_reason": None,
     "route": {"assignees": ["alex"], "reason": "Alex sent the request."},
     "rationale": "From the records.",
 }
-EDITED: Final = "Yes: they're sodium layered oxides. No compositions."
-REWORDED: Final = "Which sample class are the powders in, for the mounting plan?"
-WITHIN: Final = {"within_sharing": True, "reason": "The sample class is shared."}
+EDITED: Final = "They're titanium lattice coupons. The designs stay with us."
+REWORDED: Final = "Which coupon class are these, for the mounting plan?"
+WITHIN: Final = {"within_sharing": True, "reason": "The coupon class is shared."}
 
 
 class Silent:
@@ -162,7 +162,7 @@ async def test_a_declined_check_is_retried_on_the_members_edit(
     await _answer(sm, model, asked, draft_rev=2, retry=True, draft_text=EDITED)
     assert _sent(model, "answerer", keys.answerer_step(2, 0)) == []
     [checked] = _sent(model, "sharing_check", 1)
-    assert "No compositions." in checked
+    assert "The designs stay with us." in checked
     assert await _drafts(sm, asked) == {1: DRAFT["answer"], 2: EDITED}
     assert await _declined(sm, asked) is None
 

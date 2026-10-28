@@ -158,13 +158,13 @@ export default [
   view(
     "Claude declined to check the answer",
     THREAD.henderson,
-    "The sharing check on Claude's draft for Henderson Lab ended in a refusal (biosecurity). The card says so in the reason's place. Change the wording to see Retry check your edit; Retry lands a checked draft.",
+    "The sharing check on Claude's draft for Henderson Frame Lab ended in a refusal (biosecurity). The card says so in the reason's place. Change the wording to see Retry check your edit; Retry lands a checked draft.",
     { world: world((made) => declined(made, THREAD.henderson, "sharing_check")) },
   ),
   view(
     "Claude declined to draft an answer",
     THREAD.henderson,
-    "The answerer refused Henderson Lab's question, so there's no draft. Helen can Retry for Claude's draft, reword the question first with Edit question, or write the answer and approve it.",
+    "The answerer refused Henderson Frame Lab's question, so there's no draft. Helen can Retry for Claude's draft, reword the question first with Edit question, or write the answer and approve it.",
     { world: world((made) => declined(made, THREAD.henderson, "answer", null)) },
   ),
   view(

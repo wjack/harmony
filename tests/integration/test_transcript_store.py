@@ -172,7 +172,7 @@ async def test_a_refused_turn_is_taken_back_only_while_nothing_answered_it(
         return taken
 
     answered, refused = uuid4(), uuid4()
-    await store.append(chat, [user("Find an XRD lab"), RESPONSE], turn_id=answered, position=0)
+    await store.append(chat, [user("Find a CT lab"), RESPONSE], turn_id=answered, position=0)
     await store.append(chat, [user("one"), user("two")], turn_id=refused, position=0)
 
     # A turn with a response stays; the refused tail turn's input goes, at once.
@@ -185,7 +185,7 @@ async def test_a_refused_turn_is_taken_back_only_while_nothing_answered_it(
 
     # A representative's input that something came after stays too.
     earlier, later = uuid4(), uuid4()
-    await store.append(side, [user("Can you run XRD?")], turn_id=earlier, position=0)
+    await store.append(side, [user("Can you run CT?")], turn_id=earlier, position=0)
     await store.append(side, [user("Any news?")], turn_id=later, position=0)
     assert not await take_back(side, earlier)
     assert await take_back(side, later)
