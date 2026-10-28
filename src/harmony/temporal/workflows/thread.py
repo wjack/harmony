@@ -73,6 +73,12 @@ rewrite does, and returns; `answer_consult` then writes it with that answer. Rel
 under this conversation's checks, the item is settled as by a resolution; held, the rev
 waits for a person like any other. Runs from before this refuse it.
 
+Retry: the Update `retry_answer` runs an open consult item's declined step again (a
+refusal left it with no draft, or with a sharing check that couldn't run), the same
+way: it reserves the next rev, the answerer drafts it afresh with the first draft's
+prompt, or the sharing check runs again on the draft (or the member's edit of it), and
+the rev is released or held under the mode as a first draft would be.
+
 Rep turn ids are `ids.turn_id_for(world, thread, org, side turn)`, as P0's turns are.
 
 Owner: R-temporal.
@@ -154,6 +160,7 @@ with workflow.unsafe.imports_passed_through():
         Reassigned,
         Reassignment,
         ReopenInput,
+        RetryAnswer,
         SteerRequest,
         SteerStarted,
         ThreadCarry,
@@ -489,7 +496,7 @@ class ThreadWorkflow:
         (module docstring). Returns once the rev is reserved; an item still being
         opened is waited for."""
         await self._ready(use.escalation_id)
-        item = self._check_use(use)
+        item = self._check_use(use.escalation_id)
         if not workflow.patched(CHAT_HOME_PATCH):
             raise ApplicationError(
                 "this conversation can't take another item's answer",
@@ -497,7 +504,9 @@ class ThreadWorkflow:
             )
         rev = self._reserve(item)
         assert rev is not None
-        item.redraft_task = self._spawn(self._use(item, rev, use.from_escalation_id))
+        item.redraft_task = self._spawn(
+            self._draft_rev(item, rev, reuse_from=use.from_escalation_id)
+        )
         return AnswerUsed(escalation_id=item.escalation_id, draft_rev=rev)
 
     @use_answer.validator
@@ -506,7 +515,26 @@ class ThreadWorkflow:
         and not being resolved, and with `INVALID_RESOLUTION_ERROR` unless it is a
         consult that no rewrite is writing. Accepts an item still being opened."""
         if not self._pending(use.escalation_id):
-            self._check_use(use)
+            self._check_use(use.escalation_id)
+
+    @workflow.update
+    async def retry_answer(self, retry: RetryAnswer) -> AnswerUsed:
+        """Run the item's declined step again as its next rev (module docstring).
+        Returns once the rev is reserved; an item still being opened is waited for."""
+        await self._ready(retry.escalation_id)
+        item = self._check_retry(retry)
+        rev = self._reserve(item)
+        assert rev is not None
+        item.redraft_task = self._spawn(
+            self._draft_rev(item, rev, retry=True, draft_text=retry.draft_text)
+        )
+        return AnswerUsed(escalation_id=item.escalation_id, draft_rev=rev)
+
+    @retry_answer.validator
+    def validate_retry_answer(self, retry: RetryAnswer) -> None:
+        """As `use_answer`'s, and `NOT_IN_ORG_ERROR` unless `org_id` is the item's."""
+        if not self._pending(retry.escalation_id):
+            self._check_retry(retry)
 
     @workflow.query
     def state(self) -> ThreadProgress:
@@ -587,8 +615,8 @@ class ThreadWorkflow:
                 type=STEER_RUNNING_ERROR,
             )
 
-    def _check_use(self, use: UseAnswer) -> _Open:
-        item = self._open_item(use.escalation_id)
+    def _check_use(self, escalation_id: UUID) -> _Open:
+        item = self._open_item(escalation_id)
         if item.kind != "consult" or item.consult_id is None:
             raise ApplicationError(
                 "only a question can take an answer", type=INVALID_RESOLUTION_ERROR
@@ -596,6 +624,15 @@ class ThreadWorkflow:
         if item.redrafting:
             raise ApplicationError(
                 "Claude is still rewriting this item", type=INVALID_RESOLUTION_ERROR
+            )
+        return item
+
+    def _check_retry(self, retry: RetryAnswer) -> _Open:
+        item = self._check_use(retry.escalation_id)
+        if retry.org_id != item.org_id:
+            raise ApplicationError(
+                "the member isn't in the organization this escalation belongs to",
+                type=NOT_IN_ORG_ERROR,
             )
         return item
 
@@ -985,11 +1022,19 @@ class ThreadWorkflow:
             item.redraft_task = None
         return None
 
-    async def _use(self, item: _Open, rev: int, from_escalation_id: UUID) -> SteerFailure | None:
-        """Write rev `rev` of the item from the member's answer to `from_escalation_id`.
-        Released, the item is settled, and the side moves on with the answer as after a
-        resolution; held, the rev waits for a person. A failed draft leaves the item as
-        it was, open."""
+    async def _draft_rev(
+        self,
+        item: _Open,
+        rev: int,
+        *,
+        reuse_from: UUID | None = None,
+        retry: bool = False,
+        draft_text: str | None = None,
+    ) -> SteerFailure | None:
+        """Write rev `rev` of the item from the member's answer to `reuse_from`, or as a
+        Retry of its declined step (`retry`). Released, the item is settled, and the
+        side moves on with the answer as after a resolution; held, the rev waits for a
+        person. A failed draft leaves the item as it was, open."""
         thread = self._input
         assert item.consult_id is not None
         try:
@@ -1004,7 +1049,9 @@ class ThreadWorkflow:
                     cassette_thread=thread.cassette_thread,
                     consult_turn=item.consult_turn,
                     draft_rev=rev,
-                    reuse_from=from_escalation_id,
+                    reuse_from=reuse_from,
+                    retry=retry,
+                    draft_text=draft_text,
                 ),
                 **model_activity_options(),
             )

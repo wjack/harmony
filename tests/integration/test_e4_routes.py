@@ -8,8 +8,10 @@ they answer when a thread, request or chat has already ended."""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any, Final, cast
 from uuid import UUID, uuid4
 
@@ -26,7 +28,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from harmony.agents import consult as answerer
-from harmony.agents import context, transcript
+from harmony.agents import context, keys, transcript
 from harmony.agents import steer as steer_agent
 from harmony.agents.consult import ConsultDraft
 from harmony.agents.models import (
@@ -42,6 +44,7 @@ from harmony.agents.runtime import OwedResult, text_block
 from harmony.agents.transcript import RepSideTranscript, WireMessage
 from harmony.api.app import create_app
 from harmony.api.routes import cards as cards_route
+from harmony.api.routes import conversations as conversations_route
 from harmony.api.routes.problems import from_update_failure
 from harmony.auth.session import current_actor, resolve_actor
 from harmony.config import Settings
@@ -50,6 +53,7 @@ from harmony.db.models import (
     Conversation,
     Escalation,
     Event,
+    ModelCall,
     NetworkRequest,
     RepNotice,
     RepSession,
@@ -77,7 +81,9 @@ from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
 from harmony.temporal.workflows.payloads import (
     STEER_RUNNING_ERROR,
     CardResolved,
+    RetryTurn,
     ThreadInput,
+    TurnRetried,
     thread_workflow_id,
 )
 from harmony.temporal.workflows.thread import ThreadWorkflow
@@ -670,6 +676,54 @@ async def test_escalation_actions_check_who_and_whether_it_is_open(
         problem = await v.json("POST", f"{path}/resolve", json=approve, expect=409)
         assert problem["code"] == "escalation_not_open"
         assert problem["resolved_by"]["slug"] == "helen"
+
+
+async def test_a_question_is_retried_only_while_claude_declined_its_step(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    """Retry is for the step Claude declined: the workspace names it (with its category
+    and rev), and the route takes it to the thread's workflow only then."""
+    async with visitor(temporal_app) as v:
+        outreach, thread_id, escalation_id = await _story(v, db_sessionmaker)
+        path = f"/escalations/{escalation_id}/retry"
+        await v.act_as("alex")
+        assert (await v.json("POST", path, json={}, expect=404))["code"] == "not_found"
+
+        await v.act_as("helen")
+        problem = await v.json("POST", path, json={}, expect=409)
+        assert problem["code"] == "nothing_to_retry"
+        await v.request("POST", path, json={"draft_text": ""}, expect=422)
+
+        # The check of rev 1 ended in a refusal.
+        async with db_sessionmaker.begin() as session:
+            row = await repo.get_required(session, Escalation, outreach.world_id, escalation_id)
+            assert row.consult_id is not None
+            session.add(
+                ModelCall(
+                    turn_id=keys.sharing_turn_id(row.consult_id),
+                    step_idx=0,
+                    world_id=outreach.world_id,
+                    request_text="{}",
+                    response_text=json.dumps(
+                        {
+                            "role": "assistant",
+                            "content": [],
+                            "stop_reason": "refusal",
+                            "stop_details": {"type": "refusal", "category": "bio"},
+                        }
+                    ),
+                    served_model="scripted",
+                    usage_json={},
+                    cost_usd=Decimal(0),
+                    attempt=1,
+                )
+            )
+        workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
+        [item] = [e for e in workspace["escalations"] if e["id"] == str(escalation_id)]
+        assert item["refusal"] == {"step": "sharing_check", "category": "bio", "draft_rev": 1}
+        # Now it goes to the workflow, which has ended: the item isn't open any more.
+        problem = await v.json("POST", path, json={"draft_text": "Yes, Nov 4."}, expect=409)
+        assert problem["code"] == "escalation_not_open"
 
 
 async def test_a_steer_is_its_sides_own_and_needs_a_running_thread(
@@ -1696,6 +1750,39 @@ async def test_an_outreach_decline_takes_an_optional_reason(
         None,
         "decline",
     )
+
+
+async def test_a_declined_chat_message_is_its_owners_to_send_again(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry and Edit of a message Claude declined: the chat's owner only, the edit
+    within a message's limits, and a chat with nothing declined conflicts."""
+    async with visitor(temporal_app) as v:
+        world_id = await _world(v)
+        chat_id = await start_chat(db_sessionmaker, world_id)
+        path = f"/conversations/{chat_id}/retry"
+        await v.act_as("raj")
+        await v.request("POST", path, json={}, expect=404)
+
+        await v.act_as("alex")
+        # No workflow holds a refused turn.
+        assert (await v.json("POST", path, json={}, expect=409))["code"] == "nothing_to_retry"
+        await v.request("POST", path, json={"text": ""}, expect=422)
+
+        sent: list[RetryTurn] = []
+
+        async def run_update(
+            handle: object, name: str, retry: RetryTurn, result_type: type[TurnRetried]
+        ) -> TurnRetried:
+            sent.append(retry)
+            return TurnRetried(message_ids=[retry.message_id])
+
+        monkeypatch.setattr(conversations_route, "run_update", run_update)
+        retried = await v.json("POST", path, json={"text": "Find XRD time before Nov 6."})
+
+    (retry,) = sent
+    assert (retry.member_id, retry.text) == (ALEX, "Find XRD time before Nov 6.")
+    assert retried["message_ids"] == [str(retry.message_id)]
 
 
 async def test_an_auto_card_the_workflow_rejects_stays_auto_and_shows_its_proposal(

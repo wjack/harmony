@@ -1,12 +1,12 @@
 /**
  * The decision card (EDIT.md §8.3, composer.html): an open item, inline after the last
  * transcript row and read in full with it, never scrolled on its own. Whose it is (with
- * Reassign), what it asks and why it waits; Claude's whole draft, edited where it
- * stands; what Claude looked at; and a foot that sticks while the card is taller than
- * the view, with only Decline and Approve and send. Telling Claude what to change is
- * the box's Edit, below.
+ * Reassign), what it asks and why it waits, or that Claude declined a step, with Retry;
+ * Claude's whole draft, edited where it stands; what Claude looked at; and a foot that
+ * sticks while the card is taller than the view, with only Decline and Approve and send.
+ * Telling Claude what to change is the box's Edit, below.
  */
-import { ChevronRight, CircleHelp, Eye, FileText, Pencil, Search, Sparkles, Wrench } from "lucide-react";
+import { ChevronRight, CircleHelp, Eye, FileText, Pencil, RotateCcw, Search, Sparkles, Wrench } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
@@ -15,7 +15,7 @@ import { BudgetStrip } from "../chat/BudgetStrip";
 import { useHarmonySettings } from "../customize/api";
 import { MODE_INFO } from "../customize/modes";
 import { sharingPath } from "../customize/sections";
-import { cx } from "../shell/ui";
+import { Button, cx } from "../shell/ui";
 import { DraftedFrom } from "./EventRow";
 import { ReassignMenu } from "./ReassignMenu";
 import {
@@ -30,6 +30,7 @@ import {
   lookedAtSummary,
   modeLine,
   reasonLine,
+  refusalLine,
   sharingLabel,
 } from "./decision";
 import type { ActivityLine, EscalationDraft, MemberView, OrgRef } from "./types";
@@ -50,13 +51,13 @@ interface DecisionCardProps {
 }
 
 export function DecisionCard({ decision, threadId, us, them, members, memberId, admin, unsentEdit }: DecisionCardProps) {
-  const { escalation, consult, rev, rewriting, blocked } = decision;
+  const { escalation, consult, rev, rewriting, retrying, blocked } = decision;
   const card = useRef<HTMLElement>(null);
   const [declining, setDeclining] = useState(false);
   const held = escalation.kind === "outbound_review";
   const reason = reasonLine(escalation);
   const drafted = draftedFrom(consult);
-  useApproveShortcut(card, decision.approve, !declining && !rewriting && blocked === null);
+  useApproveShortcut(card, decision.approve, !declining && !rewriting && !retrying && blocked === null);
 
   // A held message waits because of how our side works with them: say which mode, and where to change it.
   const settings = useHarmonySettings(us.slug).data;
@@ -70,7 +71,7 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
     </>
   );
   if (blocked !== null) hintRight = "Approving and declining wait until the budget is back";
-  else if (rewriting) hintRight = "You can approve once the new draft is here";
+  else if (rewriting || retrying) hintRight = "You can approve once the new draft is here";
 
   let hintLeft: ReactNode;
   if (held && autonomy !== undefined) {
@@ -105,7 +106,11 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
           <h2 className="text-ui-title font-medium break-words whitespace-pre-wrap text-ink">
             {cardTitle(escalation, rev, consult, them)}
           </h2>
-          {reason !== null && <CardHint>{reason}</CardHint>}
+          {decision.refusal !== null || retrying ? (
+            <RefusalNote decision={decision} />
+          ) : (
+            reason !== null && <CardHint>{reason}</CardHint>
+          )}
 
           <div className="mt-2 border-t border-border pt-3">
             <DraftLabel decision={decision} label={draftLabel(escalation)} unsentEdit={unsentEdit} />
@@ -154,13 +159,47 @@ export function DecisionCard({ decision, threadId, us, them, members, memberId, 
               setDeclining(true);
             }}
             onApprove={decision.approve}
-            approveDisabled={decision.busy || rewriting || blocked !== null}
+            approveDisabled={decision.busy || rewriting || retrying || blocked !== null}
             declineDisabled={decision.busy || blocked !== null}
             hintLeft={hintLeft}
             hintRight={hintRight}
           />
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * In the reason's place: Claude declined the step the item waits on (drafting the answer,
+ * or checking the draft against what we share), with Retry. The draft above the foot is
+ * where the member edits what goes in: an answer Claude declined to draft can be written
+ * and approved, and one it declined to check is checked as the member left it.
+ */
+function RefusalNote({ decision }: { decision: Decision }) {
+  const { refusal, retrying, busy, blocked, edited } = decision;
+  if (retrying || refusal === null) {
+    return (
+      <p role="status" className="flex items-center gap-1.5 text-ui-sm text-link">
+        <Sparkles size={13} strokeWidth={1.75} aria-hidden />
+        Claude is trying again…
+      </p>
+    );
+  }
+  const withEdits = refusal.step === "sharing_check" && edited;
+  return (
+    <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+      <CardHint>{refusalLine(refusal)}</CardHint>
+      <Button
+        variant="ghost"
+        size="sm"
+        icon={<RotateCcw size={13} strokeWidth={1.75} />}
+        disabled={busy || blocked !== null}
+        title={blocked ?? undefined}
+        onClick={decision.retry}
+      >
+        {withEdits ? "Retry with your edits" : "Retry"}
+      </Button>
     </div>
   );
 }

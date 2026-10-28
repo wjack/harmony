@@ -3,7 +3,9 @@ chats (`chat_messages`).
 
 Rules every implementation keeps:
 - Append-only. A stored message is never rewritten; ordering is the explicit per-thread
-  (per-side) or per-conversation `seq`, never an id.
+  (per-side) or per-conversation `seq`, never an id. The one exception is a refused
+  turn's input (`take_back_in`): the model never answered it, so a Retry may delete it
+  whole, while it is still the tail, and send the same input again as a new turn.
 - `content_text` is the JSON text of the message's `content` array exactly as it was
   sent (`llm.wire.canonical_json`) or received (the response's `content`, re-serialized
   canonically, which keeps key order and empty thinking blocks with their signatures).
@@ -39,7 +41,7 @@ from typing import Annotated, Final, Literal, Protocol
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from harmony.agents.context import quoted
@@ -267,6 +269,46 @@ async def append_in(
     return seqs
 
 
+async def take_back_in(uow: UnitOfWork, ref: TranscriptRef, turn_id: UUID) -> bool:
+    """Delete what a refused turn stored, for a Retry that sends the same input again
+    as a new turn. Only input nothing answered can go: the turn's messages must be the
+    transcript's tail and hold no response. True once nothing of the turn is stored
+    (also when nothing was); False, with nothing deleted, otherwise."""
+    if ref.world_id != uow.world_id:
+        raise ValueError(f"transcript of world {ref.world_id} taken back in {uow.world_id}")
+    session = uow.session
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(_lock_key(ref), 0)))
+    )
+    stored = await _turn_rows(session, ref, turn_id)
+    if not stored:
+        return True
+    if stored[-1][0] != await _tail_seq(session, ref) or any(
+        message.role == "assistant" for _, message in stored
+    ):
+        return False
+    if isinstance(ref, ConversationTranscript):
+        await session.execute(
+            delete(ChatMessage).where(
+                ChatMessage.world_id == ref.world_id,
+                ChatMessage.conversation_id == ref.conversation_id,
+                ChatMessage.turn_id == turn_id,
+            )
+        )
+        await _touch_conversation(uow, ref)
+    else:
+        await session.execute(
+            delete(RepTranscript).where(
+                RepTranscript.world_id == ref.world_id,
+                RepTranscript.thread_id == ref.thread_id,
+                RepTranscript.side == ref.side,
+                RepTranscript.turn_id == turn_id,
+            )
+        )
+    await session.flush()
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class AnsweredQuestion:
     """An answer the chat's owner gave their own representative, which a look asks them
@@ -465,4 +507,5 @@ __all__ = [
     "is_look_note",
     "load_in",
     "look_note",
+    "take_back_in",
 ]

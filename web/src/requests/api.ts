@@ -16,6 +16,7 @@ import { useSession } from "../app/queries";
 import type { AddSteer, ReopenRequest, ReopenStarted, SteerStarted } from "../api/types";
 import type {
   AddNote,
+  AnswerUsed,
   ApiProblem,
   EscalationResolved,
   MemberView,
@@ -23,6 +24,7 @@ import type {
   Reassigned,
   ReassignEscalation,
   ResolveEscalation,
+  RetryEscalation,
   ShareRequest,
   ShareResult,
 } from "./types";
@@ -156,6 +158,25 @@ export function useResolveEscalation({ threadId, escalationId }: EscalationTarge
     mutationFn: (body) =>
       unwrap(
         api.POST("/api/escalations/{escalation_id}/resolve", {
+          params: { path: { escalation_id: escalationId } },
+          body,
+        }),
+      ),
+    onSettled: () => refreshThread(queryClient, threadId),
+  });
+}
+
+/**
+ * Run the step Claude declined on a question again (`EscalationView.refusal`), as the
+ * item's next draft rev; with `draft_text`, the check runs on the member's edit of the draft.
+ */
+export function useRetryEscalation({ threadId, escalationId }: EscalationTarget) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation<AnswerUsed, Error, RetryEscalation>({
+    mutationFn: (body) =>
+      unwrap(
+        api.POST("/api/escalations/{escalation_id}/retry", {
           params: { path: { escalation_id: escalationId } },
           body,
         }),

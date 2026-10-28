@@ -10,9 +10,13 @@
  * `REDRAFT_TIMEOUT_MS`, a fallback for a report the stream dropped. A teammate's Edit
  * locks the draft the same way: the steer list says a rev is reserved.
  *
- * Approve and decline hand the move to a model, whose call a spent cap or a pause would
- * refuse: while the budget isn't `ok` they hold, and `blocked` says why. Editing the
- * wording calls no model, so it still works.
+ * When Claude declined the step the item waits on (`EscalationView.refusal`), Retry runs
+ * it again as the next rev, on the member's edit of the draft if there is one. Approve
+ * waits until that rev lands or Claude declines it too, with the same fallback timeout.
+ *
+ * Approve, decline and Retry hand the move to a model, whose call a spent cap or a pause
+ * would refuse: while the budget isn't `ok` they hold, and `blocked` says why. Editing
+ * the wording calls no model, so it still works.
  *
  * What the member did with an item stays with that item.
  */
@@ -21,8 +25,9 @@ import { useEffect, useState } from "react";
 import type { SteerView } from "../api/types";
 import { budgetLine, useBudgetState } from "../chat/failureCopy";
 import { toast } from "../shell/toasts";
-import { problemOf, useResolveEscalation } from "./api";
+import { problemOf, useResolveEscalation, useRetryEscalation } from "./api";
 import { approveBody, declineBody, isEdited, shownAnswer, sortedDrafts, type DraftEdits } from "./draft";
+import type { Refusal } from "./decision";
 import { representativeName } from "./format";
 import type { ConsultView, EscalationDraft, EscalationView, OrgRef, ResolveEscalation } from "./types";
 
@@ -55,9 +60,15 @@ export interface Decision {
   rewriting: boolean;
   /** The latest Edit's rewrite came to nothing: the draft is as it was. */
   unchanged: boolean;
+  /** Claude declined the step the item waits on, while no Retry of it is under way. */
+  refusal: Refusal | null;
+  /** A Retry reserved a rev that hasn't landed (or been declined): Approve waits. */
+  retrying: boolean;
+  /** Run the declined step again: on the member's edit of the shown draft, if any. */
+  retry: () => void;
   /** An Edit of ours reserved `rev` for this item. */
   awaitRewrite: (rev: number, steerId: string) => void;
-  /** A resolve call is in flight. */
+  /** A resolve or Retry call is in flight. */
   busy: boolean;
   /** Why live turns can't start now (`budgetLine`): approving and declining hold. */
   blocked: string | null;
@@ -82,9 +93,18 @@ interface ItemState {
   waiting: Waiting | null;
   /** A reserved rev the card stopped waiting for. */
   timedOutRev: number | null;
+  /** The rev our Retry reserved, until it lands, is declined, or the card stops waiting. */
+  retryRev: number | null;
 }
 
-const FRESH: ItemState = { revIndex: null, editsByRev: {}, notice: null, waiting: null, timedOutRev: null };
+const FRESH: ItemState = {
+  revIndex: null,
+  editsByRev: {},
+  notice: null,
+  waiting: null,
+  timedOutRev: null,
+  retryRev: null,
+};
 
 type ItemPatch = Partial<ItemState> | ((current: ItemState) => Partial<ItemState>);
 
@@ -140,6 +160,7 @@ export function useDecision(
 ): Decision | null {
   const itemId = escalation?.id ?? "";
   const resolve = useResolveEscalation({ threadId, escalationId: itemId });
+  const retryCall = useRetryEscalation({ threadId, escalationId: itemId });
   const blocked = budgetLine(useBudgetState());
 
   // Keyed by item, so a call that settles after its item went updates that item only.
@@ -155,7 +176,11 @@ export function useDecision(
   const edits = state.editsByRev[rev?.draft_rev ?? 0] ?? {};
   const { pending, unchanged } = rewriteOf(steers, itemId, drafts.at(-1)?.draft_rev ?? 0, state);
   const rewriting = pending !== null;
-  const busy = resolve.isPending;
+  const busy = resolve.isPending || retryCall.isPending;
+  const declined = escalation?.refusal ?? null;
+  const { retryRev } = state;
+  const retrying =
+    retryRev !== null && (drafts.at(-1)?.draft_rev ?? 0) < retryRev && (declined?.draft_rev ?? 0) < retryRev;
 
   useEffect(() => {
     if (pending === null) return;
@@ -167,10 +192,24 @@ export function useDecision(
     };
   }, [pending, itemId]);
 
+  useEffect(() => {
+    if (!retrying) return;
+    const timer = window.setTimeout(() => {
+      setItems((current) => patched(current, itemId, { retryRev: null }));
+    }, REDRAFT_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [retrying, itemId]);
+
   if (escalation === null) return null;
 
   const fail = (error: unknown) => {
     const problem = problemOf(error);
+    if (problem?.code === "nothing_to_retry") {
+      update({ notice: { tone: "info", text: "Claude is past this step now. Check the latest before trying again." } });
+      return;
+    }
     if (problem?.code === "escalation_not_open") {
       // `resolved_by` is set only when someone resolved it; a cancelled item comes back without it.
       update({
@@ -218,6 +257,27 @@ export function useDecision(
     },
     rewriting,
     unchanged,
+    refusal: retrying ? null : declined,
+    retrying,
+    retry: () => {
+      if (busy || retrying || blocked !== null || declined === null) return;
+      // An answer Claude declined to draft has no draft to send; one it declined to check is checked as shown.
+      const draftText = rev !== null && isEdited(rev, edits) ? shownAnswer(rev, edits).trim() : null;
+      if (draftText === "") {
+        update({ notice: { tone: "error", text: "Write the answer to check, or undo your edits." } });
+        return;
+      }
+      update({ notice: null });
+      retryCall.mutate(
+        { draft_text: draftText },
+        {
+          onSuccess: ({ draft_rev }) => {
+            update({ retryRev: draft_rev, revIndex: null });
+          },
+          onError: fail,
+        },
+      );
+    },
     awaitRewrite: (reserved, steerId) => {
       update({ waiting: { rev: reserved, steerId }, revIndex: null });
     },
@@ -228,7 +288,7 @@ export function useDecision(
       update({ notice: null });
     },
     approve: () => {
-      if (busy || rewriting || blocked !== null) return;
+      if (busy || rewriting || retrying || blocked !== null) return;
       const built = approveBody(escalation.kind, rev, edits);
       if (!built.ok) {
         update({ notice: { tone: "error", text: built.error } });

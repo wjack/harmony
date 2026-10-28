@@ -1,6 +1,7 @@
 """`agents.transcript.SqlTranscriptStore`: raw wire JSON, append-only, ordered by seq,
 and idempotent per (turn, position) so a retried activity never duplicates or
-rewrites what an earlier attempt stored (§2.2)."""
+rewrites what an earlier attempt stored (§2.2); and `take_back_in`, a refused turn's one
+way out, for a Retry."""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from harmony.agents.transcript import (
     TranscriptConflict,
     WireMessage,
     append_in,
+    take_back_in,
 )
 from harmony.db.models import ChatMessage, Conversation, Event
 from harmony.db.uow import unit_of_work
@@ -154,3 +156,37 @@ async def test_append_in_writes_with_the_callers_unit_of_work(
     async with unit_of_work(db_sessionmaker, world) as uow:
         with pytest.raises(ValueError, match="appended in"):
             await append_in(uow, other, [user("x")], turn_id=uuid4())
+
+
+async def test_a_refused_turn_is_taken_back_only_while_nothing_answered_it(
+    db_sessionmaker: Sessionmaker, world: UUID
+) -> None:
+    store = SqlTranscriptStore(db_sessionmaker)
+    chat = await conversation(db_sessionmaker, world)
+    side = RepSideTranscript(world_id=world, thread_id=HISTORY, side="requester")
+
+    async def take_back(ref: ConversationTranscript | RepSideTranscript, turn_id: UUID) -> bool:
+        async with unit_of_work(db_sessionmaker, world) as uow:
+            taken = await take_back_in(uow, ref, turn_id)
+            await uow.commit()
+        return taken
+
+    answered, refused = uuid4(), uuid4()
+    await store.append(chat, [user("Find an XRD lab"), RESPONSE], turn_id=answered, position=0)
+    await store.append(chat, [user("one"), user("two")], turn_id=refused, position=0)
+
+    # A turn holding a response stays; the refused tail turn's input goes, at once.
+    assert not await take_back(chat, answered)
+    assert await take_back(chat, refused)
+    assert [m.turn_id for m in await store.load(chat)] == [answered, answered]
+    assert await take_back(chat, refused)
+    # The Retry is a new turn after what's left.
+    assert await store.append(chat, [user("one, reworded")], turn_id=uuid4(), position=0) == [3]
+
+    # A representative's input that something came after stays too.
+    earlier, later = uuid4(), uuid4()
+    await store.append(side, [user("Can you run XRD?")], turn_id=earlier, position=0)
+    await store.append(side, [user("Any news?")], turn_id=later, position=0)
+    assert not await take_back(side, earlier)
+    assert await take_back(side, later)
+    assert [m.turn_id for m in await store.load(side)] == [earlier]

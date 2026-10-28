@@ -1,12 +1,15 @@
 /**
  * What the decision card says about an open item (EDIT.md §8.3, composer.html): whose it
- * is, what it asks, why it waits, what approving and declining do, and how the held
- * item's org is set. Anyone who can see the item may act on it, so the words name the
+ * is, what it asks, why it waits (or what Claude declined), what approving and declining
+ * do, and how the held item's org is set. Anyone who can see the item may act on it, so the words name the
  * assignee when it isn't the viewer. Pure, so the wording is unit-tested.
  */
+import { declinedLine } from "../chat/failureCopy";
 import { firstName } from "../shell/names";
 import { possessive } from "./format";
 import type { ConsultView, EscalationDraft, EscalationView, MemberRef, OrgRef } from "./types";
+
+export type Refusal = NonNullable<EscalationView["refusal"]>;
 
 /** The longest answer or message the server takes with a resolution. */
 export const ANSWER_MAX_CHARS = 20_000;
@@ -68,6 +71,13 @@ const ASK_MODE_REASONS: ReadonlySet<string> = new Set([
 export function reasonLine(escalation: EscalationView): string | null {
   const reason = escalation.reason.trim();
   return reason === "" || ASK_MODE_REASONS.has(reason) ? null : reason;
+}
+
+/** The note in the reason's place when Claude declined the step the item waits on. */
+export function refusalLine(refusal: Refusal): string {
+  return refusal.step === "answer"
+    ? declinedLine("draft an answer", refusal.category)
+    : declinedLine("check this answer against what you share", refusal.category);
 }
 
 /** The draft part's name. */

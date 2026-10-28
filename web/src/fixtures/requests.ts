@@ -25,6 +25,7 @@ import { problem, type FixtureRequest, type FixtureRoutes } from "./index";
 import { members, orgs, sessionAs, shellRoutes } from "./shell";
 import type {
   ActivityLine,
+  AnswerUsed,
   ConsultView,
   ContextPart,
   EscalationDraft,
@@ -38,6 +39,7 @@ import type {
   OrgRef,
   RepresentativeContext,
   ResolveEscalation,
+  RetryEscalation,
   Side,
   ThreadAccess,
   ThreadDetail,
@@ -864,6 +866,52 @@ function rewrite(record: ThreadRecord, item: EscalationView, from: SteerView, re
   touch(record, at);
 }
 
+type RefusedStep = NonNullable<EscalationView["refusal"]>["step"];
+
+/** Why an answer waits in Ask mode once its check passes: the card shows no reason line for it. */
+const ASK_MODE_REASON = "A teammate approves every answer in Ask mode.";
+
+/**
+ * Claude declined the step `threadId`'s open question waits on: checking its draft
+ * against what we share, or, for `answer`, drafting one at all, which leaves no draft.
+ */
+export function declined(
+  world: RequestsWorld,
+  threadId: string,
+  step: RefusedStep,
+  category: string | null = "bio",
+): RequestsWorld {
+  const item = openEscalations(recordOf(world, threadId))[0];
+  if (item === undefined) return world;
+  if (step === "answer") {
+    item.drafts = [];
+    item.current_draft_rev = null;
+    item.reason = "Claude couldn't draft an answer.";
+  } else {
+    item.reason = "The sharing check couldn't run (the sharing check declined).";
+  }
+  item.refusal = { step, category, draft_rev: item.current_draft_rev ?? 1 };
+  return world;
+}
+
+/**
+ * A Retry of the declined step, which here goes through at once: the next rev lands,
+ * checked, as the member's edit of the draft if they sent one (else the draft as it was,
+ * or Henderson's answer when there was none).
+ */
+function applyRetry(record: ThreadRecord, item: EscalationView, draftText: string | null, at: string): AnswerUsed {
+  const latest = item.drafts.at(-1);
+  const rev = Math.max(latest?.draft_rev ?? 0, item.refusal?.draft_rev ?? 0) + 1;
+  const base = latest ?? hendersonDraft(at);
+  item.drafts.push({ ...base, draft_rev: rev, answer: draftText ?? base.answer, rewritten_by: null, created_at: at });
+  item.current_draft_rev = rev;
+  item.refusal = null;
+  item.reason = ASK_MODE_REASON;
+  item.version += 1;
+  touch(record, at);
+  return { escalation_id: item.id, draft_rev: rev };
+}
+
 /** One of Helen's Edits on `threadId`, as `fields` leaves it (done, guidance updated, by default). */
 export function edited(world: RequestsWorld, threadId: string, fields: Partial<SteerView> = {}): RequestsWorld {
   const record = recordOf(world, threadId);
@@ -1294,6 +1342,15 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
       if (options.resolvedFirstBy !== undefined) return notOpen(ref(options.resolvedFirstBy));
       if (found.item.status !== "open") return notOpen(found.item.resolved_by);
       return applyResolve(found.record, found.item, bodyOf<ResolveEscalation>(body), actor, new Date().toISOString());
+    },
+
+    "POST /api/escalations/{escalation_id}/retry": ({ params, body }) => {
+      const found = findEscalation(world, params.escalation_id ?? "");
+      if (found === null) return problem(404, "not_found", "Escalation not found.");
+      if (found.item.status !== "open") return notOpen(found.item.resolved_by);
+      if (found.item.refusal == null) return problem(409, "nothing_to_retry", "Claude didn't decline this question.");
+      const draftText = bodyOf<RetryEscalation>(body).draft_text ?? null;
+      return applyRetry(found.record, found.item, draftText, new Date().toISOString());
     },
 
     "POST /api/escalations/{escalation_id}/reassign": ({ params, body }) => {

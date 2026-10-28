@@ -11,6 +11,7 @@ import {
   lookedAtSummary,
   modeLine,
   reasonLine,
+  refusalLine,
   sharingLabel,
 } from "./decision";
 import type { ConsultView, EscalationView } from "./types";
@@ -82,6 +83,15 @@ describe("reasonLine", () => {
     // A held message in Ask mode: the card's foot already says which mode.
     expect(reasonLine(item(THREAD.vantage).escalation)).toBeNull();
     expect(reasonLine({ ...escalation, reason: "  " })).toBeNull();
+  });
+});
+
+describe("refusalLine", () => {
+  it("says which step Claude declined, with its category", () => {
+    expect(refusalLine({ step: "answer", category: null, draft_rev: 1 })).toBe("Claude declined to draft an answer.");
+    expect(refusalLine({ step: "sharing_check", category: "bio", draft_rev: 2 })).toBe(
+      "Claude declined to check this answer against what you share (biosecurity).",
+    );
   });
 });
 

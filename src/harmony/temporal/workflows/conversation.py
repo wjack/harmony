@@ -50,6 +50,12 @@ that isn't pending any more is resumed with what it settled to, so the chat neve
 paused on it. A failed or refused turn leaves `turn_failure` set (the chat says why
 Claude couldn't reply: a spend cap, a model error, a refusal) until the next turn.
 
+Retry. A refused turn is also kept as `refused` until the next turn, with the member
+messages it opened with. When the refusal came at its first call, it stored nothing but
+those messages, and the Update `retry_turn` sends them again as a new turn: it takes the
+stored input back (`NetworkActivities.take_back_turn`), then queues the same messages,
+or the member's edit of them, ahead of anything else. Nothing else runs meanwhile.
+
 `resolve_card` may arrive while the turn that raised the card is still finishing (the
 card row commits before the activity returns): the validator accepts it while a turn is
 in flight, and the handler waits for the turn before checking the card id.
@@ -69,6 +75,7 @@ from temporalio.workflow import ActivityConfig
 
 with workflow.unsafe.imports_passed_through():
     from harmony.agents.models import CardResolution
+    from harmony.agents.transcript import ConversationTranscript
     from harmony.db.models.choices import FailureReason
     from harmony.temporal.activities.agents import (
         AgentActivities,
@@ -81,6 +88,7 @@ with workflow.unsafe.imports_passed_through():
         NetworkActivities,
         SettledCardInput,
         StartRequestInput,
+        TakeBackInput,
     )
     from harmony.temporal.failures import failure_reason
     from harmony.temporal.policies import (
@@ -96,6 +104,7 @@ with workflow.unsafe.imports_passed_through():
         LOOK_EVERY,
         LOOK_LATEST,
         LOOK_LULL,
+        NOTHING_TO_RETRY_ERROR,
         CardResolved,
         ConversationCarry,
         ConversationInput,
@@ -104,6 +113,9 @@ with workflow.unsafe.imports_passed_through():
         MemberMessage,
         NetworkNews,
         NetworkUpdate,
+        RefusedTurn,
+        RetryTurn,
+        TurnRetried,
         update_failure,
     )
 
@@ -145,6 +157,9 @@ class ConversationWorkflow:
         # that turn's activity drops any note the chat already holds.
         self._undelivered: list[NetworkUpdate] = list(conversation.carried.undelivered_updates)
         self._turn_failure: FailureReason | None = conversation.carried.turn_failure
+        self._refused: RefusedTurn | None = conversation.carried.refused
+        # `retry_turn` is taking the refused turn's input back: no turn starts meanwhile.
+        self._retrying = False
         self._turn_in_flight = False
         self._pending_card_id: UUID | None = None
         self._paused: _Paused | None = None
@@ -253,6 +268,55 @@ class ConversationWorkflow:
             )
         _check_decision(resolution)
 
+    @workflow.update
+    async def retry_turn(self, retry: RetryTurn) -> TurnRetried:
+        """Send the refused turn's messages again (or `text`, the member's edit of them)
+        as a new turn, once its stored input is taken back. Rejected with
+        `NOTHING_TO_RETRY_ERROR` unless the last turn was refused at its first call and
+        nothing has happened since."""
+        refused = self._check_retry()
+        self._retrying = True
+        try:
+            taken = await workflow.execute_activity_method(
+                NetworkActivities.take_back_turn,
+                TakeBackInput(
+                    transcript=ConversationTranscript(
+                        world_id=self._input.world_id,
+                        conversation_id=self._input.conversation_id,
+                    ),
+                    turn_id=refused.turn_id,
+                ),
+                **main_activity_options(),
+            )
+        except ActivityError as failed:
+            raise update_failure(failed) from failed
+        finally:
+            self._retrying = False
+        if not taken:
+            self._refused = refused.model_copy(update={"retryable": False})
+            raise ApplicationError("this turn can't be sent again", type=NOTHING_TO_RETRY_ERROR)
+        messages = refused.messages
+        if retry.text is not None:
+            messages = [
+                MemberMessage(
+                    message_id=retry.message_id,
+                    member_id=retry.member_id,
+                    text=retry.text,
+                    sent_at=workflow.now(),
+                )
+            ]
+        self._refused = None
+        self._turn_failure = None
+        self._queued_messages[:0] = messages
+        # A turn woken only by the network has no message: its updates wake this one.
+        self._network_updates[:0] = self._undelivered
+        self._undelivered = []
+        return TurnRetried(message_ids=[message.message_id for message in messages])
+
+    @retry_turn.validator
+    def validate_retry_turn(self, retry: RetryTurn) -> None:
+        self._check_retry()
+
     @workflow.query
     def pending(self) -> ConversationPending:
         return ConversationPending(
@@ -263,12 +327,26 @@ class ConversationWorkflow:
             turns=self._turns,
             turn_failure=self._turn_failure,
             looking=self._looking,
+            refused=self._refused,
         )
 
     # --- The loop ---------------------------------------------------------------------
 
     def _has_work(self) -> bool:
-        return bool(self._queued_messages or self._network_updates)
+        return not self._retrying and bool(self._queued_messages or self._network_updates)
+
+    def _check_retry(self) -> RefusedTurn:
+        refused = self._refused
+        if (
+            refused is None
+            or not refused.retryable
+            or self._retrying
+            or self._turn_in_flight
+            or self._paused is not None
+            or self._queued_messages
+        ):
+            raise ApplicationError("there's no refused turn to retry", type=NOTHING_TO_RETRY_ERROR)
+        return refused
 
     async def _wait(self, due: datetime | None) -> bool:
         """Wait for work until the armed look is `due`, or for `CONVERSATION_IDLE` when
@@ -440,6 +518,7 @@ class ConversationWorkflow:
         conversation = self._input
         self._turn_in_flight = True
         self._turn_failure = None
+        self._refused = None
         try:
             result = await workflow.execute_activity_method(
                 AgentActivities.internal_turn,
@@ -470,6 +549,13 @@ class ConversationWorkflow:
         if result.stop == "refusal":
             self._turn_failure = "refused"
             self._undelivered = [*updates, *self._undelivered]
+            self._refused = RefusedTurn(
+                turn_id=turn_id,
+                messages=messages,
+                category=result.refusal_category,
+                # Refused at its first call: it stored nothing but its opening.
+                retryable=first_step == 0 and result.next_step == 0,
+            )
         if result.stop == "awaiting_card" and result.card_id is not None:
             paused = _Paused(
                 turn_id=turn_id,
@@ -595,6 +681,7 @@ class ConversationWorkflow:
                     closed_request_rounds=dict(sorted(self._closed_requests.items())),
                     undelivered_updates=list(self._undelivered),
                     turn_failure=self._turn_failure,
+                    refused=self._refused,
                     looks=self._looks,
                     news_first_at=self._news_first_at,
                     news_latest_at=self._news_latest_at,

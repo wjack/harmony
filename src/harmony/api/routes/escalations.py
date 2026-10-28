@@ -3,6 +3,9 @@
 - POST /api/escalations/{escalation_id}/resolve {action, text?, draft_rev?, also_for?}: the
   escalation panel's actions and the chat's inline answers
 - POST /api/escalations/{escalation_id}/reassign {member_id}
+- POST /api/escalations/{escalation_id}/retry {draft_text?}: run the step Claude declined
+  again (`retry_answer`): the answerer, or the sharing check on the draft as the member
+  edited it
 
 Each runs a `ThreadWorkflow` Update (`resolve_escalation`, `reassign`) naming
 the acting member and their org (validators can't read the database). Only members of
@@ -60,7 +63,7 @@ from harmony.auth.session import Actor, ActorDep
 from harmony.db import repo
 from harmony.db.models import Escalation, Member, NetworkRequest, Org, Thread
 from harmony.db.uow import unit_of_work
-from harmony.domain import consults, requests
+from harmony.domain import consults, refusals, requests
 from harmony.temporal.activities.network import nudge_request_chat, run_update
 from harmony.temporal.workflows.payloads import (
     AnswerUsed,
@@ -68,6 +71,7 @@ from harmony.temporal.workflows.payloads import (
     NetworkNews,
     Reassigned,
     Reassignment,
+    RetryAnswer,
     UseAnswer,
     thread_workflow_id,
 )
@@ -90,6 +94,12 @@ class ResolveEscalation(BaseModel):
 
 class ReassignEscalation(BaseModel):
     member_id: UUID
+
+
+class RetryEscalation(BaseModel):
+    # The member's edit of the draft, which the sharing check runs on; omitted runs it
+    # on the draft as it stands. Ignored while the item has no draft.
+    draft_text: str | None = Field(default=None, min_length=1, max_length=20_000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +181,33 @@ async def reassign_escalation(
         escalation_id=escalation.id, to_member_id=target.id, by_member_id=actor.member_id
     )
     return await _update(services, actor, escalation, "reassign", reassignment, Reassigned)
+
+
+@router.post(
+    "/escalations/{escalation_id}/retry",
+    response_model=AnswerUsed,
+    responses=problems(*_ERRORS, status.HTTP_422_UNPROCESSABLE_CONTENT),
+)
+async def retry_escalation(
+    escalation_id: UUID, body: RetryEscalation, actor: ActorDep, services: ServicesDep
+) -> AnswerUsed:
+    """Run the step Claude declined on a question again, as its next draft (the thread's
+    `retry_answer`). Returns once the draft is reserved; the item shows it when written.
+    409 `nothing_to_retry` unless Claude declined the step the item waits on."""
+    async with services.sessionmaker() as db:
+        escalation = await _open_escalation(db, actor, escalation_id)
+        consult_id = escalation.consult_id
+        if escalation.kind != "consult" or consult_id is None:
+            raise invalid("only a question's answer can be retried")
+        declined = await refusals.consult_refusals(db, [(consult_id, escalation.current_draft_rev)])
+    if consult_id not in declined:
+        raise problem(
+            status.HTTP_409_CONFLICT, "nothing_to_retry", "Claude didn't decline this question"
+        )
+    retry = RetryAnswer(
+        escalation_id=escalation.id, org_id=actor.org_id, draft_text=body.draft_text
+    )
+    return await _update(services, actor, escalation, "retry_answer", retry, AnswerUsed)
 
 
 async def _open_escalation(db: AsyncSession, actor: Actor, escalation_id: UUID) -> Escalation:

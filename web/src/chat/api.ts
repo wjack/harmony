@@ -2,8 +2,8 @@
  * The chat's queries and mutations over the typed API client.
  *
  * Reads: the conversation (`ChatItem`s) and a request's per-recipient status. Writes
- * start chats, send messages, set a chat's send mode, resolve cards and answer inline
- * questions; each refetches what it changed, and the event stream (live.ts) keeps
+ * start chats, send messages (or send declined ones again), set a chat's send mode,
+ * resolve cards and answer inline questions; each refetches what it changed, and the event stream (live.ts) keeps
  * everything current in between.
  */
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,7 +12,14 @@ import { unwrap } from "../api/client";
 import { queryKeys } from "../api/queryKeys";
 import { useApi } from "../app/context";
 import { addOptimistic, removeOptimistic } from "./optimistic";
-import type { ApproveCard, ConversationDetail, ResolveEscalation, SendMode, StartConversation } from "./types";
+import type {
+  ApproveCard,
+  ChatItemOf,
+  ConversationDetail,
+  ResolveEscalation,
+  SendMode,
+  StartConversation,
+} from "./types";
 
 /** How often to recheck a conversation while Claude works, should a stream event be missed. */
 const IN_FLIGHT_RECHECK_MS = 5_000;
@@ -143,6 +150,50 @@ export function usePostMessage(conversationId: string) {
         removeOptimistic(conversationId, [posted.message_id]);
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(conversationId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
+    },
+  });
+}
+
+/**
+ * Send the messages Claude declined to respond to again (`ConversationDetail.refusal`),
+ * as they were or as `text`, the member's rewording of them. The server takes them back
+ * and queues them for a new turn, so the chat drops them at once and draws what was
+ * resent as sent until that turn stores it.
+ */
+export function useRetryMessage(conversationId: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const key = queryKeys.conversation(conversationId);
+  return useMutation({
+    mutationFn: (text: string | null) =>
+      unwrap(
+        api.POST("/api/conversations/{conversation_id}/retry", {
+          params: { path: { conversation_id: conversationId } },
+          body: text === null ? {} : { text },
+        }),
+      ),
+    onSuccess: async ({ message_ids }, text) => {
+      // A refetch already on its way would bring the declined messages back.
+      await queryClient.cancelQueries({ queryKey: key });
+      const shown = queryClient.getQueryData<ConversationDetail>(key);
+      const turnId = shown?.refusal?.turn_id;
+      const items = shown?.items ?? [];
+      const declined = items.filter(
+        (item): item is ChatItemOf<"user_text"> => item.type === "user_text" && turnId !== undefined && item.turn_id === turnId,
+      );
+      const kept = items.filter((item) => !declined.some((message) => message.id === item.id));
+      if (shown !== undefined) {
+        queryClient.setQueryData<ConversationDetail>(key, { ...shown, items: kept, refusal: null, turn_failure: null });
+      }
+      const texts = text === null ? declined.map((message) => message.text) : [text];
+      const at = new Date().toISOString();
+      const after = kept.at(-1)?.id ?? null;
+      message_ids.forEach((messageId, index) => {
+        const resent = texts[index];
+        if (resent !== undefined) addOptimistic(conversationId, { messageId, text: resent, at, after });
+      });
+      void queryClient.invalidateQueries({ queryKey: key });
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
     },
   });

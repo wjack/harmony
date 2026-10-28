@@ -34,6 +34,7 @@ from harmony.agents.keys import chat_key
 from harmony.agents.models import CardResolution, EscalationResolution, OutreachRecipient
 from harmony.agents.runtime import OwedResult
 from harmony.agents.tools.internal import CardChanges, declined_result, sent_result
+from harmony.agents.transcript import TranscriptRef, take_back_in
 from harmony.db import repo
 from harmony.db.models import (
     Card,
@@ -268,6 +269,11 @@ class NotifyConversationInput(_Payload):
 class NudgeChatInput(_Payload):
     world_id: UUID
     request_id: UUID
+
+
+class TakeBackInput(_Payload):
+    transcript: TranscriptRef
+    turn_id: UUID
 
 
 class NetworkActivities:
@@ -613,6 +619,18 @@ class NetworkActivities:
             world_id=nudge.world_id,
             news=NetworkNews(request_id=nudge.request_id),
         )
+
+    @activity.defn
+    async def take_back_turn(self, take: TakeBackInput) -> bool:
+        """Delete a refused turn's stored input (`transcript.take_back_in`), so a Retry
+        sends the same input again as a new turn. False when it can't be: something
+        answered it, or came after it."""
+        world_id = take.transcript.world_id
+        await ensure_world_live(self._sessionmaker, world_id)
+        async with domain_errors(), unit_of_work(self._sessionmaker, world_id) as uow:
+            taken = await take_back_in(uow, take.transcript, take.turn_id)
+            await uow.commit()
+        return taken
 
 
 # --- Shared with the API -------------------------------------------------------------

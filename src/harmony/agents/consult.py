@@ -31,6 +31,12 @@
    open escalation, which then closes with no member (`escalations.resolve_released`):
    it was never a member's approval of this rev. Held, the rev carries its own
    `held_reason`.
+5. Retry. When Claude declined a step of an item waiting on a person (a refusal: no
+   draft, or a sharing check that couldn't run), a rev the `retry_answer` Update
+   reserves runs that step again as the first draft's: the answerer with the first
+   draft's prompt (`retry`), or, when the item has a draft, the sharing check on it or
+   on the member's edit of it. `settle` then decides the rev as it decides a reused one,
+   but under the mode alone (`_settle_rev`).
 
 Every request is built by `llm.requests.build_request`, roles `answerer`,
 `sharing_check` and `screener` (the matcher); cassette keys and checkpoints are in
@@ -180,6 +186,7 @@ async def answer(
     base_text: str | None = None,
     member_name: str | None = None,
     reuse: Reuse | None = None,
+    retry: bool = False,
     attempt: int = 1,
     model_override: str | None = None,
     cassette_thread: str | None = None,
@@ -193,7 +200,8 @@ async def answer(
     A redraft's prompt adds the draft it revises (`base_text`, the member's unsaved
     wording, when given) and `instruction`, what the member (`member_name`) asked for
     (`answer_inputs`); a draft from a member's earlier answer (`reuse`), at any rev,
-    adds that answer instead.
+    adds that answer instead. A Retry (`retry`) drafts with the first draft's prompt at
+    any rev.
     `cassette_thread` and `consult_turn` (the workflow's fixed keys) default to
     `threads.cassette_key` and `consults.ordinal`.
     """
@@ -209,6 +217,7 @@ async def answer(
             base_text=base_text,
             member_name=member_name,
             reuse=reuse,
+            retry=retry,
         )
         thread_key, turn = await _cassette(session, consult, cassette_thread, consult_turn)
     reader = RecordReader(sessionmaker, world_id=world_id, org_id=consult.org_id)
@@ -413,9 +422,11 @@ async def answer_inputs(
     base_text: str | None = None,
     member_name: str | None = None,
     reuse: Reuse | None = None,
+    retry: bool = False,
 ) -> AnswerInputs:
     """The answerer's prompt, read now: settings, policy and the side's guidance are
-    live. A redraft (`draft_rev` > 1) is a person's to release, and its prompt ends with
+    live. A Retry (`retry`) is the first draft's prompt at any rev. Otherwise, a redraft
+    (`draft_rev` > 1) is a person's to release, and its prompt ends with
     the draft that person reviewed (or their wording of it), why it needed them and
     what they asked for. A draft from a member's earlier answer (`reuse`) is released
     as a first draft is, at any rev: its prompt keeps the first draft's review text and
@@ -423,6 +434,7 @@ async def answer_inputs(
     parties = await _parties(session, consult)
     org = parties.org
     org_name, counterparty_name = parties.names()
+    redraft = draft_rev > 1 and reuse is None and not retry
     members = sorted(
         await repo.list_in_world(session, Member, consult.world_id, Member.org_id == org.id),
         key=lambda member: member.slug,
@@ -434,7 +446,7 @@ async def answer_inputs(
         # The prompt is rendered for each consult, so the date never stales a cache.
         "today": context.world_date_notice(await clock.today(session, consult.world_id)),
         "sharing": _sharing_text(parties),
-        "review": _review_text(parties, redraft=draft_rev > 1 and reuse is None),
+        "review": _review_text(parties, redraft=redraft),
         "instructions": settings.instructions.strip() or "None.",
         "member_profiles": _members_text(members),
         "routing_prompt": _routing_text(parties.policy, members),
@@ -449,7 +461,7 @@ async def answer_inputs(
     prompt = render("consult", values)
     if reuse is not None:
         prompt += "\n\n" + await _reuse_text(session, parties, reuse)
-    elif draft_rev > 1:
+    elif redraft:
         prompt += "\n\n" + await _redraft_text(
             session, consult, org_name, instruction, base_text=base_text, member_name=member_name
         )
@@ -873,13 +885,15 @@ async def settle(
     draft_rev: int = 1,
     sharing: SharingCheck | None = None,
     reused_from: UUID | None = None,
+    retried: bool = False,
 ) -> Answered | Escalated:
     """Release the answer or hand it to a person (module docstring). `sharing` is the
     check's verdict when the caller ran it; `reused_from`, the item whose member answer
-    a rev of an open escalation started from. Idempotent: a settled consult returns what
-    it settled to, and a retry or redraft of an escalated one only adds its draft rev
-    (while the escalation is open), unless the rev was drafted from a member's earlier
-    answer (`_settle_reused`). IDs derive from the consult."""
+    a rev of an open escalation started from; `retried`, a Retry's rev. Idempotent: a
+    settled consult returns what it settled to, and a retry or redraft of an escalated
+    one only adds its draft rev (while the escalation is open), unless the rev was
+    drafted from a member's earlier answer or is a Retry's (`_settle_rev`). IDs derive
+    from the consult."""
     session = uow.session
     consult = await consults.get(session, world_id=uow.world_id, consult_id=consult_id)
     settled = settled_result(consult)
@@ -888,11 +902,11 @@ async def settle(
     escalation = await repo.get(session, Escalation, uow.world_id, escalation_id_for(consult_id))
     if escalation is not None:
         if (
-            reused_from is not None
+            (reused_from is not None or retried)
             and isinstance(outcome, DraftReady)
             and escalation.status == "open"
         ):
-            return await _settle_reused(
+            return await _settle_rev(
                 uow, consult, escalation, outcome, draft_rev, sharing, reused_from
             )
         added = False
@@ -946,28 +960,31 @@ async def _decline(uow: UnitOfWork, consult_id: UUID, why: str) -> Answered:
     return Answered(consult_id=consult_id, result_text=declined)
 
 
-async def _settle_reused(
+async def _settle_rev(
     uow: UnitOfWork,
     consult: Consult,
     escalation: Escalation,
     outcome: DraftReady,
     draft_rev: int,
     sharing: SharingCheck | None,
-    reused_from: UUID,
+    reused_from: UUID | None,
 ) -> Answered | Escalated:
     """A rev of an open item drafted from a member's answer to another item on its card
-    (`use_answer`): decided under the mode and the sharing check toward this
-    counterparty, as a first draft is. Released, it goes out by `auto` and the item
-    closes with no member; held, the rev carries why (`held_reason`)."""
+    (`use_answer`, `reused_from`), or a Retry's: decided under the mode and the sharing
+    check toward this counterparty, as a first draft is (a reused one is checked in any
+    mode). Released, it goes out by `auto` and the item closes with no member; held,
+    the rev carries why (`held_reason`)."""
     draft = outcome.draft
-    consult = await consults.record_drafted_from(uow, consult.id, reused_from)
+    reused = reused_from is not None
+    if reused_from is not None:
+        consult = await consults.record_drafted_from(uow, consult.id, reused_from)
     # The item is already a person's: under Skip approvals too, a rev the check stops
     # waits for them (it was opened before the switch, or it would never have opened).
     mode = (await _parties(uow.session, consult)).mode()
     check: SharingCheck | None = None
-    if release.needs_sharing_check(mode, draft, reused=True):
+    if release.needs_sharing_check(mode, draft, reused=reused):
         check = sharing or SharingCheck(within_sharing=False, reason=UNCHECKED)
-    decision = release.decide(mode, draft, check, reused=True)
+    decision = release.decide(mode, draft, check, reused=reused)
     held = None if isinstance(decision, release.Release) else decision.detail
     await escalations.add_draft(
         uow, escalation.id, draft, turn_id=outcome.turn_id, draft_rev=draft_rev, held_reason=held

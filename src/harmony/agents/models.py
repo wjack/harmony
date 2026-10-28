@@ -316,6 +316,8 @@ class UserTextItem(_ChatItem):
     type: Literal["user_text"] = "user_text"
     text: str
     member_id: UUID | None
+    # The turn the message opened (a refused turn's messages can be sent again).
+    turn_id: UUID | None = None
 
 
 class AssistantTextItem(_ChatItem):

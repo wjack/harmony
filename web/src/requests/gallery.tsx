@@ -5,6 +5,7 @@ import { useSession } from "../app/queries";
 import {
   ESCALATION,
   checking,
+  declined,
   edited,
   expired,
   reopenFailed,
@@ -152,6 +153,18 @@ export default [
     "A message held for review",
     THREAD.vantage,
     "Northlake works with Vantage in Ask mode, so every message to them waits for a teammate. The card says so, with a link to change it.",
+  ),
+  view(
+    "Claude declined to check the answer",
+    THREAD.henderson,
+    "The sharing check on Claude's draft for Henderson Lab ended in a refusal (biosecurity). The card says so in the reason's place. Change the wording to see Retry check your edit; Retry lands a checked draft.",
+    { world: world((made) => declined(made, THREAD.henderson, "sharing_check")) },
+  ),
+  view(
+    "Claude declined to draft an answer",
+    THREAD.henderson,
+    "The answerer refused Henderson Lab's question, so there's no draft: Helen can write the answer and approve it, or Retry for Claude's draft.",
+    { world: world((made) => declined(made, THREAD.henderson, "answer", null)) },
   ),
   view("Shared with you", THREAD.calder, "Raj shared Calder's request with Helen and asked a question.", {}, 720),
 

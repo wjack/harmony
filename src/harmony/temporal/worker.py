@@ -198,6 +198,7 @@ def main_activities(deps: WorkerDeps) -> list[Callable[..., Any]]:
         network.end_round,
         network.notify_conversation,
         network.nudge_chat,
+        network.take_back_turn,
     ]
 
 

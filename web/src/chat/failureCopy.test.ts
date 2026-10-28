@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BudgetState } from "../app/budget";
-import { budgetLine, failureLine, stoppedLine, type FailureReason } from "./failureCopy";
+import { budgetLine, declinedLine, failureLine, stoppedLine, type FailureReason } from "./failureCopy";
 
 const STATES: readonly BudgetState[] = ["ok", "session_exhausted", "daily_exhausted", "demo_exhausted", "paused"];
 
@@ -42,6 +42,16 @@ describe("failureLine", () => {
       "Claude couldn't reply because the model service returned an error. Send a message to try again.",
     );
     expect(failureLine("refused", state)).toBe("Claude declined to respond to this. Try rephrasing.");
+    expect(failureLine("refused", state, "bio")).toBe("Claude declined to respond to this (biosecurity). Try rephrasing.");
+  });
+});
+
+describe("declinedLine", () => {
+  it("names the API's category in words, and any other as given", () => {
+    expect(declinedLine("draft an answer", null)).toBe("Claude declined to draft an answer.");
+    expect(declinedLine("draft an answer", "cyber")).toBe("Claude declined to draft an answer (cybersecurity).");
+    expect(declinedLine("respond to this", "bio")).toBe("Claude declined to respond to this (biosecurity).");
+    expect(declinedLine("respond to this", "weapons")).toBe("Claude declined to respond to this (weapons).");
   });
 });
 

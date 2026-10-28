@@ -78,6 +78,7 @@ from harmony.temporal.activities.network import (
     SettleSteerInput,
     StartRequestInput,
     SteerRecorded,
+    TakeBackInput,
     ThreadStateInput,
     UnsummarizedInput,
 )
@@ -97,9 +98,11 @@ from harmony.temporal.workflows.payloads import (
     ESCALATION_NOT_OPEN_ERROR,
     INVALID_RESOLUTION_ERROR,
     NOT_IN_ORG_ERROR,
+    NOTHING_TO_RETRY_ERROR,
     STEER_CONFLICT_ERROR,
     STEER_RUNNING_ERROR,
     THREAD_CLOSED_ERROR,
+    AnswerUsed,
     BudgetExhaustedDetails,
     CardResolved,
     ConversationCarry,
@@ -112,14 +115,18 @@ from harmony.temporal.workflows.payloads import (
     NetworkUpdate,
     Reassigned,
     Reassignment,
+    RefusedTurn,
     ReopenInput,
     RequestProgress,
+    RetryAnswer,
+    RetryTurn,
     SteerRequest,
     SteerStarted,
     ThreadCarry,
     ThreadChanged,
     ThreadInput,
     ThreadProgress,
+    TurnRetried,
     conversation_workflow_id,
     request_workflow_id,
     thread_workflow_id,
@@ -212,6 +219,8 @@ class Script:
         self.round_ends: list[RoundEnded] = []
         # Transient failures `start_network_request` raises before it succeeds.
         self.start_failures = 0
+        # What `take_back_turn` answers, one per call: taken once these run out.
+        self.take_backs: list[bool] = []
         # An activity named here waits for its event before it answers.
         self.gates: dict[str, asyncio.Event] = {}
         # Messages `internal_turn` signals to its own chat, by turn: before it returns,
@@ -326,6 +335,11 @@ class Script:
         if self.state_failures > 0:
             self.state_failures -= 1
             raise ApplicationError("the database is down")
+
+    @activity.defn(name="take_back_turn")
+    async def take_back_turn(self, take: TakeBackInput) -> bool:
+        self.calls.append(("take_back_turn", take))
+        return self.take_backs.pop(0) if self.take_backs else True
 
     @activity.defn(name="note_unsummarized")
     async def note_unsummarized(self, failed: UnsummarizedInput) -> None:
@@ -509,6 +523,7 @@ async def workers(env: WorkflowEnvironment) -> AsyncIterator[Script]:
         ],
         activities=[
             script.set_thread_state,
+            script.take_back_turn,
             script.note_unsummarized,
             script.notify_conversation,
             script.apply_resolution,
@@ -2083,6 +2098,71 @@ async def test_a_rewrite_stops_when_its_item_is_resolved(
         await replays(env, handle)
 
 
+async def test_a_retry_runs_the_declined_step_again_as_the_next_rev(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """Claude declined to draft an answer, so the item opened without one. Retry, by the
+    item's own org only, drafts rev 2 as a Retry with the member's text, and the item
+    then waits on that rev."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        consult_id, escalation_id = uuid4(), uuid4()
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = consulting(consult_id)
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 2)] = said("close")
+        script.consults = [
+            escalated(consult_id, escalation_id, None),
+            escalated(consult_id, escalation_id, 2),
+        ]
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: progress(handle),
+            lambda p: p.open_escalation_ids == [escalation_id],
+            "the escalation",
+        )
+
+        def retry(org_id: UUID) -> Awaitable[AnswerUsed]:
+            return handle.execute_update(
+                "retry_answer",
+                RetryAnswer(escalation_id=escalation_id, org_id=org_id, draft_text="Nov 12 works."),
+                result_type=AnswerUsed,
+            )
+
+        assert (await update_error(retry(HENDERSON))).type == NOT_IN_ORG_ERROR
+        assert (await retry(NORTHLAKE)).draft_rev == 2
+        # While rev 2 is drafting, a second Retry waits for it.
+        assert (await update_error(retry(NORTHLAKE))).type == INVALID_RESOLUTION_ERROR
+        await eventually(
+            lambda: script.recorded("answer_consult"), lambda calls: len(calls) == 2, "the retry"
+        )
+        retried: AnswerConsultInput = script.named("answer_consult")[1]
+        assert (retried.draft_rev, retried.retry, retried.draft_text, retried.reuse_from) == (
+            2,
+            True,
+            "Nov 12 works.",
+            None,
+        )
+
+        script.applied = ResolutionApplied(
+            resolved=EscalationResolved(escalation_id=escalation_id, action="approve"),
+            owed=OwedResult(tool_use_id="", content="Nov 12 works."),
+            side="responder",
+        )
+        await retried_update(
+            lambda: handle.execute_update(
+                "resolve_escalation",
+                resolution(escalation_id, "approve", RAJ, NORTHLAKE, draft_rev=2),
+                result_type=EscalationResolved,
+            )
+        )
+        assert (await handle.result()).state == "closed"
+        (applied,) = script.named("apply_resolution")
+        assert applied.resolution.draft_rev == 2
+        await stop(request)
+        await replays(env, handle)
+
+
 async def test_a_steer_cut_short_by_the_end_of_its_thread_settles_as_closed(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
@@ -2462,6 +2542,85 @@ async def test_a_card_pauses_the_turn_until_it_is_approved(
         )
         started: list[StartRequestInput] = script.named("start_network_request")
         assert [s.request_id for s in started] == [request_id]
+
+
+async def test_a_turn_refused_at_its_first_call_can_be_sent_again(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """Claude declined the member's message before writing anything: the chat says so,
+    with the category, and Retry takes the stored message back and sends it again as a
+    new turn, here as the member's rewording of it."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.internal = [
+            _turn("refusal", next_step=0, refusal_category="bio"),
+            _turn("end_turn"),
+        ]
+        handle, message = await start_chat(env)
+        held = await eventually(
+            lambda: pending(handle),
+            lambda p: p.refused is not None and not p.turn_in_flight,
+            "the refusal",
+        )
+        first: InternalTurnInput = script.named("internal_turn")[0]
+        assert held.refused == RefusedTurn(
+            turn_id=first.turn_id, messages=[message], category="bio", retryable=True
+        )
+        assert held.turn_failure == "refused"
+
+        retry = RetryTurn(member_id=ALEX, text="Find XRD time before Nov 6.", message_id=uuid4())
+        retried = await handle.execute_update("retry_turn", retry, result_type=TurnRetried)
+        assert retried.message_ids == [retry.message_id]
+        # The message is queued again, so there's nothing left to retry.
+        assert (await update_error(handle.execute_update("retry_turn", retry))).type == (
+            NOTHING_TO_RETRY_ERROR
+        )
+
+        assert (await handle.result()).turns == 2
+        (taken,) = script.named("take_back_turn")
+        assert taken.turn_id == first.turn_id
+        _, second = script.named("internal_turn")
+        assert second.turn_id != first.turn_id
+        assert [(m.message_id, m.text) for m in second.messages] == [
+            (retry.message_id, "Find XRD time before Nov 6.")
+        ]
+        await replays(env, handle)
+
+
+async def test_a_refusal_is_not_retried_after_its_first_call_or_once_its_input_is_answered(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """A turn refused after it ran tools can't be sent again as it was: its note stays,
+    without Retry. Nor can one whose stored input something answered since: the take
+    back fails, and Retry goes away."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.internal = [_turn("refusal", next_step=1), _turn("refusal", next_step=0)]
+        script.take_backs = [False]
+        late, _ = await start_chat(env)
+        held = await eventually(
+            lambda: pending(late), lambda p: p.refused is not None, "the late refusal"
+        )
+        assert held.refused is not None
+        assert not held.refused.retryable
+        retry = RetryTurn(member_id=ALEX, message_id=uuid4())
+        assert (await update_error(late.execute_update("retry_turn", retry))).type == (
+            NOTHING_TO_RETRY_ERROR
+        )
+
+        answered, _ = await start_chat(env)
+        await eventually(
+            lambda: pending(answered), lambda p: p.refused is not None, "the first-call refusal"
+        )
+        assert (await update_error(answered.execute_update("retry_turn", retry))).type == (
+            NOTHING_TO_RETRY_ERROR
+        )
+        refused = (await pending(answered)).refused
+        assert refused is not None
+        assert not refused.retryable
+        assert len(script.named("take_back_turn")) == 1
+        assert [(await late.result()).turns, (await answered.result()).turns] == [1, 1]
+        await replays(env, late, answered)
 
 
 async def test_a_message_while_a_card_is_pending_rejects_it(

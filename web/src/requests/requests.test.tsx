@@ -23,6 +23,7 @@ import {
   THREAD,
   VANTAGE_REPLY,
   checking,
+  declined,
   edited,
   ended,
   hendersonDraft,
@@ -155,6 +156,7 @@ const closedRow = async () => {
 };
 
 const resolveRoute = (escalationId: string) => `POST /api/escalations/${escalationId}/resolve`;
+const retryRoute = (escalationId: string) => `POST /api/escalations/${escalationId}/retry`;
 const notesRoute = (threadId: string) => `POST /api/threads/${threadId}/notes`;
 const steersRoute = (threadId: string) => `POST /api/threads/${threadId}/steers`;
 const reopenRoute = (threadId: string) => `POST /api/threads/${threadId}/reopen`;
@@ -611,6 +613,54 @@ describe("the decision card", () => {
         { route: resolveRoute(ESCALATION.henderson), body: { action: "approve", text: "Yes, Thursday.", draft_rev: 1 } },
       ]);
     });
+  });
+
+  it("says Claude declined to check the draft, in the reason's place, and Retry checks the member's edit", async () => {
+    const world = declined(requestsWorld(), THREAD.henderson, "sharing_check");
+    const { writes } = renderRequests(THREAD.henderson, { world });
+    const decision = await card();
+    expect(
+      within(decision).getByText("Claude declined to check this answer against what you share (biosecurity)."),
+    ).toBeTruthy();
+    expect(decision.textContent).not.toContain("The sharing check couldn't run");
+
+    fireEvent.change(draft(decision), { target: { value: "Yes, Wednesday." } });
+    fireEvent.click(button(decision, "Retry with your edits"));
+    await waitFor(() => {
+      expect(within(decision).queryByText(/^Claude declined/)).toBeNull();
+    });
+    expect(writes).toEqual([{ route: retryRoute(ESCALATION.henderson), body: { draft_text: "Yes, Wednesday." } }]);
+    // The checked rev is the draft now, with nothing to page back to.
+    expect(draft(decision).value).toBe("Yes, Wednesday.");
+  });
+
+  it("says Claude declined to draft an answer: the member may write one, or Retry for Claude's", async () => {
+    const world = declined(requestsWorld(), THREAD.henderson, "answer", null);
+    const { writes } = renderRequests(THREAD.henderson, { world });
+    const decision = await card();
+    expect(within(decision).getByText("Claude declined to draft an answer.")).toBeTruthy();
+    expect(within(decision).getByText("No draft yet. Write the answer yourself.")).toBeTruthy();
+
+    fireEvent.click(button(decision, "Retry"));
+    await waitFor(() => {
+      expect(draft(decision).value).toBe(HENDERSON_ANSWER);
+    });
+    expect(writes).toEqual([{ route: retryRoute(ESCALATION.henderson), body: { draft_text: null } }]);
+    expect(within(decision).queryByText(/^Claude declined/)).toBeNull();
+  });
+
+  it("holds Approve while the retried step runs", async () => {
+    const world = declined(requestsWorld(), THREAD.henderson, "sharing_check");
+    renderRequests(THREAD.henderson, {
+      world,
+      // The workflow reserves rev 2; nothing has landed yet.
+      overrides: { "POST /api/escalations/{escalation_id}/retry": () => ({ escalation_id: ESCALATION.henderson, draft_rev: 2 }) },
+    });
+    const decision = await card();
+    fireEvent.click(button(decision, "Retry"));
+    expect(await within(decision).findByText("Claude is trying again…")).toBeTruthy();
+    expect(button(foot(decision), "Approve and send").disabled).toBe(true);
+    expect(foot(decision).textContent).toContain("You can approve once the new draft is here");
   });
 
   it("approves on ⌘↵ only with focus in the card; Enter in the box never approves", async () => {
