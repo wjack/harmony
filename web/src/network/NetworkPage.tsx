@@ -36,14 +36,20 @@ function CenteredNote({ title, children }: { title: string; children?: ReactNode
   );
 }
 
+/** Room the canvas keeps clear at its top for the note below: its 20px offset plus a two-line card. */
+const NO_REQUEST_INSET = 84;
+
 /**
- * Shown above the canvas when no request is in focus. It takes its own row, so the
- * canvas frames the cards below it rather than under it.
+ * Shown when no request is in focus, floating over the top of the canvas so the grid
+ * runs under it. The canvas frames the cards below it (`NO_REQUEST_INSET`).
  */
 function NoRequestCard({ world, earlier }: { world: WorldLens; earlier: boolean }) {
   return (
-    <div className="flex shrink-0 justify-center px-6 pt-5" data-no-request>
-      <div className="flex max-w-[540px] items-center gap-3.5 rounded-[12px] border border-border bg-surface py-2.5 pr-2.5 pl-4 shadow-menu">
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-6 pt-5">
+      <div
+        className="pointer-events-auto flex max-w-[540px] items-center gap-3.5 rounded-[12px] border border-border bg-surface py-2.5 pr-2.5 pl-4 shadow-menu"
+        data-no-request
+      >
         <Spark size={20} className="shrink-0" />
         <p className="min-w-0 flex-1 text-[13px] leading-5 text-secondary">{noRequestText(world, earlier)}</p>
         {world === "desk" && (
@@ -158,9 +164,9 @@ export function NetworkScreen({
   let body: ReactNode;
   if (view !== undefined) {
     body = (
-      <div className="absolute inset-0 flex flex-col">
+      <div className="absolute inset-0">
         {view.request_id === null && <NoRequestCard world={world} earlier={view.requests.length > 0} />}
-        <div className="relative min-h-0 flex-1">
+        <div className="absolute inset-0">
           <NetworkCanvas
             key={`${world}:${view.request_id ?? "none"}`}
             view={view}
@@ -172,6 +178,7 @@ export function NetworkScreen({
             onSelectOrg={setSelected}
             now={now}
             budget={budget}
+            topInset={view.request_id === null ? NO_REQUEST_INSET : 0}
           />
         </div>
       </div>

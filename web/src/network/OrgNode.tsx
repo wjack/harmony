@@ -1,7 +1,7 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 
-import { OrgAvatar, Spark, cx } from "../shell/ui";
+import { OrgAvatar, cx } from "../shell/ui";
 import { kindLabel } from "./format";
 import { COMPACT_HEIGHT, COMPACT_WIDTH, NODE_HEIGHT, NODE_WIDTH, type PlacedOrg } from "./layout";
 import { StatusPill } from "./StatusPill";
@@ -46,15 +46,6 @@ function Handles() {
   );
 }
 
-function SuggestedTag() {
-  return (
-    <span className="absolute -top-2.5 left-3 inline-flex h-5 items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-accent-soft px-2 text-[11px] leading-none font-medium text-accent-strong">
-      <Spark size={11} />
-      Suggested
-    </span>
-  );
-}
-
 // Each box is two of its name's lines tall (18px, 16px).
 const TWO_LINES = {
   card: { box: "max-h-9", name: "text-ui-sm font-semibold", meta: "text-ui-xs" },
@@ -88,6 +79,7 @@ function FullCard({ data, selected }: { data: OrgNodeData; selected: boolean }) 
 
   return (
     <div
+      data-suggested={suggested || undefined}
       style={{ width: NODE_WIDTH, height: NODE_HEIGHT, ...(suggested ? SUGGESTED_RING : {}) }}
       className={cx(
         "relative flex flex-col justify-between rounded-[12px] border bg-surface px-3 pt-3 pb-2.5 text-left shadow-card transition-[box-shadow,border-color] duration-150",
@@ -96,7 +88,6 @@ function FullCard({ data, selected }: { data: OrgNodeData; selected: boolean }) 
         suggested && !selected && "border-accent",
       )}
     >
-      {suggested && <SuggestedTag />}
       <div className="flex min-w-0 items-center gap-2.5">
         <OrgAvatar name={node.org.name} seed={node.org.slug} size={28} />
         <TwoLines name={node.org.name} meta={`${kindLabel(node.kind)}${data.isHome ? " · You" : ""}`} size="card" />

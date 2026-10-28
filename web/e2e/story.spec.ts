@@ -232,12 +232,12 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect(page.getByRole("button", { name: /Northlake needs a human/ })).toBeVisible(TURNS);
   });
 
-  await test.step("the network view rings the suggested recipients and shows who waits on a person", async () => {
+  await test.step("the network view rings the suggested recipients, and keeps Northlake's escalation Northlake's", async () => {
     await openFromSidebar(page, "Network");
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) {
-      await expect(networkNode(page, org)).toContainText("Suggested");
+      await expect(networkNode(page, org).locator("[data-suggested]")).toHaveCount(1);
     }
-    await expect(networkNode(page, NORTHLAKE)).toContainText("Needs human", TURNS);
+    await expect(networkNode(page, NORTHLAKE)).not.toContainText("Needs human");
     await expect(networkNode(page, CALDER)).toContainText("Screened");
     expect(await nameFits(page, NORTHLAKE)).toBe(true);
     await expect(page.locator("[data-edge-label]").first()).toBeVisible();
@@ -327,11 +327,9 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
   await test.step("Northlake's representative saw the released answer, never Raj's note", async () => {
     await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
-    // Settled, it's one of her recent requests.
-    await sidebar(page)
-      .getByRole("region", { name: "Recent requests" })
-      .getByRole("link", { name: `${NORTHLAKE_TITLE}, with Henderson Lab` })
-      .click();
+    // Settled, it's on her Requests page.
+    await openFromSidebar(page, "Requests");
+    await page.getByRole("main").getByRole("link", { name: new RegExp(`^${NORTHLAKE_TITLE}`) }).first().click();
     const details = await openDetails(page);
     await details.getByRole("button", { name: /^What our representative saw/ }).click();
     const saw = page.getByRole("dialog", { name: "What our representative saw" });

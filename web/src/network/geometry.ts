@@ -26,16 +26,21 @@ const MAX_ZOOM = 1.1;
  */
 export const READABLE_ZOOM = 0.72;
 
-/** "Fit view": the whole graph, however small that makes it, never past 110%. */
-export const FIT_OPTIONS = {
-  padding: {
-    top: `${PADDING.top}px`,
-    right: `${PADDING.right}px`,
-    bottom: `${PADDING.bottom}px`,
-    left: `${PADDING.left}px`,
-  },
-  maxZoom: MAX_ZOOM,
-} as const;
+/**
+ * "Fit view": the whole graph, however small that makes it, never past 110%. `topInset`
+ * keeps clear of a note floating over the top of the canvas.
+ */
+export function fitOptions(topInset = 0) {
+  return {
+    padding: {
+      top: `${PADDING.top + topInset}px`,
+      right: `${PADDING.right}px`,
+      bottom: `${PADDING.bottom}px`,
+      left: `${PADDING.left}px`,
+    },
+    maxZoom: MAX_ZOOM,
+  } as const;
+}
 
 /** The smallest rect around all of `rects` (a point at the origin when there are none). */
 export function boundsOf(rects: readonly Rect[]): Rect {
@@ -53,9 +58,10 @@ export function boundsOf(rects: readonly Rect[]): Rect {
  * overflows pinned at its start (the requester's side and the top), so the canvas
  * opens on the request rather than on a thumbnail of the network.
  */
-export function readableFrame(bounds: Rect, width: number, height: number): Viewport {
+export function readableFrame(bounds: Rect, width: number, height: number, topInset = 0): Viewport {
+  const top = PADDING.top + topInset;
   const innerWidth = Math.max(1, width - PADDING.left - PADDING.right);
-  const innerHeight = Math.max(1, height - PADDING.top - PADDING.bottom);
+  const innerHeight = Math.max(1, height - top - PADDING.bottom);
   const fit = Math.min(innerWidth / Math.max(1, bounds.width), innerHeight / Math.max(1, bounds.height));
   const zoom = Math.min(MAX_ZOOM, Math.max(READABLE_ZOOM, fit));
   const place = (start: number, size: number, inner: number, padding: number) => {
@@ -65,7 +71,7 @@ export function readableFrame(bounds: Rect, width: number, height: number): View
   };
   return {
     x: place(bounds.x, bounds.width, innerWidth, PADDING.left),
-    y: place(bounds.y, bounds.height, innerHeight, PADDING.top),
+    y: place(bounds.y, bounds.height, innerHeight, top),
     zoom,
   };
 }

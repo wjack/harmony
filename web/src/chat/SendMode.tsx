@@ -1,4 +1,4 @@
-import { ShieldCheck, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 
 import { Menu, MenuCheckItem, MenuContent, MenuGroup, MenuLabel, MenuSeparator, MenuTrigger } from "../shell/ui/Menu";
 import type { SendMode } from "./types";
@@ -77,26 +77,23 @@ export function SendModeChip({ sendMode, onSendModeChange }: SendModeProps) {
  */
 export function SendModeLine({ sendMode, onSendModeChange }: SendModeProps) {
   return (
-    <p className="flex items-start gap-1.5 text-ui-sm text-muted">
-      <ShieldCheck size={15} strokeWidth={1.75} aria-hidden className="mt-px shrink-0" />
-      <span className="min-w-0">
-        This chat: {sendMode.effective ? "sends without review" : "review before sending"} ·{" "}
-        <Menu modal={false}>
-          <MenuTrigger
-            aria-label="Change how this chat sends requests"
-            className="rounded-[4px] whitespace-nowrap text-link outline-none hover:underline focus-visible:underline data-[state=open]:underline"
-          >
-            Change
-          </MenuTrigger>
-          <MenuContent align="start" className="w-[340px]">
-            <SendModeItems sendMode={sendMode} onSendModeChange={onSendModeChange} />
-            <MenuSeparator />
-            <p className="px-2 pt-0.5 pb-1 text-ui-xs text-muted">
-              Applies from Claude&apos;s next request; this one still waits for you.
-            </p>
-          </MenuContent>
-        </Menu>
-      </span>
+    <p className="text-ui-sm text-muted">
+      This chat: {sendMode.effective ? "sends without review" : "review before sending"} ·{" "}
+      <Menu modal={false}>
+        <MenuTrigger
+          aria-label="Change how this chat sends requests"
+          className="rounded-[4px] whitespace-nowrap text-link outline-none hover:underline focus-visible:underline data-[state=open]:underline"
+        >
+          Change
+        </MenuTrigger>
+        <MenuContent align="start" className="w-[340px]">
+          <SendModeItems sendMode={sendMode} onSendModeChange={onSendModeChange} />
+          <MenuSeparator />
+          <p className="px-2 pt-0.5 pb-1 text-ui-xs text-muted">
+            Applies from Claude&apos;s next request; this one still waits for you.
+          </p>
+        </MenuContent>
+      </Menu>
     </p>
   );
 }

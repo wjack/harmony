@@ -96,16 +96,18 @@ function approveHint(item: OutreachCardItem, draft: OutreachDraft, blocked: stri
   return `Starts a conversation with ${who}${hasEdits(item, draft) ? ", with your edits" : ""} · ⌘↵`;
 }
 
-/** The card's top line: what it is, then its state or what it needs, and the fold control. */
-function Eyebrow({ labelId, children, control }: { labelId: string; children?: ReactNode; control?: ReactNode }) {
+/**
+ * The card's top line: what it is on the left, in one tone; its state as a pill on the
+ * right, then the fold control.
+ */
+function Eyebrow({ labelId, state, control }: { labelId: string; state: ReactNode; control?: ReactNode }) {
   return (
-    <div className="flex min-h-7 items-center gap-1.5 text-ui-sm text-muted">
-      <Send size={15} strokeWidth={1.75} aria-hidden className="shrink-0" />
-      <span id={labelId} className="whitespace-nowrap text-secondary">
+    <div className="flex min-h-7 items-center gap-2 text-ui-sm text-secondary">
+      <Send size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      <span id={labelId} className="min-w-0 flex-1 truncate font-medium">
         Harmony Network Request
       </span>
-      {children}
-      <span className="flex-1" />
+      {state}
       {control}
     </div>
   );
@@ -357,9 +359,8 @@ export function OutreachCard({
                   <ChevronDown size={15} strokeWidth={1.75} aria-hidden />
                 </Button>
               }
-            >
-              <Pill tone="warning">Waiting for you</Pill>
-            </Eyebrow>
+              state={<Pill tone="warning">Waiting for you</Pill>}
+            />
           ) : (
             <Eyebrow
               labelId={labelId}
@@ -376,23 +377,20 @@ export function OutreachCard({
                   <ChevronUp size={16} strokeWidth={1.75} />
                 </IconButton>
               }
-            >
-              <span className="min-w-0 truncate">· Claude needs your OK before sending</span>
-            </Eyebrow>
+              state={<Pill tone="warning">Waiting for you</Pill>}
+            />
           )}
           <h2 id={titleId} className="mt-1 text-ui-title font-medium break-words text-ink">
             {title}
           </h2>
           {folded ? (
-            <p className="mt-1 text-ui-sm text-muted">
+            <p className="mt-0.5 text-ui-sm text-muted">
               {going.length === 0 ? "No organization ticked" : `To ${names(going)}`}
             </p>
           ) : (
             <>
-              <p className="mt-1 text-ui-sm text-muted">{routeLine(item, draft.chosen, proposed)}</p>
-              <div className="mt-1">
-                <SendModeLine sendMode={sendMode} onSendModeChange={onSendModeChange} />
-              </div>
+              <p className="mt-0.5 text-ui-sm text-muted">{routeLine(item, draft.chosen, proposed)}</p>
+              <SendModeLine sendMode={sendMode} onSendModeChange={onSendModeChange} />
 
               <div className="mt-3.5 border-t border-border pt-3.5">
                 <EditablePart
@@ -490,7 +488,7 @@ function OutreachBody({ item, sent }: { item: OutreachCardItem; sent: boolean })
   return (
     <div className="mt-3.5 border-t border-border pt-3.5">
       <PartLabel label="Brief" />
-      <p className="mt-1.5 font-serif text-ui-md break-words whitespace-pre-wrap text-ink">{item.brief}</p>
+      <p className="mt-1.5 text-ui leading-[22px] break-words whitespace-pre-wrap text-ink">{item.brief}</p>
       <ul className="mt-3.5 border-t border-border">
         {going.map((recipient) => (
           <li key={recipient.org.id} className="pt-3.5 [&+&]:mt-3.5 [&+&]:border-t [&+&]:border-dashed [&+&]:border-border">
@@ -508,7 +506,7 @@ function OutreachBody({ item, sent }: { item: OutreachCardItem; sent: boolean })
             {recipient.ask && (
               <div className="mt-3">
                 <PartLabel label="Ask" />
-                <p className="mt-1 font-serif text-ui-md break-words whitespace-pre-wrap text-ink">{recipient.ask}</p>
+                <p className="mt-1 text-ui leading-[22px] break-words whitespace-pre-wrap text-ink">{recipient.ask}</p>
               </div>
             )}
           </li>
@@ -588,13 +586,12 @@ export function OutreachRecord({
             )}
           </Button>
         }
-      >
-        {pill}
-      </Eyebrow>
+        state={pill}
+      />
       <h3 id={titleId} className="mt-1 text-ui-title font-medium break-words text-ink">
         {item.title ?? "Request to the network"}
       </h3>
-      <p className="mt-1 text-ui-sm break-words text-muted">{route}</p>
+      <p className="mt-0.5 text-ui-sm break-words text-muted">{route}</p>
       {open && (
         <>
           <OutreachBody item={item} sent={sent} />

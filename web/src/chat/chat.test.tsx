@@ -772,11 +772,11 @@ it("shows a closed thread's summary when nothing stopped it", async () => {
   expect(within(card).getByText(SUMMARIES.henderson.ridgeline)).toBeTruthy();
 });
 
-it("counts only the organizations the request went to", async () => {
+it("lists only the organizations the request went to", async () => {
   const card = await statusCard(requestAt(initialState("sent")));
-  expect(within(card).getByText("Sent to 2 · 1 not sent")).toBeTruthy();
-  const calder = within(card).getByText("Calder Computational").closest("li");
-  expect(calder === null ? null : within(calder).getByText("Not sent")).toBeTruthy();
+  expect(within(card).getByText("Sent to 2")).toBeTruthy();
+  expect(within(card).queryByText("Calder Computational")).toBeNull();
+  expect(within(card).queryByText("Not sent")).toBeNull();
   expect(within(card).queryByText("Screened")).toBeNull();
 });
 

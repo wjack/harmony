@@ -86,7 +86,7 @@ export function InlineQuestionCard({ item, us, busy, blocked, error, onAnswer }:
           <Pill tone="muted">No longer needed</Pill>
         )}
       </header>
-      <p className="px-4 pt-2.5 font-serif text-[16.5px] leading-[1.5] text-ink">{item.question}</p>
+      <p className="px-4 pt-2.5 text-ui-title text-ink">{item.question}</p>
       {open ? (
         <AnswerBox item={item} us={us} busy={busy} blocked={blocked} error={error} onAnswer={onAnswer} />
       ) : (
