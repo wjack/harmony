@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { PasscodeRequired } from "../api/client";
@@ -253,6 +253,31 @@ describe("session.member_changed", () => {
     expect(snapshot).toHaveBeenCalledTimes(2);
     expect(sources.latest.url).toBe("/api/events?after=25&epoch=2");
     expect(dispatcher.state).toMatchObject({ generation: 2, epoch: 2, lastSeq: 25 });
+  });
+
+  it("stops the old frame's queries, so nothing it still runs fetches as the new member", async () => {
+    const { dispatcher, queryClient, sources } = tab([snapshotAt(10, 1), snapshotAt(25, 2)]);
+    await dispatcher.start();
+    // The previous member's chat, on screen.
+    const fetchChat = vi.fn(() => Promise.resolve({ id: "chat_1" }));
+    const chat = { queryKey: ["conversation", "chat_1"], queryFn: fetchChat };
+    const observer = new QueryObserver(queryClient, chat);
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => {
+      expect(queryClient.getQueryData(chat.queryKey)).toEqual({ id: "chat_1" });
+    });
+
+    sources.latest.send(memberChanged(11, 2));
+    // While the snapshot is in flight, the frame still shows the chat...
+    expect(observer.getCurrentResult().data).toEqual({ id: "chat_1" });
+    await vi.waitFor(() => {
+      expect(dispatcher.state.generation).toBe(2);
+    });
+    // ...and an effect it left pending (useQuery's setOptions) runs once the cache is cleared.
+    observer.setOptions(chat);
+
+    expect(fetchChat).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 
   it("primes the cache from the snapshot before publishing the generation", async () => {
