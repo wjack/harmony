@@ -5,7 +5,7 @@ import { Link } from "react-router";
 import type { MemberView } from "../api/types";
 import type { BudgetState } from "../app/budget";
 import { firstName } from "../shell/names";
-import { Button, IconButton, OrgAvatar, cx } from "../shell/ui";
+import { Avatar, Button, IconButton, OrgAvatar, cx } from "../shell/ui";
 import { formatAgo, formatWait, kindLabel, plural, shortOrgName } from "./format";
 import { StatusPill } from "./StatusPill";
 import { TONE_STROKE, closingLine, edgeStyle, threadStatus } from "./status";
@@ -47,6 +47,10 @@ export interface OrgPanelProps {
   /** Act as `member`, then open `to` (desk world only). */
   onActAs?: (member: MemberView, to: string) => void;
   actingAs?: boolean;
+  /** The org's members, each with Act as: the demo's account switcher (desk world only). */
+  people?: readonly MemberView[];
+  /** Who the session acts as now. */
+  actorId?: string | null;
   onClose: () => void;
   now: number;
   /** The live-model budget's state now, which a stopped thread's line reads by. */
@@ -228,6 +232,8 @@ export function OrgPanel({
   action,
   onActAs,
   actingAs = false,
+  people = [],
+  actorId = null,
   onClose,
   now,
   budget,
@@ -272,6 +278,40 @@ export function OrgPanel({
             {node.featured && <Property label="Directory">Featured organization</Property>}
           </dl>
         </Section>
+
+        {onActAs !== undefined && people.length > 0 && (
+          <Section title="People" aside={String(people.length)}>
+            <ul>
+              {people.map((member) => (
+                <li
+                  key={member.id}
+                  className="flex min-h-12 items-center gap-2.5 px-3.5 py-2 [&+&]:border-t [&+&]:border-border"
+                >
+                  <Avatar name={member.name} seed={member.org.slug} size={24} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] leading-5 text-ink">{member.name}</span>
+                    {member.title !== null && (
+                      <span className="block truncate text-xs leading-4 text-muted">{member.title}</span>
+                    )}
+                  </span>
+                  {member.id === actorId ? (
+                    <span className="shrink-0 text-xs text-muted">Acting as</span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      disabled={actingAs}
+                      onClick={() => {
+                        onActAs(member, "/");
+                      }}
+                    >
+                      Act as
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
 
         <Section title="Threads" aside={threads.length > 0 ? String(threads.length) : undefined}>
           {threads.length === 0 ? (

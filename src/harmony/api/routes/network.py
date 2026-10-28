@@ -3,21 +3,20 @@
 - GET /api/network?request=<id>: orgs as nodes and threads as edges
 
 Read in whichever world `current_actor` resolves (`?world=desk|network`). Without
-`request`, the most recent request the acting member can see that is still live or was
-sent from a chat is focused: a world's seeded history is there to pick, not to open on.
-Nodes are the world's orgs (bystanders included, for the "whole network" look); edges
-are the focused request's threads, with each recipient's participant status.
+`request`, the world's most recent request sent from a chat is focused: a world's seeded
+requests, live or not, are there to pick, not to open on. Nodes are the
+world's orgs (bystanders included, for the "whole network" look); edges are the focused
+request's threads, with each recipient's participant status.
 
-The firewall holds here too (§11.3). The lens and the requester's own members see every
-recipient, with the screener's `fit` and, on a request sent from a chat, the story's
-`suggested` marks (seeded requests had no card to suggest anyone on). A recipient's
-members see only the requester, their own org and their own thread: who else the
-requester contacted, how it rated them and how those threads stand are the requester's
-business (§11.6). Only threads the acting member can see are detailed (latest line,
-turn count, and the acting member's own org's close summary, which never shows to the
-other side: REVISION_UNSTRUCTURED.md §5); others appear as bare edges (state only). Carries
-`X-Harmony-Cursor`; `thread` and `network_request` snapshots keep it live,
-`stream.typing` animates edges.
+The network view is a demo tool, opened from the demo bar, not part of the product: it
+watches the whole world from outside, so it sees every request, every recipient with
+the screener's `fit`, every side's escalations (`needs_human`, `waiting_on`) and every
+thread's latest line. Any visitor can already act as anyone, so this exposes nothing
+new; the product's own views (chats, Requests, the status card) keep the firewall. On a
+request sent from a chat it carries the story's `suggested` marks (seeded requests had
+no card to suggest anyone on). An edge's close summary is the acting org's own where it
+is a party, else the requester's. Carries `X-Harmony-Cursor`; the demo lens stream
+(`GET /api/events?lens=network`) keeps it live.
 
 Owner: E4 (U4 builds the view).
 """
@@ -31,18 +30,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harmony.agents.models import ParticipantStatus, RequestStatus
 from harmony.api.deps import SessionmakerDep, read_cursor, set_cursor, snapshot_session
 from harmony.api.routes.demo import scenario_story
 from harmony.api.routes.problems import not_found, problems
-from harmony.auth import access
 from harmony.auth.session import Actor, ActorDep
 from harmony.auth.views import OrgRef, org_ref
 from harmony.db import repo
-from harmony.db.models import Conversation, NetworkRequest, Org, RepSession, Thread, World
+from harmony.db.models import NetworkRequest, Org, RepSession, Thread, World
 from harmony.db.models.choices import EndReason, FailureReason, Fit, Side, ThreadState
 from harmony.domain import requests, threads
 from harmony.domain.requests import RecipientStatus, WaitingOn
@@ -79,8 +76,7 @@ class NetworkNode(_View):
     # For recipients of the focused request.
     participant: ParticipantStatus | None
     fit: Fit | None
-    # The recipient's thread waits on a human (shown only to the member's own org, on a
-    # thread they can open, or to everyone on the network lens).
+    # Who the recipient's thread waits on, on either side.
     waiting_on: WaitingOn | None
     # One of the story's suggested recipients, on a request sent from a chat.
     suggested: bool
@@ -95,12 +91,11 @@ class NetworkEdge(_View):
     stop_reason: FailureReason | None = None
     # How the current run ended: status, like `state`.
     end_reason: EndReason | None
-    # Which side closed it (or refused), only for the thread's parties.
+    # Which side closed it (or refused).
     closed_by: Side | None
-    # Detailed only when the acting member can see the thread.
     latest_line: str | None
     turn_count: int | None
-    # The acting member's own org's close summary for this thread, once written.
+    # The acting org's own close summary where it is a party, else the requester's.
     close_summary: str | None
     last_activity_at: datetime
 
@@ -147,38 +142,29 @@ async def _network(db: AsyncSession, actor: Actor, request_id: UUID | None) -> N
         await db.scalars(repo.in_world(Org, actor.world_id).order_by(Org.created_at, Org.slug))
     )
     refs = {org.id: org_ref(org) for org in orgs}
-    listed = await _visible_requests(db, actor)
+    listed = await _requests(db, actor)
     focused = _focus(listed, request_id)
     recipients: dict[UUID, RecipientStatus] = {}
     edges: list[NetworkEdge] = []
-    full = focused is not None and _sees_all_recipients(actor, focused)
     if focused is not None:
-        view = await requests.status(
-            db, focused, waiting_of="any" if actor.lens == "network" else actor.org_id
-        )
-        shown = await _shown_threads(db, actor, focused, full=full)
-        seen = await _seen(db, actor, shown)
-        view = requests.scoped(view, None if actor.lens == "network" else seen)
-        rows = [row for row in view.recipients if full or row.org.id == actor.org_id]
-        recipients = {row.org.id: row for row in rows}
-        edges = await _edges(db, actor, shown, seen, rows)
+        view = await requests.status(db, focused, waiting_of="any")
+        recipients = {row.org.id: row for row in view.recipients}
+        edges = await _edges(db, actor, await requests.threads_of(db, focused), view.recipients)
     story = scenario_story(world.scenario)
     suggested: set[str] = (
         set(story.suggested_recipients)
-        if story is not None and full and focused is not None and _from_chat(focused)
+        if story is not None and focused is not None and _from_chat(focused)
         else set()
     )
     nodes = [
-        _node(org, focused, recipients.get(org.id), suggested=org.slug in suggested, full=full)
-        for org in orgs
+        _node(org, focused, recipients.get(org.id), suggested=org.slug in suggested) for org in orgs
     ]
-    titles = await _titles(db, actor, listed, refs)
     return NetworkView(
         world_id=actor.world_id,
         requests=[
             NetworkRequestRef(
                 id=row.id,
-                title=titles[row.id],
+                title=threads.requester_title(row),
                 requester=refs[row.requester_org_id],
                 status=requests.request_status(row.status),
                 created_at=row.created_at,
@@ -198,66 +184,15 @@ async def _network(db: AsyncSession, actor: Actor, request_id: UUID | None) -> N
     )
 
 
-async def _visible_requests(db: AsyncSession, actor: Actor) -> list[NetworkRequest]:
-    """Most recent first. The network lens sees every request; the desk sees requests
-    with a thread the member can see, and their own chats' requests."""
-    query = repo.in_world(NetworkRequest, actor.world_id)
-    if actor.lens != "network":
-        with_thread = access.visible_threads(actor).with_only_columns(Thread.request_id)
-        own_chats = select(Conversation.id).where(
-            Conversation.world_id == actor.world_id,
-            Conversation.owner_member_id == actor.member_id,
-        )
-        query = query.where(
-            NetworkRequest.id.in_(with_thread) | NetworkRequest.conversation_id.in_(own_chats)
-        )
+async def _requests(db: AsyncSession, actor: Actor) -> list[NetworkRequest]:
+    """Every request in the world, most recent first."""
     return list(
         await db.scalars(
-            query.order_by(NetworkRequest.created_at.desc(), NetworkRequest.id).limit(
-                REQUESTS_LIMIT
-            )
+            repo.in_world(NetworkRequest, actor.world_id)
+            .order_by(NetworkRequest.created_at.desc(), NetworkRequest.id)
+            .limit(REQUESTS_LIMIT)
         )
     )
-
-
-async def _titles(
-    db: AsyncSession,
-    actor: Actor,
-    listed: Sequence[NetworkRequest],
-    refs: Mapping[UUID, OrgRef],
-) -> dict[UUID, str]:
-    """Each listed request's title as the acting member's side names it: the
-    requester's own, and a recipient's own thread's, which never shows the request's
-    title. The lens shows both sides of every thread, so it reads the request's."""
-    if actor.lens == "network":
-        return {row.id: threads.requester_title(row) for row in listed}
-    received = [row.id for row in listed if row.requester_org_id != actor.org_id]
-    own = {
-        thread.request_id: thread
-        for thread in await db.scalars(
-            repo.in_world(Thread, actor.world_id).where(
-                Thread.request_id.in_(received), Thread.responder_org_id == actor.org_id
-            )
-        )
-    }
-    openings = await threads.opening_lines(db, actor.world_id, [t.id for t in own.values()])
-    titles: dict[UUID, str] = {}
-    for row in listed:
-        requester = refs[row.requester_org_id].name if row.requester_org_id in refs else ""
-        thread = own.get(row.id)
-        if row.requester_org_id == actor.org_id:
-            titles[row.id] = threads.requester_title(row)
-        elif thread is not None:
-            titles[row.id] = threads.thread_title(
-                thread, row, actor.org_id, requester=requester, opening=openings.get(thread.id)
-            )
-        else:
-            titles[row.id] = threads.responder_title(requester=requester, opening=None)
-    return titles
-
-
-def _sees_all_recipients(actor: Actor, request: NetworkRequest) -> bool:
-    return actor.lens == "network" or actor.org_id == request.requester_org_id
 
 
 def _from_chat(request: NetworkRequest) -> bool:
@@ -267,10 +202,7 @@ def _from_chat(request: NetworkRequest) -> bool:
 
 def _focus(listed: Sequence[NetworkRequest], request_id: UUID | None) -> NetworkRequest | None:
     if request_id is None:
-        return next(
-            (row for row in listed if row.status == "active" or _from_chat(row)),
-            None,
-        )
+        return next((row for row in listed if _from_chat(row)), None)
     found = next((row for row in listed if row.id == request_id), None)
     if found is None:
         raise not_found("request")
@@ -283,7 +215,6 @@ def _node(
     recipient: RecipientStatus | None,
     *,
     suggested: bool,
-    full: bool,
 ) -> NetworkNode:
     role: NodeRole = "bystander"
     if focused is not None and org.id == focused.requester_org_id:
@@ -296,35 +227,9 @@ def _node(
         featured=org.featured,
         role=role,
         participant=recipient.participant if recipient is not None else None,
-        # The requester's screener verdict is the requester's.
-        fit=recipient.fit if recipient is not None and full else None,
+        fit=recipient.fit if recipient is not None else None,
         waiting_on=recipient.waiting_on if recipient is not None else None,
         suggested=suggested,
-    )
-
-
-async def _shown_threads(
-    db: AsyncSession, actor: Actor, focused: NetworkRequest, *, full: bool
-) -> list[Thread]:
-    """The focused request's threads; without `full`, only the acting member's org's
-    own threads."""
-    rows = await requests.threads_of(db, focused)
-    if full:
-        return rows
-    return [row for row in rows if actor.org_id in threads.parties(row)]
-
-
-async def _seen(db: AsyncSession, actor: Actor, rows: Sequence[Thread]) -> set[UUID]:
-    """The threads whose contents the acting member may see: on the desk, those they
-    can open (routed or shared); on the network lens, every one."""
-    if actor.lens == "network":
-        return {row.id for row in rows}
-    return set(
-        await db.scalars(
-            access.visible_threads(actor)
-            .where(Thread.id.in_([row.id for row in rows]))
-            .with_only_columns(Thread.id)
-        )
     )
 
 
@@ -332,22 +237,16 @@ async def _edges(
     db: AsyncSession,
     actor: Actor,
     rows: Sequence[Thread],
-    seen: set[UUID],
     recipients: Sequence[RecipientStatus],
 ) -> list[NetworkEdge]:
     lines = {row.thread_id: row.latest_line for row in recipients if row.thread_id is not None}
-    summaries = await _own_summaries(db, actor, rows)
-    return [
-        _edge(
-            row,
-            row.id in seen,
-            lines,
-            summaries,
-            party=actor.org_id in threads.parties(row),
-            viewer=None if actor.lens == "network" else actor.org_id,
-        )
-        for row in rows
-    ]
+    summaries = {
+        row.thread_id: row.close_summary
+        for row in recipients
+        if row.thread_id is not None and row.close_summary is not None
+    }
+    summaries |= await _own_summaries(db, actor, rows)
+    return [_edge(row, lines, summaries) for row in rows]
 
 
 async def _own_summaries(db: AsyncSession, actor: Actor, rows: Sequence[Thread]) -> dict[UUID, str]:
@@ -370,24 +269,18 @@ async def _own_summaries(db: AsyncSession, actor: Actor, rows: Sequence[Thread])
 
 
 def _edge(
-    thread: Thread,
-    detailed: bool,
-    lines: Mapping[UUID, str | None],
-    summaries: Mapping[UUID, str],
-    *,
-    party: bool,
-    viewer: UUID | None,
+    thread: Thread, lines: Mapping[UUID, str | None], summaries: Mapping[UUID, str]
 ) -> NetworkEdge:
     return NetworkEdge(
         thread_id=thread.id,
         from_org_id=thread.requester_org_id,
         to_org_id=thread.responder_org_id,
-        state=threads.state_for(thread, viewer),
+        state=thread.state,
         stop_reason=thread.stop_reason,
         end_reason=thread.end_reason,
-        closed_by=thread.closed_by if party else None,
-        latest_line=lines.get(thread.id) if detailed else None,
-        turn_count=thread.turn_count if detailed else None,
-        close_summary=summaries.get(thread.id) if detailed else None,
+        closed_by=thread.closed_by,
+        latest_line=lines.get(thread.id),
+        turn_count=thread.turn_count,
+        close_summary=summaries.get(thread.id),
         last_activity_at=thread.last_activity_at,
     )

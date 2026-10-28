@@ -75,23 +75,18 @@ describe("useNetworkLive", () => {
     expect(lens.opened.slice(0, -1).every((source) => source.closed)).toBe(true);
   });
 
-  it("follows the desk on the tab's own stream, then opens the lens for the big run from its cursor", async () => {
+  it("watches the desk world through the demo lens too, never the tab's own stream", async () => {
     const { hook, lens, tab, dispatcher } = setup({ world: "desk", worldId: "desk-1", cursor: 500, epoch: 1 });
     await act(() => dispatcher.start());
+    expect(lens.opened.map((source) => source.url)).toEqual([lensStreamUrl("desk", 500, 1)]);
     act(() => {
+      lens.latest.accept();
+      lens.latest.send(envelope(510, typing("other-side")));
       tab.latest.accept();
-      tab.latest.send(envelope(11, typing("desk-thread")));
+      tab.latest.send(envelope(11, typing("tab-thread")));
     });
-    expect(lens.opened).toHaveLength(0);
-    expect(hook.result.current.inFlight.has("desk-thread")).toBe(true);
-
-    hook.rerender({ world: "network", worldId: "net-a", cursor: 120, epoch: 1 });
-    expect(lens.opened.map((source) => source.url)).toEqual([lensStreamUrl("network", 120, 1)]);
-    // The desk's stream no longer drives the canvas.
-    act(() => {
-      tab.latest.send(envelope(12, typing("after-switch")));
-    });
-    expect(hook.result.current.inFlight.has("after-switch")).toBe(false);
+    expect(hook.result.current.inFlight.has("other-side")).toBe(true);
+    expect(hook.result.current.inFlight.has("tab-thread")).toBe(false);
     dispatcher.stop();
   });
 

@@ -645,8 +645,8 @@ async def test_each_viewer_receives_only_their_scopes(
         "dana": ["world", "end"],
         # The lens (opened from Alex's session) sees both sides, but no other session's events.
         "lens": [label(e) for e in _envelopes(events) if label(e) != "session:raj"],
-        # Asked for in a desk world, it is Alex's own stream.
-        "desk lens": ["world", "org:henderson", "thread:henderson", "session:alex", "end"],
+        # The network view is the demo's in a desk world too: the same lens.
+        "desk lens": [label(e) for e in _envelopes(events) if label(e) != "session:raj"],
     }
     lenses = {"lens": ("alex@network", LENS), "desk lens": ("alex", LENS)}
     async with AsyncExitStack() as stack:

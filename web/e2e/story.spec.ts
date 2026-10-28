@@ -47,6 +47,11 @@ async function openFromSidebar(page: Page, name: string): Promise<void> {
     .click();
 }
 
+/** The network view is the demo's, opened from the demo bar. */
+async function openNetworkView(page: Page): Promise<void> {
+  await page.getByRole("banner", { name: "Demo controls" }).getByRole("button", { name: "Network" }).click();
+}
+
 /** Opens a chat from the sidebar's Recents, below the requests that share its scroll area. */
 async function openChat(page: Page, title: string): Promise<void> {
   await sidebar(page)
@@ -232,12 +237,12 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect(page.getByRole("button", { name: /Northlake needs a human/ })).toBeVisible(TURNS);
   });
 
-  await test.step("the network view rings the suggested recipients, and keeps Northlake's escalation Northlake's", async () => {
-    await openFromSidebar(page, "Network");
+  await test.step("the network view rings the suggested recipients and shows who waits on a person, on either side", async () => {
+    await openNetworkView(page);
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) {
       await expect(networkNode(page, org).locator("[data-suggested]")).toHaveCount(1);
     }
-    await expect(networkNode(page, NORTHLAKE)).not.toContainText("Needs human");
+    await expect(networkNode(page, NORTHLAKE)).toContainText("Needs human", TURNS);
     await expect(networkNode(page, CALDER)).toContainText("Screened");
     expect(await nameFits(page, NORTHLAKE)).toBe(true);
     await expect(page.locator("[data-edge-label]").first()).toBeVisible();
@@ -298,7 +303,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
   });
 
   await test.step("the network view shows both conversations Closed and Calder Screened, at a readable size", async () => {
-    await openFromSidebar(page, "Network");
+    await openNetworkView(page);
     await expect(networkNode(page, NORTHLAKE)).toContainText("Closed");
     await expect(networkNode(page, RIDGELINE)).toContainText("Closed");
     await expect(networkNode(page, CALDER)).toContainText("Screened");

@@ -247,12 +247,9 @@ async def test_a_responder_names_the_request_by_what_crossed_never_the_brief(
         await v.act_as("helen")
         inbox = await v.json("GET", "/inbox")
         listed = await v.json("GET", "/threads")
-        network = await v.json("GET", "/network", params={"request": str(outreach.request_id)})
         assert [item["title"] for item in inbox["needs_you"]] == [opening]
         assert {row["title"] for row in listed if row["id"] == str(thread_id)} == {opening}
-        titles = {row["id"]: row["title"] for row in network["requests"]}
-        assert titles[str(outreach.request_id)] == opening
-        for body in (inbox, listed, network):
+        for body in (inbox, listed):
             assert "$2,000" not in str(body)
 
         await v.act_as("alex")
@@ -459,8 +456,6 @@ async def test_drafts_and_close_summaries_stay_with_their_side_after_the_thread_
         # A member who can't see the thread doesn't get the request at all.
         await demote_to_member(db_sessionmaker, outreach.world_id, "raj")
         await v.act_as("raj")
-        params = {"request": str(outreach.request_id)}
-        await v.request("GET", "/network", params=params, expect=404)
         await v.request("GET", f"/requests/{outreach.request_id}", expect=404)
 
         await v.act_as("helen")
@@ -1187,8 +1182,8 @@ async def test_the_network_view_focuses_the_latest_request(
             "recipient",
             "needs_human",
         )
-        # Who Northlake waits on is Northlake's to know.
-        assert nodes["northlake"]["waiting_on"] is None
+        # The network view is the demo's: it watches both sides, so Northlake's wait shows.
+        assert nodes["northlake"]["waiting_on"]["member"]["slug"] == "helen"
         assert (nodes["calder"]["participant"], nodes["calder"]["fit"]) == ("screened", "strong")
         assert nodes["ridgeline"]["role"] == "bystander"
         assert {slug for slug, node in nodes.items() if node["suggested"]} == {
@@ -1220,9 +1215,8 @@ async def test_the_network_view_opens_on_no_finished_seeded_request(
         world_id = await _world(v)
         await v.act_as("alex")
         network = await v.json("GET", "/network")
-        # Alex's seeded September request is listed to pick, but nothing opens on it.
+        # The world's seeded requests are listed to pick, but nothing opens on them.
         assert network["requests"]
-        assert all(request["status"] == "closed" for request in network["requests"])
         assert network["request_id"] is None
         assert network["edges"] == []
 
@@ -1239,33 +1233,23 @@ async def test_the_network_view_opens_on_no_finished_seeded_request(
         assert any(node["suggested"] for node in network["nodes"])
 
 
-async def test_a_recipient_sees_only_its_own_part_of_the_request(
+async def test_the_network_view_watches_every_side_whoever_acts(
     app: FastAPI, db_sessionmaker: Sessionmaker
 ) -> None:
     async with visitor(app) as v:
         outreach, thread_id, _ = await _story(v, db_sessionmaker)
-        await open_thread(db_sessionmaker, outreach, CALDER)
+        calder = await open_thread(db_sessionmaker, outreach, CALDER)
 
-        await v.act_as("helen")
-        network = await v.json("GET", "/network")
-        assert network["request_id"] == str(outreach.request_id)
-        shown = {
-            node["org"]["slug"]: (node["role"], node["fit"], node["participant"], node["suggested"])
-            for node in network["nodes"]
-            if node["role"] != "bystander" or node["suggested"]
-        }
-        # Not that Henderson also asked Calder, how it rated anyone, or the story's picks.
-        assert shown == {
-            "henderson": ("requester", None, None, False),
-            "northlake": ("recipient", None, "needs_human", False),
-        }
-        assert [edge["thread_id"] for edge in network["edges"]] == [str(thread_id)]
-        assert network["counts"]["threads"] == 1
-
-        # The requester's members (and the lens) still see every recipient.
-        await v.act_as("alex")
-        network = await v.json("GET", "/network")
-        assert len(network["edges"]) == 2
+        # A recipient's member sees the whole request, as the requester's do: the view is
+        # the demo's, opened from the demo bar, not part of the product.
+        for member in ("helen", "alex"):
+            await v.act_as(member)
+            network = await v.json("GET", "/network")
+            assert network["request_id"] == str(outreach.request_id)
+            nodes = {node["org"]["slug"]: node for node in network["nodes"]}
+            assert (nodes["calder"]["role"], nodes["calder"]["fit"]) == ("recipient", "strong")
+            assert nodes["northlake"]["participant"] == "needs_human"
+            assert {edge["thread_id"] for edge in network["edges"]} == {str(thread_id), str(calder)}
 
 
 async def test_a_request_shows_what_a_thread_says_only_to_those_who_can_open_it(
@@ -1324,12 +1308,9 @@ async def test_a_request_shows_what_a_thread_says_only_to_those_who_can_open_it(
             None,
             None,
         )
-        # The network view tells him no more about Calder's thread than the request does.
+        # The network view is the demo's, so it shows who Calder's thread waits on to anyone.
         network = await v.json("GET", "/network", params={"request": str(outreach.request_id)})
-        assert waits(network)["calder"] is None
-        assert {node["org"]["slug"]: node["participant"] for node in network["nodes"]}[
-            "calder"
-        ] == "needs_human"
+        assert waits(network)["calder"]["member"]["slug"] == "maya"
 
         await v.act_as("maya")
         network = await v.json("GET", "/network", params={"request": str(outreach.request_id)})
@@ -1815,7 +1796,6 @@ async def test_a_responder_never_sees_the_requests_own_title(
         bodies = [
             inbox,
             await v.json("GET", "/threads"),
-            await v.json("GET", "/network", params={"request": str(outreach.request_id)}),
             await v.json("GET", f"/threads/{untitled}/workspace"),
         ]
         for body in bodies:

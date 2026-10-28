@@ -367,6 +367,14 @@ it("keeps the full sidebar from a 900px window", async () => {
   dispatcher.stop();
 });
 
+it("opens the network view from the demo bar, not the sidebar", async () => {
+  const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
+  expect(screen.queryByRole("link", { name: "Network" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Network" }));
+  expect(await screen.findByText("Network at /network")).toBeTruthy();
+  dispatcher.stop();
+});
+
 it("below 900px, shows the rail and opens the sidebar over the page until a link or Escape closes it", async () => {
   windowWidth(899);
   const { dispatcher } = await renderLive(sessionAs(members.alex, 1));
@@ -377,8 +385,8 @@ it("below 900px, shows the rail and opens the sidebar over the page until a link
 
   fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
   expect(await screen.findByText(RECENT)).toBeTruthy();
-  fireEvent.click(screen.getByRole("link", { name: "Network" }));
-  expect(await screen.findByText("Network at /network")).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: /^Requests/ }));
+  expect(await screen.findByText("Requests at /requests")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Open sidebar" })).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));

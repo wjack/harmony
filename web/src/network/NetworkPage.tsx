@@ -257,6 +257,10 @@ export function NetworkScreen({
             action={selectedAction}
             onActAs={actAs}
             actingAs={switching}
+            people={
+              world === "desk" ? (members.data ?? []).filter((member) => member.org.id === selectedNode.org.id) : []
+            }
+            actorId={actor?.id ?? null}
             onClose={() => {
               setSelected(null);
             }}

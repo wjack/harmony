@@ -1,5 +1,16 @@
-import { ArrowRight, CalendarDays, CircleSlash, RotateCcw, SlidersHorizontal, Wallet, WifiOff, X } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarDays,
+  CircleSlash,
+  RotateCcw,
+  SlidersHorizontal,
+  Wallet,
+  Waypoints,
+  WifiOff,
+  X,
+} from "lucide-react";
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router";
 
 import type { MemberView, SessionView } from "../api/types";
 import { useBudget } from "../app/budget";
@@ -25,7 +36,8 @@ interface DemoBarProps {
 /**
  * The slim bar above the cloned app (ARCHITECTURE.md §11.4). It is styled unlike the
  * product on purpose, so demo controls are never mistaken for Claude: who you're acting
- * as, the world date, budget, cross-account alerts and Reset.
+ * as, the network view (which watches every side, so it is the demo's, not the
+ * product's), the world date, budget, cross-account alerts and Reset.
  *
  * The budget and Reset are pinned right and never leave it. Who and when take the room
  * the alerts leave, measured on their own group: short of it, their labels drop first
@@ -35,6 +47,7 @@ interface DemoBarProps {
 export function DemoBar({ session, offline = false, reconnecting = false }: DemoBarProps) {
   const worldDate = useWorldDate(session?.world);
   const alerts = useNeedsHumanAlerts();
+  const navigate = useNavigate();
 
   return (
     <header
@@ -56,6 +69,16 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
           }}
           icon={<SlidersHorizontal size={13} strokeWidth={1.75} />}
         />
+        {session !== null && (
+          <BarButton
+            label="Network"
+            labelClassName="@max-[504px]/who:hidden"
+            onClick={() => {
+              void navigate("/network");
+            }}
+            icon={<Waypoints size={13} strokeWidth={1.75} />}
+          />
+        )}
 
         <Divider />
 

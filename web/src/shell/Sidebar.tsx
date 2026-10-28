@@ -8,7 +8,6 @@ import {
   Plus,
   Search,
   Shapes,
-  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import { useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
@@ -131,7 +130,6 @@ export function Sidebar({ member, collapsed: pinned, defaultMenuOpen = false, of
               Icon={Inbox}
               badge={live ? <RequestsBadge collapsed={collapsed} /> : null}
             />
-            <NavRow to="/network" label="Network" collapsed={collapsed} Icon={Waypoints} />
             <ActionRow label="Projects" collapsed={collapsed} Icon={FolderClosed} onClick={() => { unavailable("Projects"); }} />
             <ActionRow label="Artifacts" collapsed={collapsed} Icon={Shapes} onClick={() => { unavailable("Artifacts"); }} />
             <ActionRow label="Code" collapsed={collapsed} Icon={CodeXml} onClick={() => { unavailable("Claude Code"); }} />
