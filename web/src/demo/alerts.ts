@@ -56,18 +56,9 @@ export function addNeedsHumanAlert(cue: DemoNeedsHuman, now: number = Date.now()
   return alert;
 }
 
-/** Take down an escalation's chip, if it has one; returns it. */
-export function withdrawNeedsHumanAlert(escalationId: string): NeedsHumanAlert | null {
-  const withdrawn = alertStore.getState().alerts.find((alert) => alert.escalationId === escalationId) ?? null;
-  if (withdrawn !== null) {
-    alertStore.setState((state) => ({ alerts: state.alerts.filter((alert) => alert !== withdrawn) }));
-  }
-  return withdrawn;
-}
-
-/** Whether `alert` is still up: not cleared by a switch, nor replaced or withdrawn. */
-export function isAlertUp(alert: NeedsHumanAlert): boolean {
-  return alertStore.getState().alerts.includes(alert);
+/** Take down an escalation's chip, if it has one. */
+export function withdrawNeedsHumanAlert(escalationId: string): void {
+  alertStore.setState((state) => ({ alerts: state.alerts.filter((alert) => alert.escalationId !== escalationId) }));
 }
 
 /**

@@ -41,7 +41,7 @@ it("locks on the gate's 401 to a mutation: off to the passcode page, with nothin
     sources.latest.send(needsHuman(8, members.helen.slug, ESCALATION));
   });
   await waitFor(() => {
-    expect(toastStore.getState().toasts).toHaveLength(1);
+    expect(alertStore.getState().alerts).toHaveLength(1);
   });
   const unreachable = watchFor("Can't reach Harmony");
 

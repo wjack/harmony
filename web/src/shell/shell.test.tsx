@@ -144,11 +144,9 @@ it("turns a needs-human cue for another account into a chip that opens the item 
     sources.latest.send(needsHuman(8, members.helen.slug, ESCALATION(1)));
   });
 
-  // A demo-bar chip at once, and a toast naming the assignee once the directory loads.
+  // A demo-bar chip at once, and no toast.
   const chip = screen.getByRole("button", { name: /Northlake needs a human.*Switch to Helen/ });
-  const toastRegion = screen.getByRole("status");
-  expect(await within(toastRegion).findByText(/Northlake needs a human\./)).toBeTruthy();
-  expect(within(toastRegion).getByRole("button", { name: "Switch to Helen" })).toBeTruthy();
+  expect(within(screen.getByRole("status")).queryByText(/needs a human/)).toBeNull();
 
   fireEvent.click(chip);
 
@@ -242,7 +240,6 @@ it("treats a cue for the same member slug at another org as someone else's", asy
   });
 
   expect(screen.getByRole("button", { name: /Cascade needs a human.*Switch to helen/ })).toBeTruthy();
-  expect(await within(screen.getByRole("status")).findByText(/Cascade needs a human\./)).toBeTruthy();
   expect(screen.queryByText(/needs you\./)).toBeNull();
 
   dispatcher.stop();
@@ -286,7 +283,6 @@ it("resets into a new world: clears the cues, lands on New chat and rebuilds the
     sources.latest.send(needsHuman(8, members.helen.slug, ESCALATION(1)));
   });
   expect(screen.getByRole("button", { name: /Northlake needs a human/ })).toBeTruthy();
-  await within(screen.getByRole("status")).findByText(/Northlake needs a human\./);
 
   fireEvent.click(screen.getByRole("button", { name: "Reset" }));
   const confirm = await screen.findByRole("dialog", { name: "Reset the demo?" });
@@ -299,9 +295,7 @@ it("resets into a new world: clears the cues, lands on New chat and rebuilds the
   expect(await screen.findByText("Home at /")).toBeTruthy();
   expect(queryClient.getQueryData<SessionView>(queryKeys.session)?.world_id).toBe(NEW_WORLD_ID);
   expect(screen.queryByRole("button", { name: /needs a human/ })).toBeNull();
-  const toasts = screen.getByRole("status").textContent;
-  expect(toasts).toContain("Demo reset");
-  expect(toasts).not.toContain("needs a human");
+  expect(screen.getByRole("status").textContent).toContain("Demo reset");
   expect(screen.queryByRole("dialog", { name: "Reset the demo?" })).toBeNull();
 
   dispatcher.stop();

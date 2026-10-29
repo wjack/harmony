@@ -34,7 +34,7 @@ function toastTexts(): string[] {
   return toastStore.getState().toasts.map((toast) => `${toast.text} ${toast.action?.label ?? ""}`.trim());
 }
 
-it("gives one item routed to two people one toast and one chip, naming the first", async () => {
+it("gives one item routed to two people one chip, naming the first, and no toast", async () => {
   const { sources } = await renderLive(sessionAs(members.alex));
 
   act(() => {
@@ -43,9 +43,8 @@ it("gives one item routed to two people one toast and one chip, naming the first
   });
 
   await within(demoBar()).findByText("Switch to Helen");
-  await waitFor(() => {
-    expect(toastTexts()).toEqual(["Northlake needs a human. Switch to Helen"]);
-  });
+  // The chip is the only cue: no toast says it again (user, 2026-10-28).
+  expect(toastTexts()).toEqual([]);
   expect(within(demoBar()).getAllByText(/needs a human/)).toHaveLength(1);
   expect(within(demoBar()).queryByText("Switch to Raj")).toBeNull();
   expect(alertStore.getState().alerts.map((alert) => alert.memberSlug)).toEqual([members.helen.slug]);
@@ -72,9 +71,7 @@ it("moves the cue to whoever an item is reassigned to", async () => {
   await within(demoBar()).findByText("Switch to Raj");
   expect(within(demoBar()).queryByText("Switch to Helen")).toBeNull();
   expect(alertStore.getState().alerts.map((alert) => alert.memberSlug)).toEqual([members.raj.slug]);
-  await waitFor(() => {
-    expect(toastTexts()).toContain("Northlake needs a human. Switch to Raj");
-  });
+  expect(toastTexts()).toEqual([]);
 });
 
 it("says it once to the acting member when the item is also routed to a teammate", async () => {

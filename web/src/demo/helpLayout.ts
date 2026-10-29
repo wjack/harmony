@@ -92,7 +92,7 @@ function cost({ out, aside }: { out: number; aside: number }): number {
 export function placeCallouts(
   specs: readonly CalloutSpec[],
   viewport: Size,
-  /** Anything else callouts and their arrows keep off: the "?", the network card and Got it bar. */
+  /** Anything else callouts and their arrows keep off: the "?", the network card and the close button. */
   obstacles: readonly Box[] = [],
 ): Placement[] {
   const placed: { box: Box; arrow: Point[] }[] = [];
