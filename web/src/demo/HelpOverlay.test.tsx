@@ -64,7 +64,7 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
   }
   // Who's on the network, by kind.
   const network = within(overlay).getByRole("region", { name: "This network" });
-  expect(within(network).getByText(/^Lighter bike frames/)).toBeTruthy();
+  expect(within(network).getByText(/^Labs, shops and suppliers/)).toBeTruthy();
   expect(within(network).getByText("7 organizations")).toBeTruthy();
   expect(within(network).getByTitle("Northlake Characterization Core")).toBeTruthy();
   // A control that isn't on screen goes without its callout.

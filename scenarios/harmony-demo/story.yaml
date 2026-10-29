@@ -29,12 +29,13 @@ suggested_message: >-
 # Ringed and tagged "Suggested" in the network view. Calder is the near miss: it does
 # computation only, so it is screened as a weak fit and left out of the outreach.
 suggested_recipients: [northlake, ridgeline, calder]
-# Who's on the network, shown in "What's on screen" over every org's monogram.
+# What the network can do, shown in "What's on screen" over every org's monogram: a
+# picture of what a visitor could ask for, not the suggested request (user, 2026-10-28).
 network: >-
-  Lighter bike frames: a university lab with new 3D-printed titanium lattices to test,
-  the instrument cores that scan and test them, shops that print, treat and machine
-  parts, and the suppliers, testers, data and modeling groups, funder and broker
-  around them.
+  Labs, shops and suppliers that make and test parts. Ask Claude for what you need and
+  it finds who can help: CT scans and inspection, strength and fatigue testing, metal 3D
+  printing, machining, heat treatment and custom fixtures, alloy stock, simulation, test
+  datasets and seed funding.
 
 steps:
   - id: ask
