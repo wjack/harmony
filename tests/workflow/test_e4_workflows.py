@@ -2286,6 +2286,9 @@ async def test_a_retry_runs_the_declined_step_again_as_the_next_rev(
             )
 
         assert (await update_error(retry(HENDERSON))).type == NOT_IN_ORG_ERROR
+        # Rev 2's draft holds until the second Retry has been refused, so it lands while
+        # rev 2 is drafting however fast the scripted answerer is.
+        script.gates["answer_consult"] = asyncio.Event()
         assert (await retry(NORTHLAKE)).draft_rev == 2
         # While rev 2 is drafting, a second Retry waits for it.
         assert (await update_error(retry(NORTHLAKE))).type == INVALID_RESOLUTION_ERROR
@@ -2299,6 +2302,7 @@ async def test_a_retry_runs_the_declined_step_again_as_the_next_rev(
             "Nov 12 works.",
             None,
         )
+        script.gates["answer_consult"].set()
 
         script.applied = ResolutionApplied(
             resolved=EscalationResolved(escalation_id=escalation_id, action="approve"),
