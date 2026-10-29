@@ -63,7 +63,7 @@ function card(page: Page): Locator {
 
 /** The view's box, for a comment to the team or an Edit to our Claude. */
 function box(page: Page): Locator {
-  return page.getByRole("region", { name: "Comment or Edit" });
+  return page.getByRole("region", { name: "Comment or instruct Claude" });
 }
 
 function conversation(page: Page): Locator {
@@ -163,7 +163,7 @@ test("Helen tells Claude what to do differently, approves, and reopens; Vantage 
   });
 
   await test.step("she uses Edit, and Claude rewrites its draft and follows her instruction", async () => {
-    await box(page).getByRole("radio", { name: "Edit" }).click();
+    await box(page).getByRole("radio", { name: "Instruct Claude" }).click();
     await box(page).getByRole("textbox", { name: "Tell Claude" }).fill(EDIT_TEXT);
     await box(page).getByRole("button", { name: "Tell Claude" }).click();
     await expect(card(page).getByText("Claude is rewriting…")).toBeVisible();
@@ -198,7 +198,7 @@ test("Helen tells Claude what to do differently, approves, and reopens; Vantage 
     await approve.click();
     await expect(approve).toBeHidden(TURNS);
     await expect(closedRow(page)).toContainText(new RegExp(`^Closed · .+ · ${VANTAGE} closed it`), TURNS);
-    await expect(box(page).getByRole("radio", { name: "Edit" })).toHaveAttribute("aria-disabled", "true");
+    await expect(box(page).getByRole("radio", { name: "Instruct Claude" })).toHaveAttribute("aria-disabled", "true");
   });
 
   await test.step("she sets Northlake to Ask and reopens it with what Claude should pick up", async () => {
@@ -222,7 +222,7 @@ test("Helen tells Claude what to do differently, approves, and reopens; Vantage 
   await test.step("while Claude's message waits for her, Edit works again; she approves it", async () => {
     const approve = card(page).getByRole("button", { name: "Approve and send" });
     await expect(approve).toBeVisible(TURNS);
-    const edit = box(page).getByRole("radio", { name: "Edit" });
+    const edit = box(page).getByRole("radio", { name: "Instruct Claude" });
     await expect(edit).not.toHaveAttribute("aria-disabled", "true");
     await edit.click();
     await expect(box(page).getByRole("textbox", { name: "Tell Claude" })).toBeVisible();

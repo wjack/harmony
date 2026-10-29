@@ -494,9 +494,9 @@ The unstructured revision removed the Files and knowledge, Standing permissions,
   - "Looked at", one line that expands to internal Claude's tool activity;
   - a link to edit (or, for a non-admin, see) what the org shares with that organization;
   - a foot with only **Decline** and **Approve and send** (⌘↵). For a held message, the foot says which mode holds it, with a Change link to Autonomy.
-- **One box** at the bottom of the request view, with a **Comment | Edit** switch. It starts in Comment and returns to it after each Edit.
+- **One box** at the bottom of the request view, with a **Comment | Instruct Claude** switch (user, 2026-10-28). It starts in Comment and returns to it after each instruction.
   - **Comment** adds a comment for the team; an @mention shares the thread. "Only {org} sees comments. Claude doesn't read them."
-  - **Edit** ("What should Claude do differently?", **Tell Claude**) records a steer (§7): Claude rewrites the waiting draft, if there is one, and follows the new guidance for the rest of the conversation. Edit is off while the side's last steer runs and on a closed thread, where Reopen takes its place (§7.1).
+  - **Instruct Claude** ("What should Claude do differently?", **Tell Claude**) records a steer (§7): Claude rewrites the waiting draft, if there is one, and follows the new guidance for the rest of the conversation. Instruct Claude is off while the side's last steer runs and on a closed thread, where Reopen takes its place (§7.1).
   - **Decline** is the card's own step, with a required reason the counterparty may read. Typed box text is never reused as that reason.
   - Enter submits the box and never approves the card.
   - The API still accepts `take_over` (the reply labeled as from a person); the request view doesn't offer it.
@@ -632,7 +632,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 /chat/:id            Claude desktop clone: chat, tool cards (the inline outreach card, inline counterparty questions, live request status)
 /chats               Chat history list
 /requests            Harmony Network Requests list page: search, All / Inbound / Outbound, and Needs you · With your team · Claude is handling · Shared with you · Done
-/requests/:threadId  Request view, full width: chat-style transcript with Closed and Reopen rows, inline decision card (§10), one Comment | Edit box, Details panel (Share, "Guidance Claude follows", "What our representative saw", properties, activity)
+/requests/:threadId  Request view, full width: chat-style transcript with Closed and Reopen rows, inline decision card (§10), one Comment | Instruct Claude box, Details panel (Share, "Guidance Claude follows", "What our representative saw", properties, activity)
 /customize/harmony   Harmony settings (§9): Public profile · Instructions · Sharing · Autonomy · Team & routing
 /network             Network view (desk world by default; big run via a switch)
 ```
