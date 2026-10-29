@@ -23,8 +23,8 @@ point it elsewhere. pnpm only resolves versions published at least seven days ag
   `/api/events?after=<cursor>` from `GET /api/session`'s `X-Harmony-Cursor`. It applies
   versioned entity snapshots to the query cache, sends demo notices and stream deltas to
   subscribers, resumes after drops without gaps, and on an account switch closes the
-  stream, clears the cache, reopens from a fresh cursor and reloads the visitor's other
-  tabs through a `BroadcastChannel` (ARCHITECTURE.md §8).
+  stream, clears the cache and reopens from a fresh cursor. The visitor's other tabs
+  follow the switch in place through a `BroadcastChannel` (ARCHITECTURE.md §8).
 - `src/app/`: providers, query hooks and routes.
-- `src/scaffold/`: the P0 page (start, account switcher, inbox, live events). P2's shell
-  replaces it.
+- `src/shell/`, `src/chat/`, `src/cards/`, `src/requests/`, `src/network/`,
+  `src/customize/` and `src/demo/`: the screens, one folder for each area of the app.

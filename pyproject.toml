@@ -49,7 +49,7 @@ default-groups = ["dev"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["web", "infra"]
+extend-exclude = ["web", "infra", "counterbench"]
 
 [tool.ruff.lint]
 select = [
