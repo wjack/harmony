@@ -52,9 +52,10 @@ policy:
   autonomy: auto
   sharing_description: >-
     The coupon class and count, how the coupons get to the core, instrument and
-    mounting details, dates, the lab's shipping address and our contact email, and
-    which of a counterparty's quoted options we accept, at its price. Not: lattice
-    designs, print settings, unpublished results or the lab's budget.
+    mounting details, dates (including when a part we ordered for the work arrives),
+    the lab's shipping address and our contact email, and which of a counterparty's
+    quoted options we accept, at its price. Not: lattice designs, print settings,
+    unpublished results or the lab's budget.
   routing_prompt: >-
     Questions about coupons and logistics, go-aheads on a member's own request within
     the lab's discretionary budget, and reviews of orders over $1,000 on it go to that
@@ -115,7 +116,8 @@ knowledge:
     body: >-
       The goal is CT and compression results by Fri Nov 6, for the group meeting on Mon
       Nov 9. Results by Fri Nov 13 still work, for the quarterly report. Making Nov 6 is
-      worth up to about $200 extra.
+      worth up to about $200 extra. Any CT session time works for us, as long as the
+      results make the date.
   - slug: lattice-designs
     title: Lattice designs
     kind: note

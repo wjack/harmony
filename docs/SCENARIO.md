@@ -19,7 +19,7 @@ The demo is about lighter bike frames: a university lab has 3D-printed titanium 
 
 The beats (spec §10), and what in the content makes each one happen. Nothing forces them: the cassettes play them, and a live model should arrive at about the same place.
 
-The orgs' records answer what each counterparty is likely to ask, within what that org shares, and every commitment falls inside someone's written authority. On the main path, a person is asked twice: Alex approves the outreach, and Alex reviews Northlake's quote, which is over the $1,000 Henderson Frame Lab's representative may commit alone. Helen is asked only on the Vantage thread.
+The orgs' records answer what each counterparty is likely to ask, within what that org shares, and every commitment falls inside someone's written authority. On the main path, a person is asked twice: Alex approves the outreach, and Alex reviews Northlake's quote, which is over the $1,000 Henderson Frame Lab's representative may commit alone. Helen is asked only on the Vantage thread. Live sharing checks also held answers that were fine to send, so the records avoid wording a check reads as private: Ridgeline's price list doesn't tie the rush to the lathe (which reads as shop load), Northlake's holder-fit record doesn't say Ridgeline has its drawings (which reads as a supplier arrangement), and Henderson Frame Lab's dates record states a session preference, so its answer about session times doesn't say "no preference recorded".
 
 1. **Outreach.** Alex sends the suggested message. Internal Claude runs one search per part of the need (the testing, then the holder) and drafts one free-text brief.
    - The brief shares the coupon class and count, not the lattice designs.
@@ -60,7 +60,7 @@ The orgs' records answer what each counterparty is likely to ask, within what th
   - Once an order is agreed, it confirms it and closes, without raising questions the brief doesn't need answered.
   - The lab's answer to a consult on an order over $1,000 accepts one option in so many words, the one the dates and the budget favor, so Alex can approve it as written; once it's released, the representative acts on it.
   - Never guess on the lab's behalf.
-- **Sharing:** "The coupon class and count, how the coupons get to the core, instrument and mounting details, dates, the lab's shipping address and our contact email, and which of a counterparty's quoted options we accept, at its price. Not: lattice designs, print settings, unpublished results or the lab's budget."
+- **Sharing:** "The coupon class and count, how the coupons get to the core, instrument and mounting details, dates (including when a part we ordered for the work arrives), the lab's shipping address and our contact email, and which of a counterparty's quoted options we accept, at its price. Not: lattice designs, print settings, unpublished results or the lab's budget."
 - **Members:**
 
   | Slug | Name | Title | Role | Profile |
@@ -76,7 +76,7 @@ The orgs' records answer what each counterparty is likely to ask, within what th
   - *Project LTC-12*: 12 lattice coupons, 20 mm cubes printed in Ti-6Al-4V titanium in October 2026, four designs of three coupons each; CT for print defects, then compression for stiffness and crush strength
   - *LTC-12 coupons and drop-off*: each cube engraved with its ID; both labs are on Northlake campus, so the lab drops them off at the core's front desk itself; ready now; contact alex.chen@henderson-lab.example
   - *LTC-12 CT holder*: the lab has no holder that stacks coupons for CT and needs one for the core's Zeiss Xradia 620 Versa, with a carbon-fiber tube because it needs high-resolution scans, delivered to the core's front desk (Room 112, Engineering Hall). One is enough (it carries all 12 through one scan session), a listed holder rather than a custom design (so the lab has no drawings), and the compression tests need nothing from the lab
-  - *LTC-12 dates*: results by Fri Nov 6 for the Mon Nov 9 group meeting; Fri Nov 13 still works for the quarterly report; making Nov 6 is worth up to about $200 extra
+  - *LTC-12 dates*: results by Fri Nov 6 for the Mon Nov 9 group meeting; Fri Nov 13 still works for the quarterly report; making Nov 6 is worth up to about $200 extra; any CT session time works
   - *Lattice designs*: cell sizes, strut thicknesses and print settings; unpublished
   - *Spending*: about $2,000 discretionary this month. Alex reviews any single order over $1,000; a list-price order of $1,000 or less needs nobody's approval, so the representative accepts it on its own; Maya decides above the budget.
 
@@ -102,7 +102,7 @@ The orgs' records answer what each counterparty is likely to ask, within what th
   - *Compression testing*: coupons are tested between the core's own platens on the Instron 5985, at no extra charge, so customers bring no fixtures; a coupon booked for CT too is scanned first, in an earlier session
   - *CT on coupon batches*: a batch scans in one session in a stacked holder that fits the Versa's stage mount. The core doesn't supply holders; Ridgeline's listed StackMount holder fits as delivered. High-resolution scans need a carbon-fiber tube.
   - *Drop-off*: coupons and holders are received at the core's front desk, Room 112, Engineering Hall, Northlake campus, weekdays 9:00–17:00, by 17:00 the business day before a session; each coupon labeled or engraved with an ID
-  - *Xradia Versa, holder fit*: stacked holders sit on the Versa's kinematic stage mount; Ridgeline has the core's mount drawings, and its listed StackMount holder fits as delivered
+  - *Xradia Versa, holder fit*: stacked holders sit on the Versa's kinematic stage mount, and Ridgeline's listed StackMount holder fits as delivered
   - *Raj's note, Nov 4 compression block*: "The Nov 4 block was held for Voltaic's re-test; they released it Friday." The block is open on the public calendar; who held it never leaks.
   - *Client: Voltaic Motors*: a standing Thursday-afternoon CT booking through December, under NDA
   - *Pricing policy*: academic users pay list price with its published terms (the volume discount and the priority fee); industry pays +20% for priority blocks; Helen decides only off-list exceptions
@@ -116,7 +116,7 @@ The orgs' records answer what each counterparty is likely to ask, within what th
 - **Mode:** *Auto*.
 - **Records:**
   - *About Ridgeline*
-  - *Price list*: the StackMount CT holder for the Zeiss Xradia 620 Versa, which fits the Versa's stage as delivered and carries up to 16 coupons up to 20 mm across through one scan session, is $240, ready in 4 business days, with an aluminum tube. A carbon-fiber tube in its place is +$85, recommended for high-resolution scans. Delivery to any front desk on Northlake campus is free, the next business day after it's ready. A 3-day rush is +$60 when the lathe is free.
+  - *Price list*: the StackMount CT holder for the Zeiss Xradia 620 Versa, which fits the Versa's stage as delivered and carries up to 16 coupons up to 20 mm across through one scan session, is $240, ready in 4 business days, with an aluminum tube. A carbon-fiber tube in its place is +$85, recommended for high-resolution scans. Delivery to any front desk on Northlake campus is free, the next business day after it's ready. A 3-day rush is +$60.
   - *Shop load*: the lathe is free this week
 
 ### Calder Computational (`calder`), the near miss
