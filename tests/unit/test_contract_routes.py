@@ -93,7 +93,7 @@ LIVE_ROUTES: dict[tuple[str, str], tuple[str | None, str, str | None]] = {
     ("POST", "/api/gate"): ("GateUnlock", "200", "GateUnlocked"),
     ("POST", "/api/gate/lock"): (None, "204", None),
     ("GET", "/api/budget"): (None, "200", "BudgetView"),
-    ("GET", "/api/admin/spend"): (None, "200", "AdminSpendView"),
+    ("GET", "/api/admin/live"): (None, "200", "LiveState"),
     ("POST", "/api/admin/live"): ("LiveToggle", "200", "LiveState"),
     ("GET", "/api/admin/worlds/{world_id}"): (None, "200", "AdminWorldView"),
     ("GET", "/api/admin/client-key"): (None, "200", "ClientKeyView"),

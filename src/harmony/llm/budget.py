@@ -1,12 +1,12 @@
 """Spend guards: reserve before a model call, settle what it billed after (§14).
 
 `BudgetGuard` is the live guard. For every call it:
-1. reserves the call's worst case (`pricing.worst_case_cost`) against the $200 dev
+1. with a database, reads the live switch first (`live_switch`): paused, or blocked
+   after the provider's own spend limit refused a call, refuses the call;
+2. reserves the call's worst case (`pricing.worst_case_cost`) against the $200 dev
    cap, counting harmony's settled spend from the shared ledger plus every process's
    open reservations (the ledger's sidecar file), under an `asyncio.Lock` and an
    exclusive `flock`;
-2. reserves the same amount against any hosted caps in Postgres (`budget_pg`): in
-   prod, or locally with `HOSTED_CAPS_IN_DEV`, so both caps apply;
 3. after the call, appends one `call` line with the billed cost (also for failed and
    cut-off calls, from their partial usage) and drops the open reservation under the
    same lock, and writes one `alert` line the first time spend reaches each threshold.
@@ -15,7 +15,9 @@ A reservation that would pass the cap raises the non-retryable `BudgetExhausted`
 (kind `global`: the dev cap is this machine's whole demo); the first such refusal also
 writes the cap's alert (reason `refused`), since spend can then never reach the cap
 exactly. When the provider's own spend limit refuses a call, the model client calls
-`block_provider`, and hosted reservations are refused locally for a while (3.4).
+`block_provider`, and live calls are refused locally for a while (3.4). There are no
+in-app caps in prod: the ledger is the dev machine's, and the hosted demo's backstop is
+the Anthropic Console's workspace spend limit.
 
 With `MODEL_MODE=live` and `APP_ENV=local` the ledger is mandatory: a missing,
 unreadable or unwritable ledger refuses to start (`LedgerUnavailable`), and the guard
@@ -44,7 +46,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from harmony.config import Settings
 from harmony.llm import CallKey, ModelRequest
-from harmony.llm.budget_pg import HostedBudgets
 from harmony.llm.errors import BudgetExhausted, LedgerUnavailable
 from harmony.llm.ledger import (
     AlertReason,
@@ -53,6 +54,7 @@ from harmony.llm.ledger import (
     OpenReservation,
     SpendLedger,
 )
+from harmony.llm.live_switch import LiveSwitch
 from harmony.llm.pricing import call_cost, round_usd, usage_counts, web_searches, worst_case_cost
 from harmony.llm.wire import as_str
 
@@ -65,7 +67,6 @@ class Reservation:
     key: CallKey
     model_requested: str
     est_usd: Decimal
-    budget_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,9 +89,7 @@ class SpendGuard(Protocol):
         """What a call with this usage cost."""
         ...
 
-    async def reserve(
-        self, request: ModelRequest, *, budget_keys: Sequence[str] = ()
-    ) -> Reservation:
+    async def reserve(self, request: ModelRequest) -> Reservation:
         """Reserve the request's worst case, or raise `BudgetExhausted`."""
         ...
 
@@ -112,7 +111,7 @@ class SpendGuard(Protocol):
         ...
 
     async def block_provider(self) -> None:
-        """The provider's spend limit refused a call: refuse hosted calls for a while."""
+        """The provider's spend limit refused a call: refuse live calls for a while."""
         ...
 
 
@@ -124,11 +123,9 @@ class FreeSpend:
     ) -> Decimal:
         return Decimal(0)
 
-    async def reserve(
-        self, request: ModelRequest, *, budget_keys: Sequence[str] = ()
-    ) -> Reservation:
+    async def reserve(self, request: ModelRequest) -> Reservation:
         model = as_str(request.body.get("model")) or ""
-        return Reservation(uuid4(), request.key, model, Decimal(0), tuple(budget_keys))
+        return Reservation(uuid4(), request.key, model, Decimal(0))
 
     async def settle(
         self,
@@ -157,13 +154,13 @@ class BudgetGuard:
         cap_usd: Decimal,
         thresholds: Sequence[Decimal],
         env: str,
-        hosted: HostedBudgets | None = None,
+        switch: LiveSwitch | None = None,
     ) -> None:
         self._ledger = ledger
         self._cap = cap_usd
         self._thresholds = tuple(sorted(set(thresholds)))
         self._env = env
-        self._hosted = hosted
+        self._switch = switch
         self._lock = asyncio.Lock()
         self._open: dict[UUID, Reservation] = {}
 
@@ -174,8 +171,9 @@ class BudgetGuard:
         *,
         sessionmaker: async_sessionmaker[AsyncSession] | None = None,
     ) -> BudgetGuard:
-        """The live guard. Locally the ledger must exist and be readable and writable
-        (checked now, so a worker without it refuses to start); it is never created."""
+        """The live guard, reading the live switch through `sessionmaker` when given.
+        Locally the ledger must exist and be readable and writable (checked now, so a
+        worker without it refuses to start); it is never created."""
         ledger = None
         if settings.spend_ledger_path is not None:
             ledger = SpendLedger(settings.spend_ledger_path, project=settings.spend_project)
@@ -192,7 +190,7 @@ class BudgetGuard:
             cap_usd=settings.dev_budget_usd,
             thresholds=settings.alert_thresholds,
             env=settings.app_env,
-            hosted=HostedBudgets(sessionmaker) if sessionmaker is not None else None,
+            switch=LiveSwitch(sessionmaker) if sessionmaker is not None else None,
         )
 
     @property
@@ -204,54 +202,30 @@ class BudgetGuard:
     ) -> Decimal:
         return call_cost(usage, requested_model=requested_model, served_model=served_model)
 
-    async def reserve(
-        self, request: ModelRequest, *, budget_keys: Sequence[str] = ()
-    ) -> Reservation:
+    async def reserve(self, request: ModelRequest) -> Reservation:
         model = as_str(request.body.get("model")) or ""
         return await self.reserve_amount(
-            worst_case_cost(request.body), key=request.key, model=model, budget_keys=budget_keys
+            worst_case_cost(request.body), key=request.key, model=model
         )
 
-    async def reserve_amount(
-        self,
-        est_usd: Decimal,
-        *,
-        key: CallKey,
-        model: str,
-        budget_keys: Sequence[str] = (),
-    ) -> Reservation:
+    async def reserve_amount(self, est_usd: Decimal, *, key: CallKey, model: str) -> Reservation:
         """Reserve an explicit amount (`reserve` computes it from the request)."""
-        reservation = Reservation(uuid4(), key, model, round_usd(est_usd), tuple(budget_keys))
-        if self._ledger is None and not reservation.budget_keys:
+        reservation = Reservation(uuid4(), key, model, round_usd(est_usd))
+        if self._ledger is None and self._switch is None:
             raise BudgetExhausted(
-                "no budget covers this call: no dev ledger and no hosted budget keys",
+                "nothing governs this call: no dev ledger and no live switch",
                 kind="paused",
                 budget="none",
                 cap_usd=Decimal(0),
                 committed_usd=Decimal(0),
                 requested_usd=reservation.est_usd,
             )
-        if reservation.budget_keys and self._hosted is None:
-            raise BudgetExhausted(
-                "hosted budget keys given but the guard has no database",
-                kind="paused",
-                budget=",".join(reservation.budget_keys),
-                cap_usd=Decimal(0),
-                committed_usd=Decimal(0),
-                requested_usd=reservation.est_usd,
-            )
+        if self._switch is not None:
+            await self._switch.check(reservation.est_usd)
         async with self._lock:
             if self._ledger is not None:
                 await asyncio.to_thread(self._reserve_against_ledger, self._ledger, reservation)
             self._open[reservation.id] = reservation
-        if self._hosted is not None and reservation.budget_keys:
-            try:
-                await self._hosted.reserve(
-                    reservation.id, reservation.budget_keys, reservation.est_usd
-                )
-            except BaseException:
-                await asyncio.shield(self._drop(reservation))
-                raise
         return reservation
 
     async def settle(
@@ -276,33 +250,24 @@ class BudgetGuard:
                 )
             # Only now: if the line couldn't be written, the reservation stays counted.
             del self._open[reservation.id]
-        if self._hosted is not None and reservation.budget_keys:
-            await self._hosted.settle(reservation.id, cost)
         for alert in alerts:
             log.warning("%s", alert)
         return alerts
 
     async def release(self, reservation: Reservation) -> None:
-        if not await self._drop(reservation):
-            return
-        if self._hosted is not None and reservation.budget_keys:
-            await self._hosted.release(reservation.id)
-
-    async def block_provider(self) -> None:
-        """Without hosted caps (local dev) there is nothing to block: the provider's
-        error itself already failed the call."""
-        if self._hosted is not None:
-            await self._hosted.block_provider()
-
-    async def _drop(self, reservation: Reservation) -> bool:
         """Forget an open reservation here and in the shared sidecar."""
         async with self._lock:
             if reservation.id not in self._open:
-                return False
+                return
             if self._ledger is not None:
                 await asyncio.to_thread(self._forget_open, self._ledger, reservation.id)
             del self._open[reservation.id]
-            return True
+
+    async def block_provider(self) -> None:
+        """Without the live switch (`harmony llm ping`) there is nothing to block: the
+        provider's error itself already failed the call."""
+        if self._switch is not None:
+            await self._switch.block_provider()
 
     # --- Ledger side (runs in a worker thread, under the asyncio lock) ---------------
 

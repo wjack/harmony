@@ -14,9 +14,9 @@
  * it again as the next rev, on the member's edit of the draft if there is one. Approve
  * waits until that rev lands or Claude declines it too, with the same fallback timeout.
  *
- * Approve, decline and Retry hand the move to a model, whose call a spent cap or a pause
- * would refuse: while the budget isn't `ok` they hold, and `blocked` says why. Editing
- * the wording calls no model, so it still works.
+ * Approve, decline and Retry hand the move to a model, whose call a spent budget or a
+ * pause would refuse: while the budget isn't `ok` they hold, and `blocked` says why.
+ * Editing the wording calls no model, so it still works.
  *
  * What the member did with an item stays with that item.
  */

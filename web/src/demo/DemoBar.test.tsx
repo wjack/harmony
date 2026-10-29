@@ -38,30 +38,27 @@ async function renderWithBudget(budget: BudgetView) {
   return { server, ...rendered };
 }
 
-describe("the demo bar's budget", () => {
+describe("the demo bar's live models", () => {
   it.each([
-    ["ok", budgets.ok, "Live · $7.40 left"],
-    ["session_exhausted", budgets.sessionExhausted, "Session budget used up"],
-    ["daily_exhausted", budgets.dailyExhausted, "Today's demo budget is used up"],
+    ["ok", budgets.ok, "Live"],
     ["demo_exhausted", budgets.demoExhausted, "The demo's live-model budget is used up"],
-    ["demo_exhausted by a provider block", budgets.providerBlocked, "The demo's live-model budget is used up"],
     ["paused", budgets.paused, "Live models are paused"],
   ])("reads %s", async (_state, budget, line) => {
     await renderWithBudget(budget);
 
     const item = await within(demoBar()).findByRole("button", { name: line });
-    expect(item.getAttribute("title")).toBe("This session's live-model budget");
+    expect(item.getAttribute("title")).toBe("Live models");
     // Not a live region: the bar's status is the stream's.
     expect(within(demoBar()).queryByRole("status")).toBeNull();
   });
 
-  it("isn't shown while hosted caps are off", async () => {
+  it("isn't shown while the server runs scripted models", async () => {
     const { server } = await renderWithBudget(budgets.off);
 
     await waitFor(() => {
       expect(server.count("GET /api/budget")).toBe(1);
     });
-    expect(within(demoBar()).queryByTitle("This session's live-model budget")).toBeNull();
+    expect(within(demoBar()).queryByTitle("Live models")).toBeNull();
   });
 
   it("isn't read before a session starts", async () => {
@@ -76,7 +73,7 @@ describe("the demo bar's budget", () => {
   it("polls every 30 s", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { server } = await renderWithBudget(budgets.ok);
-    await within(demoBar()).findByRole("button", { name: "Live · $7.40 left" });
+    await within(demoBar()).findByRole("button", { name: "Live" });
 
     server.budget = budgets.paused;
     await act(() => vi.advanceTimersByTimeAsync(30_000));
@@ -87,12 +84,12 @@ describe("the demo bar's budget", () => {
 
   it("refetches when a call is refused for budget", async () => {
     const { server, sources } = await renderWithBudget(budgets.ok);
-    await within(demoBar()).findByRole("button", { name: "Live · $7.40 left" });
+    await within(demoBar()).findByRole("button", { name: "Live" });
     act(() => {
       sources.latest.accept();
     });
 
-    server.budget = budgets.sessionExhausted;
+    server.budget = budgets.demoExhausted;
     act(() => {
       sources.latest.send(demoNotice(8, "needs_human"));
     });
@@ -101,7 +98,7 @@ describe("the demo bar's budget", () => {
       sources.latest.send(demoNotice(9, "budget"));
     });
 
-    await within(demoBar()).findByRole("button", { name: "Session budget used up" });
+    await within(demoBar()).findByRole("button", { name: "The demo's live-model budget is used up" });
     expect(server.count("GET /api/budget")).toBe(2);
   });
 });
@@ -150,14 +147,14 @@ describe("the network view's badge", () => {
   });
 });
 
-it("pins the budget and Reset to the bar's end, where a narrow window never pushes them off", async () => {
+it("pins live models and Reset to the bar's end, where a narrow window never pushes them off", async () => {
   await renderWithBudget(budgets.ok);
   const bar = demoBar();
-  const budget = await within(bar).findByRole("button", { name: "Live · $7.40 left" });
+  const live = await within(bar).findByRole("button", { name: "Live" });
   const reset = within(bar).getByRole("button", { name: "Reset" });
 
   const pinned = bar.lastElementChild;
-  expect(pinned?.contains(budget)).toBe(true);
+  expect(pinned?.contains(live)).toBe(true);
   expect(pinned?.contains(reset)).toBe(true);
   // It never shrinks: the labels before it drop, then who and when are cut.
   expect(pinned?.className).toContain("shrink-0");

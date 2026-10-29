@@ -124,7 +124,6 @@ from harmony.events.schemas import DemoNotice, EventScope
 from harmony.events.stream import TYPING_HEARTBEAT_S, ChatStream, TurnStream, org_streams_tokens
 from harmony.llm import ModelClient
 from harmony.llm.budget import SpendGuard
-from harmony.llm.budget_pg import HostedCaps, hosted_budget_keys
 from harmony.llm.errors import BudgetExhausted, LedgerUnavailable, ModelCallError
 from harmony.llm.requests import Tier, resolve_model
 from harmony.llm.wire import JsonObject
@@ -333,7 +332,6 @@ class AgentActivities:
         *,
         model_override: str | None,
         client: Client | None = None,
-        hosted_caps: HostedCaps | None = None,
         heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
         typing_every_s: float = TYPING_HEARTBEAT_S,
     ) -> None:
@@ -343,7 +341,6 @@ class AgentActivities:
         self._guard = guard
         self._publisher = publisher
         self._model_override = model_override
-        self._hosted_caps = hosted_caps
         self._heartbeat_interval_s = heartbeat_interval_s
         self._typing_every_s = typing_every_s
 
@@ -367,18 +364,9 @@ class AgentActivities:
         except Exception:
             activity.logger.warning("couldn't publish the budget notice", exc_info=True)
 
-    def _checkpointed(self, world_id: UUID) -> CheckpointedClient:
-        async def budget_keys() -> tuple[str, ...]:
-            return await hosted_budget_keys(
-                self._sessionmaker, self._hosted_caps, world_id=world_id
-            )
-
+    def _checkpointed(self) -> CheckpointedClient:
         return CheckpointedClient(
-            self._sessionmaker,
-            self._model,
-            self._guard,
-            heartbeat=activity.heartbeat,
-            budget_keys=budget_keys,
+            self._sessionmaker, self._model, self._guard, heartbeat=activity.heartbeat
         )
 
     @activity.defn
@@ -427,7 +415,7 @@ class AgentActivities:
             cassette_thread = (
                 turn.cassette_thread if look is None else keys.look_key(turn.cassette_thread)
             )
-            model = self._checkpointed(turn.world_id)
+            model = self._checkpointed()
             screen = AgentScreen(
                 self._sessionmaker,
                 model,
@@ -609,7 +597,7 @@ class AgentActivities:
                 attempt=attempt,
                 quiet_opening=quiet,
             )
-            model = self._checkpointed(turn.world_id)
+            model = self._checkpointed()
             async with TurnStream(
                 self._publisher,
                 world_id=turn.world_id,
@@ -688,7 +676,7 @@ class AgentActivities:
             self._budget_refusals(consult.world_id),
             domain_errors(),
         ):
-            model = self._checkpointed(consult.world_id)
+            model = self._checkpointed()
             attempt = activity.info().attempt
             started = time.monotonic()
             reuse = await self._reuse(consult, model, attempt=attempt)
@@ -875,7 +863,7 @@ class AgentActivities:
             started = time.monotonic()
             parsed = await steering.write_guidance(
                 self._sessionmaker,
-                self._checkpointed(part.world_id),
+                self._checkpointed(),
                 world_id=part.world_id,
                 steer_id=part.steer_id,
                 cassette_thread=part.cassette_thread,
@@ -937,7 +925,7 @@ class AgentActivities:
             started = time.monotonic()
             rewritten = await steering.rewrite_held(
                 self._sessionmaker,
-                self._checkpointed(part.world_id),
+                self._checkpointed(),
                 world_id=part.world_id,
                 steer_id=part.steer_id,
                 cassette_thread=part.cassette_thread,

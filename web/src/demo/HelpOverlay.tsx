@@ -44,8 +44,8 @@ const CALLOUTS: readonly Callout[] = [
     key: "budget",
     side: "below",
     extra: true,
-    name: "Live budget",
-    text: "What's left of this session's budget for live models.",
+    name: "Live models",
+    text: "Whether live models are on right now, or why they've stopped.",
   },
   {
     key: "reset",

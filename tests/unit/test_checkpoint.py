@@ -67,7 +67,6 @@ async def world_id(db_sessionmaker: Sessionmaker) -> UUID:
             scenario="llm-unit",
             mode="live",
             build_sha="test",
-            budget_lineage=uuid4(),
         )
     return world
 

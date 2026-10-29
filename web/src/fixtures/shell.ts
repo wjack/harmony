@@ -246,26 +246,13 @@ export const story: DemoStory = {
   steps: [],
 };
 
-function sessionBudget(spentUsd: number, capUsd = 10): NonNullable<BudgetView["session"]> {
-  return { cap_usd: capUsd, spent_usd: spentUsd, reserved_usd: 0, remaining_usd: Math.max(0, capUsd - spentUsd) };
-}
-
 /** `GET /api/budget` in each state the demo bar shows (LIVE_DEMO_PLAN 3.5). */
 export const budgets = {
-  ok: { live: true, state: "ok", session: sessionBudget(2.6) },
-  sessionExhausted: { live: true, state: "session_exhausted", session: sessionBudget(9.99) },
-  dailyExhausted: {
-    live: true,
-    state: "daily_exhausted",
-    session: sessionBudget(1.2),
-    resets_at: "2026-10-27T00:00:00Z",
-  },
-  /** The demo's global cap is spent; this session's own cap isn't. */
-  demoExhausted: { live: true, state: "demo_exhausted", session: sessionBudget(3.1) },
-  /** The provider refused (billing or usage limit): even a session that spent nothing waits. */
-  providerBlocked: { live: true, state: "demo_exhausted", session: sessionBudget(0) },
-  paused: { live: true, state: "paused", session: sessionBudget(2.6) },
-  /** Hosted caps are off (local development). */
+  ok: { live: true, state: "ok" },
+  /** The provider refused a call on the Console's spend limit, so live calls wait 10 minutes. */
+  demoExhausted: { live: true, state: "demo_exhausted" },
+  paused: { live: true, state: "paused" },
+  /** The server runs scripted models. */
   off: { live: false, state: "ok" },
 } satisfies Record<string, BudgetView>;
 

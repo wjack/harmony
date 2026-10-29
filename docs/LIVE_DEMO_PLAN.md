@@ -23,6 +23,8 @@ Two new parallel tasks, L7 (request view, web) and L8 (requester engine and prom
 
 **Round 2.** The feedback round 2 build (`docs/FEEDBACK_R2_PLAN.md`, with `docs/design/EDIT.md` and `docs/design/REOPEN.md`) changed the request view, the chat's outreach card, the turn rules and how a conversation ends. Sections 3, 5, 7 and 9 are updated in place and say "round 2" where they changed. Section 4 is the live phase's task record and is left as built; its opening note lists what round 2 superseded.
 
+**No in-app spend caps** (user, 2026-10-28). The user removed every in-app spend cap and the new-session limit, so nothing in the app stops a tester. The Console workspace's spend limit is the only backstop. The live switch, the provider block, the passcode and its unlock limits, and the Reset limit (20 an hour per session) stay. This supersedes, wherever they appear below: the lineage, client, daily and global caps and their settings, and `HOSTED_CAPS_IN_DEV` (3.4, 3.6, L2); the new-session limits and `sessions.client_key_hash` (3.3); the `session_budget` and `daily_budget` reasons and the `session_exhausted` and `daily_exhausted` states (3.5); `GET /api/admin/spend` (now `GET /api/admin/live`); the stale-reservation sweep and `hosted_spend_crossed`; and the demo bar's "Live · $N left". Migration 0008 drops the tables and columns. [ARCHITECTURE.md §14](ARCHITECTURE.md) and [P1_P2_CONTRACT.md](P1_P2_CONTRACT.md) describe what is built now; the sections below are left as they were decided.
+
 Ground rules carried over from P0–P2: tool paths, test isolation, file ownership, style. Three of them matter most here:
 - No agent reads `.env.local` or `infra/terraform/*.tfvars`, prints a secret, or puts one in a URL or on a command line. Scripts that need secrets read them in-process and print only key names, as `scripts/tf.sh` does today.
 - No task agent sets `MODEL_MODE=live` or spends money. Only the coordinator runs live calls (section 5), and those run on Haiku 5.5. Every Opus run, every first spend on the hosted key, every push, merge and `terraform apply`, and every deploy waits for the user (section 6).
@@ -331,6 +333,8 @@ Each decision gives its reason. Defaults that cost money or change scope are als
 
 ### 3.4 Hosted spend caps
 
+> **Superseded** (user, 2026-10-28): the app has no spend caps of its own; see "No in-app spend caps" at the top.
+
 Every hosted live call first checks the live switch. It then reserves its worst case against up to four keys in one atomic reservation: the existing `HostedBudgets.reserve`, which locks the rows in key order.
 
 | Key | Cap (proposed default) | Setting | Purpose |
@@ -408,6 +412,8 @@ Reasons for the numbers:
 
 ### 3.5 What the visitor sees on a cap or a model error
 
+> **Superseded** (user, 2026-10-28): the app has no spend caps of its own; see "No in-app spend caps" at the top.
+
 Failure reasons travel as data, never as a template message sent to a counterparty. One enum serves every surface:
 
 `FailureReason = "session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused"`
@@ -479,6 +485,8 @@ Plumbing:
   - Reason: Opus thinking produces gaps with no deltas. Without the heartbeat, the requests typing row (20 s timeout) would vanish mid-turn, and network edges would stop animating. Their TTL goes from 3.5 s to 8 s.
 
 ### 3.6 The production replacement for the dev spend ledger
+
+> **Superseded** (user, 2026-10-28): the app has no spend caps of its own; see "No in-app spend caps" at the top.
 
 The dev ledger (`spend_ledger.jsonl`, $200 hard cap, alerts at $50, $100 and $200) stays local only. In production:
 
@@ -1260,6 +1268,8 @@ There are nine tasks.
   - no test pins the lengthened seeded message's text.
 
 ### L2 — Spend caps, live switch and budget API
+
+> **Superseded** (user, 2026-10-28): the app has no spend caps of its own; see "No in-app spend caps" at the top.
 
 **Owns:**
 - `src/harmony/llm/budget.py`, `src/harmony/llm/budget_pg.py`, `src/harmony/llm/errors.py`, `src/harmony/llm/anthropic_model.py`;

@@ -41,11 +41,11 @@ class FakeGate:
     """The gate's contract, and just enough of the session routes behind it."""
 
     def __init__(
-        self, *, fail_open: str | None = None, throttled: bool = False, caps: bool = True
+        self, *, fail_open: str | None = None, throttled: bool = False, live: bool = True
     ) -> None:
         self.fail_open = fail_open  # a path the gate wrongly lets through
         self.throttled = throttled  # this network is past the per-client unlock limit
-        self.caps = caps  # hosted caps apply (off on compose-smoke: APP_ENV=ci, scripted)
+        self.live = live  # live models run (off on compose-smoke: APP_ENV=ci, scripted)
         self.alex = str(uuid4())
         self.helen = str(uuid4())
         self.acted_as: list[str] = []
@@ -66,8 +66,8 @@ class FakeGate:
         )
         if path == "/api/healthz":
             return httpx.Response(200, json={"status": "ok", "build_sha": "abc", "app_env": "prod"})
-        if path == "/api/admin/spend" and request.headers.get("x-admin-secret") == ADMIN:
-            return httpx.Response(200, json={"live": {"paused": True, "global": None}})
+        if path == "/api/admin/live" and request.headers.get("x-admin-secret") == ADMIN:
+            return httpx.Response(200, json={"paused": True, "provider_blocked_until": None})
         if path == "/api/gate" and request.method == "GET":
             return httpx.Response(200, html='<input type="password">', headers=NO_STORE)
         if path == "/api/gate" and self.throttled:
@@ -100,7 +100,7 @@ class FakeGate:
             self.acted_as.append(member_id)
             return self.session(member_id)
         if path == "/api/budget":
-            return httpx.Response(200, json={"live": self.caps, "state": "ok"})
+            return httpx.Response(200, json={"live": self.live, "state": "ok"})
         if path == "/api/conversations" and request.method == "POST":
             self.posted.append(json.loads(request.content)["text"])
             return httpx.Response(200, json={"id": str(uuid4())})
@@ -273,22 +273,22 @@ def test_a_saved_jar_is_private_and_reads_back(tmp_path: Path) -> None:
         hosted_check.load_jar(jar)
 
 
-async def test_a_refused_turn_needs_hosted_caps_and_says_so_without_posting(
+async def test_a_refused_turn_needs_live_models_and_says_so_without_posting(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Compose-smoke runs scripted with APP_ENV=ci: nothing reads the live switch there,
-    # so the turn would play and the check could only time out.
+    # Compose-smoke runs scripted models: nothing reads the live switch there, so the
+    # turn would play and the check could only time out.
     monkeypatch.setenv("HARMONY_PASSCODE", PASSCODE)
     monkeypatch.setenv("HARMONY_ADMIN_SECRET", ADMIN)
-    gate = FakeGate(caps=False)
+    gate = FakeGate(live=False)
     report = hosted_check.Report()
     async with _client(gate) as client:
         with pytest.raises(hosted_check.Stop):
             await hosted_check.refused_turn(client, report, argparse.Namespace(turn_wait=60.0))
     assert gate.posted == []
     out = capsys.readouterr().out
-    assert "FAIL  hosted caps apply here (GET /api/budget: status 200, live=False)" in out
-    assert "HOSTED_CAPS_IN_DEV=1" in out
+    assert "FAIL  live models run here (GET /api/budget: status 200, live=False)" in out
+    assert "MODEL_MODE=live" in out
 
 
 @pytest.mark.parametrize("inside", ["jar.json", "scripts/jar.json", "."])

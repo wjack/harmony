@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { SessionView } from "../api/types";
-import { useBudget, type BudgetView } from "../app/budget";
+import { useBudget } from "../app/budget";
 import { budgetLine } from "../chat/failureCopy";
 import { Button, Modal, ModalList, Spark, Toggle } from "../shell/ui";
 import { useUnavailable } from "../shell/unavailable";
@@ -14,7 +14,7 @@ import { formatWorldDate, useWorldDate } from "./worldClock";
  * The demo controls modal (ARCHITECTURE.md §11.4, UI_REFERENCE.md §9). It opens from
  * the demo bar, the account menu and the landing's Start: the user guide ("What's on
  * screen", HelpOverlay.tsx), Skip approvals, the world (reset, replay), and which models
- * run and what this session has spent. "Try the suggested request" starts the demo, or switches back to the story's
+ * run. "Try the suggested request" starts the demo, or switches back to the story's
  * member. (A first visit opens the intro instead, Intro.tsx.)
  */
 export function DemoControls({ session }: { session: SessionView | null }) {
@@ -118,71 +118,28 @@ function Controls({ session }: { session: SessionView | null }) {
         </p>
       </Section>
 
-      <ModelAndSpend session={session} />
+      <Models />
     </>
   );
 }
 
-/** Which models run where (fixed by the deployment), and this session's spend. Read-only. */
-function ModelAndSpend({ session }: { session: SessionView | null }) {
+/** Which models run where (fixed by the deployment), and what stops them now. Read-only. */
+function Models() {
   const budget = useBudget().data;
-  const live = budget?.live === true;
-  const spend = live ? (budget.session ?? null) : null;
-  const line = live ? budgetLine(budget.state) : null;
+  const line = budget?.live === true ? budgetLine(budget.state) : null;
   return (
-    <Section title="Model and spend">
+    <Section title="Models">
       <p className="text-[13px] leading-5 text-secondary">
         Opus 5.5 for featured organizations&apos; internal Claude, representative and consult answerer; Haiku 5.5
         for background organizations, screening and the sharing check.
       </p>
-      {spend !== null && <Spend spend={spend} />}
       {line !== null && <p className="mt-2 text-xs leading-4 font-medium text-warning">{line}</p>}
-      <p className="mt-2 text-xs leading-4 text-muted">
-        {session === null
-          ? "Each session gets its own live-model budget once the demo starts."
-          : budget === undefined
-            ? "Loading this session's spend…"
-            : budget.live
-              ? "Every session has its own live-model budget. Reset doesn't refill it."
-              : "Spend caps are off in this deployment, so nothing is metered here."}
-      </p>
-    </Section>
-  );
-}
-
-const usd = (amount: number) => `$${amount.toFixed(2)}`;
-
-/** This session's spend, laid out like a row of Claude's Settings → Usage. */
-function Spend({ spend }: { spend: NonNullable<BudgetView["session"]> }) {
-  const used = spend.cap_usd > 0 ? Math.min(1, (spend.spent_usd + spend.reserved_usd) / spend.cap_usd) : 1;
-  return (
-    <div className="mt-3">
-      <div className="flex items-center gap-4">
-        <div className="w-[136px] shrink-0">
-          <p className="text-sm leading-5 text-ink">This session</p>
-          <p className="text-xs leading-4 text-muted tabular-nums">
-            {usd(spend.remaining_usd)} left of {usd(spend.cap_usd)}
-          </p>
-        </div>
-        <div
-          role="progressbar"
-          aria-label="This session's live-model budget used"
-          aria-valuemin={0}
-          aria-valuemax={spend.cap_usd}
-          aria-valuenow={Math.min(spend.cap_usd, spend.spent_usd + spend.reserved_usd)}
-          aria-valuetext={`${usd(spend.spent_usd)} spent, ${usd(spend.remaining_usd)} left`}
-          className="h-2 min-w-0 flex-1 overflow-hidden rounded-full border border-border-strong bg-surface"
-        >
-          <div className="h-full rounded-full bg-toggle" style={{ width: `${String(used * 100)}%` }} />
-        </div>
-        <span className="shrink-0 text-[13px] leading-5 text-secondary tabular-nums">{usd(spend.spent_usd)} spent</span>
-      </div>
-      {spend.reserved_usd > 0 && (
-        <p className="mt-1.5 text-xs leading-4 text-muted">
-          {usd(spend.reserved_usd)} is held for calls in progress until they finish.
+      {budget?.live === false && (
+        <p className="mt-2 text-xs leading-4 text-muted">
+          Live models are off in this deployment, so Claude&apos;s replies are scripted.
         </p>
       )}
-    </div>
+    </Section>
   );
 }
 

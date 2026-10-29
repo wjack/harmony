@@ -40,7 +40,7 @@ from harmony.db.models.thread import (
     ThreadMessage,
     ThreadRun,
 )
-from harmony.db.models.visitor import Budget, BudgetReservation, LiveControls, VisitorSession
+from harmony.db.models.visitor import LiveControls, VisitorSession
 from harmony.db.models.world import World, WorldEventSeq, WorldWorkflow
 
 
@@ -62,8 +62,6 @@ __all__ = [
     "SNAPSHOT_ENTITIES",
     "AgentTurn",
     "Base",
-    "Budget",
-    "BudgetReservation",
     "Card",
     "ChatMessage",
     "Community",

@@ -1,6 +1,8 @@
 /**
- * The visitor's live-model budget (`GET /api/budget`, LIVE_DEMO_PLAN 3.5): whether live
- * models are on, and which cap, if any, stops live turns now.
+ * Whether live models can run now (`GET /api/budget`, LIVE_DEMO_PLAN 3.5). `live` says
+ * whether the server runs them at all, and `state` what, if anything, stops live turns:
+ * the operator's pause, or the demo's budget (the provider refused a call on its spend
+ * limit, so live calls wait 10 minutes; locally, the dev ledger ran out).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
@@ -14,8 +16,8 @@ export type BudgetView = components["schemas"]["BudgetView"];
 export type BudgetState = BudgetView["state"];
 
 /**
- * Spend moves without an entity to snapshot, so the budget is polled: every 30 s while
- * the tab is visible (TanStack pauses intervals in the background), and at once on
+ * The state moves without an entity to snapshot, so it is polled: every 30 s while the
+ * tab is visible (TanStack pauses intervals in the background), and at once on
  * `demo.notice {kind: "budget"}`, which comes when a call is refused and when the
  * operator pauses or resumes live models.
  */
@@ -25,7 +27,7 @@ export function useBudget() {
   const api = useApi();
   const dispatcher = useDispatcher();
   const queryClient = useQueryClient();
-  // The budget is the session's lineage: there is none to read before a session starts.
+  // The route needs a session: there is nothing to read before one starts.
   const hasSession = useRealtime((state) => state.sessionId !== null && state.status !== "locked");
 
   useEffect(

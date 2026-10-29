@@ -810,7 +810,7 @@ async def test_a_failed_last_turn_tells_its_org_why_there_is_no_summary_once(
             thread_id=thread_id,
             state="closed",
             end_reason="stopped",
-            stop_reason="session_budget",
+            stop_reason="demo_budget",
         )
     )
     turn_id = uuid4()
@@ -819,7 +819,7 @@ async def test_a_failed_last_turn_tells_its_org_why_there_is_no_summary_once(
         thread_id=thread_id,
         org_id=HENDERSON,
         turn_id=turn_id,
-        reason="session_budget",
+        reason="demo_budget",
     )
     # A retry after the commit writes nothing more.
     for _ in range(2):
@@ -834,8 +834,8 @@ async def test_a_failed_last_turn_tells_its_org_why_there_is_no_summary_once(
     assert [(note.author_kind, note.body) for note in ours] == [
         (
             "claude",
-            "Claude couldn't write a closing summary for our side: this session's live-model "
-            "budget had too little left when its last turn ran. The other side had already "
+            "Claude couldn't write a closing summary for our side: the demo's spend limit for "
+            "live models was reached when its last turn ran. The other side had already "
             "closed the conversation.",
         )
     ]

@@ -127,15 +127,8 @@ class Settings(BaseSettings):
         Decimal(100),
         Decimal(200),
     )
-    # Hosted demo caps (§14), in the `budgets` table; they apply only to live calls
-    # with APP_ENV=prod, or locally with HOSTED_CAPS_IN_DEV (`budget_pg.HostedCaps`).
-    # The lineage cap is per browser session, so Reset never refills it. Prod refuses
-    # to boot without the other three; elsewhere unset means none.
-    lineage_budget_usd: Decimal = Field(default=Decimal(10), gt=0)
-    daily_budget_usd: Decimal | None = Field(default=None, gt=0)
-    global_budget_usd: Decimal | None = Field(default=None, gt=0)
-    client_daily_budget_usd: Decimal | None = Field(default=None, gt=0)
-    hosted_caps_in_dev: bool = False
+    # The hosted demo has no in-app spend caps: the Anthropic Console's workspace spend
+    # limit is its backstop, and the live switch pauses it (`llm.live_switch`).
 
     # --- Worker capacity (`WorkerConfig.from_settings`) ------------------------------
     worker_model_concurrency: int = Field(default=4, ge=1)
@@ -172,9 +165,6 @@ class Settings(BaseSettings):
         "temporal_api_key",
         "anthropic_api_key",
         "spend_ledger_path",
-        "daily_budget_usd",
-        "global_budget_usd",
-        "client_daily_budget_usd",
         "session_secret",
         "access_code",
         "admin_secret",
@@ -218,7 +208,7 @@ class Settings(BaseSettings):
 
     def _check_prod(self) -> None:
         """Prod fails closed: live models (the production mix or one known model for every
-        role), the gate on, and every hosted cap set."""
+        role) and the gate on."""
         secret = self.session_secret.get_secret_value() if self.session_secret else ""
         if len(secret) < _MIN_PROD_SECRET_LEN:
             raise ValueError(
@@ -231,14 +221,6 @@ class Settings(BaseSettings):
             allowed = ", ".join(sorted(PROD_MODEL_OVERRIDES))
             raise ValueError(f"MODEL_OVERRIDE must be unset or one of {allowed} when APP_ENV=prod")
         _check_access_code(self.access_code.get_secret_value() if self.access_code else "")
-        caps = {
-            "DAILY_BUDGET_USD": self.daily_budget_usd,
-            "GLOBAL_BUDGET_USD": self.global_budget_usd,
-            "CLIENT_DAILY_BUDGET_USD": self.client_daily_budget_usd,
-        }
-        missing = [name for name, cap in caps.items() if cap is None]
-        if missing:
-            raise ValueError(f"{', '.join(missing)} must be set when APP_ENV=prod")
 
     # --- Derived values -------------------------------------------------------------
 

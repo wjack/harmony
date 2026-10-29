@@ -107,9 +107,7 @@ async def requester_wrote(session: AsyncSession, thread: Thread) -> bool:
 _STOPPED: Final[dict[FailureReason, str]] = {
     "model_error": "the model service returned an error",
     "paused": "live models were paused",
-    "session_budget": "a live-model budget ran out",
-    "daily_budget": "a live-model budget ran out",
-    "demo_budget": "a live-model budget ran out",
+    "demo_budget": "the demo's spend limit for live models was reached",
 }
 
 

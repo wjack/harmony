@@ -2,7 +2,7 @@
 
 An exception an activity doesn't catch reaches the workflow as an `ApplicationError`
 with only its class name and message. A refused reservation is therefore re-raised
-with the cap that refused it in its details (`budget_refused`), and the workflows read
+with what refused it in its details (`budget_refused`), and the workflows read
 it back (`failure_reason`) into the `FailureReason` the chat and the thread show.
 
 Workflow code imports this module inside `workflow.unsafe.imports_passed_through()`.
@@ -37,9 +37,9 @@ def budget_refused(error: BudgetExhausted) -> ApplicationError:
 
 
 def failure_reason(error: ActivityError) -> FailureReason:
-    """Why a model activity failed for good: the refusing cap for a refused
-    reservation, and `model_error` for anything else (a 400, a call that failed on
-    every retry, an incomplete turn)."""
+    """Why a model activity failed for good: what refused a refused reservation, and
+    `model_error` for anything else (a 400, a call that failed on every retry, an
+    incomplete turn)."""
     cause = error.cause
     if isinstance(cause, ApplicationError) and cause.type == BUDGET_EXHAUSTED_ERROR:
         return BUDGET_FAILURES[_refusing_kind(cause)]

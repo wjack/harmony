@@ -5,8 +5,8 @@ means no CORS and cookies just work (ARCHITECTURE.md §3); it also lets every
 state-changing `/api` request be refused unless the browser says it is same-origin
 (`SameOriginWrites`). The lifespan configures the process's logging (`harmony.logs`;
 uvicorn sets up only its own loggers) and runs its background pieces: the LISTEN bus
-(§8), the Temporal client and retirer, the hosted budget rows
-(`budget_pg.ensure_hosted_rows`), and the startup check that retires worlds whose
+(§8), the Temporal client and retirer, the live switch row
+(`live_switch.ensure_live_switch`), and the startup check that retires worlds whose
 workflows Temporal no longer has (§13).
 
 The passcode gate (`api/gate.py`) is the outermost middleware, with `BodyLimit` just
@@ -68,7 +68,7 @@ from harmony.db.engine import create_sessionmaker, engine_from_settings
 from harmony.events.bus import EventBus
 from harmony.events.pg_bus import PgEventBus
 from harmony.events.schemas import EventEnvelope
-from harmony.llm.budget_pg import ensure_hosted_rows
+from harmony.llm.live_switch import ensure_live_switch
 from harmony.logs import configure_logging
 from harmony.temporal.client import connect_client
 from harmony.worlds.retirer import Retirer, SyncRetirer
@@ -195,7 +195,7 @@ async def _start_services(services: AppServices, stack: AsyncExitStack) -> AppSe
     # Fails fast on a bad DATABASE_DIRECT_URL rather than degrading to polling.
     await bus.start()
     stack.push_async_callback(bus.aclose)
-    await ensure_hosted_rows(services.sessionmaker, settings)
+    await ensure_live_switch(services.sessionmaker)
 
     # Lazy: the API starts (and serves everything but retirement) while Temporal is down.
     identity = f"{os.getpid()}@{socket.gethostname()} harmony-api {settings.build_sha[:12]}"

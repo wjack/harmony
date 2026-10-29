@@ -1173,7 +1173,7 @@ export interface RequestsRouteOptions {
   steerHangs?: boolean;
   /** How a reopen settles: opened, or failed for a reason. By default it stays working. */
   reopenSettles?: "opened" | NonNullable<SteerView["failure_reason"]>;
-  /** What `GET /api/budget` says (default `ok`: live models off, nothing stopped). */
+  /** What `GET /api/budget` says (default `ok`: live models on, nothing stopped). */
   budget?: BudgetState;
 }
 
@@ -1365,7 +1365,7 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
   return {
     ...shellRoutes(actor),
     "GET /api/session": () => session,
-    "GET /api/budget": (): BudgetView => ({ live: false, state: options.budget ?? "ok" }),
+    "GET /api/budget": (): BudgetView => ({ live: true, state: options.budget ?? "ok" }),
     // The decision card says which mode held a message, from our side's settings.
     "GET /api/orgs/{slug}/harmony": customizeRoutes(actor)["GET /api/orgs/{slug}/harmony"],
     "GET /api/inbox": () => inboxFor(world, actor),

@@ -56,7 +56,7 @@ ENGINE_FIELDS: Final = (
     "ledger spend this run: $",
     "world spend: $",
     "at each beat:",
-    "lineage peak spent + reserved: $",
+    "peak spent + reserved: $",
     "re-priced at production prices: $",
     "peak RSS (in-process worker, app and player):",
 )

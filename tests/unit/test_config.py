@@ -22,9 +22,6 @@ _ENV_KEYS = (
     "DATABASE_DIRECT_URL",
     "ADMIN_SECRET",
     "ACCESS_CODE",
-    "DAILY_BUDGET_USD",
-    "GLOBAL_BUDGET_USD",
-    "CLIENT_DAILY_BUDGET_USD",
 )
 
 
@@ -151,9 +148,6 @@ def test_a_refusal_never_prints_a_secret_from_the_environment(
         "APP_ENV": "prod",
         "MODEL_MODE": "live",
         "MODEL_OVERRIDE": "claude-haiku-5",
-        "DAILY_BUDGET_USD": "60",
-        "GLOBAL_BUDGET_USD": "250",
-        "CLIENT_DAILY_BUDGET_USD": "25",
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -165,30 +159,13 @@ def test_a_refusal_never_prints_a_secret_from_the_environment(
         assert not any(secret[i : i + 8] in text for i in range(len(secret) - 7)), secret
 
 
-@pytest.mark.parametrize(
-    ("field", "env_name"),
-    [
-        ("daily_budget_usd", "DAILY_BUDGET_USD"),
-        ("global_budget_usd", "GLOBAL_BUDGET_USD"),
-        ("client_daily_budget_usd", "CLIENT_DAILY_BUDGET_USD"),
-    ],
-)
-def test_prod_refuses_a_missing_cap(field: str, env_name: str) -> None:
-    with pytest.raises(ValidationError, match=env_name):
-        prod_settings(**{field: None})
-
-
 @pytest.mark.parametrize("app_env", ["local", "ci"])
 def test_local_and_ci_defaults_are_unchanged(app_env: str) -> None:
     settings = make(app_env=app_env)
     assert settings.access_code is None
     assert settings.model_mode == "scripted"
     assert settings.model_override == ("claude-haiku-5-5" if app_env == "local" else None)
-    assert (settings.daily_budget_usd, settings.global_budget_usd) == (None, None)
-    assert settings.client_daily_budget_usd is None
-    assert settings.lineage_budget_usd == Decimal(10)
     assert settings.client_ip_header == "x-forwarded-for"
-    assert not settings.hosted_caps_in_dev
     assert (
         settings.worker_model_concurrency,
         settings.worker_model_rate,

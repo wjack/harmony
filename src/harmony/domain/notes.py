@@ -120,9 +120,7 @@ async def add(
 
 
 _UNSUMMARIZED_BECAUSE: Final[Mapping[FailureReason, str]] = {
-    "session_budget": "this session's live-model budget had too little left",
-    "daily_budget": "the daily live-model budget had too little left",
-    "demo_budget": "the demo's live-model budget had too little left",
+    "demo_budget": "the demo's spend limit for live models was reached",
     "paused": "live models were paused",
     "model_error": "the model service returned an error",
     "refused": "the model declined to go on",

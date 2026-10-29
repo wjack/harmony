@@ -286,8 +286,8 @@ const STAGES = {
   }),
 
   /**
-   * Today's live budget ran out mid-story: Ridgeline's thread closed before it replied,
-   * with no summary, while Northlake's goes on.
+   * The demo's live-model budget ran out mid-story: Ridgeline's thread closed before it
+   * replied, with no summary, while Northlake's goes on.
    */
   stopped: deskStage({
     recipients: {
@@ -297,7 +297,7 @@ const STAGES = {
     },
     threads: [
       storyThread(castOrgs.northlake, "active", 2, 1, LINES.northlakeChecking),
-      storyThread(castOrgs.ridgeline, "closed", 1, 6, LINES.ridgelineOpening, undefined, "daily_budget"),
+      storyThread(castOrgs.ridgeline, "closed", 1, 6, LINES.ridgelineOpening, undefined, "demo_budget"),
     ],
   }),
 

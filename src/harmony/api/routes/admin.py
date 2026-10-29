@@ -2,10 +2,9 @@
 the passcode gate with it; a missing or wrong secret without the gate's cookie gets the
 gate's 401 `passcode_required`, and with the cookie 403 `not_admin`.
 
-- GET /api/admin/spend: the live switch, global, today, the number of lineages today,
-  the top 10 lineages and the top 5 client keys by spend
+- GET /api/admin/live: the live switch, and any provider block
 - POST /api/admin/live {enabled}: pause or resume live models (`live_controls`);
-  resuming also clears a provider block, and never touches a cap. Every live world gets
+  resuming also clears a provider block. Every live world gets
   `demo.notice {kind: "budget"}`, so open tabs refetch the budget at once
 - GET /api/admin/worlds/{world_id}: a world's status and its retire workflow's
 - GET /api/admin/client-key: the caller's own client key and the headers it came from
@@ -26,7 +25,7 @@ from typing import Annotated, Final, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import WorkflowExecutionStatus
@@ -41,7 +40,7 @@ from harmony.db.models.choices import WorldStatus
 from harmony.db.uow import unit_of_work
 from harmony.errors import WorldRetired
 from harmony.events.schemas import DemoNotice, EventScope
-from harmony.llm import budget_pg
+from harmony.llm import live_switch
 from harmony.temporal.workflows.retire_world import retire_workflow_id
 
 router = APIRouter(tags=["admin"])
@@ -70,38 +69,13 @@ class _View(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
-class BudgetTotals(_View):
-    cap_usd: float
-    spent_usd: float
-    reserved_usd: float
-
-
-class KeySpend(BudgetTotals):
-    """One budget row: a `lineage:` or `client:` key."""
-
-    key: str
-
-
 class LiveState(_View):
-    """The live switch, as `POST /api/admin/live` leaves it."""
-
-    model_config = ConfigDict(frozen=True, validate_by_name=True, validate_by_alias=True)
+    """The live switch."""
 
     paused: bool
     # Set after the provider's own spend limit refused a call; live calls are refused
     # locally until then.
     provider_blocked_until: datetime | None
-    # The `global` budget row; None when no global cap is configured (local runs).
-    global_: BudgetTotals | None = Field(alias="global")
-
-
-class AdminSpendView(_View):
-    live: LiveState
-    # Today's `daily:` row; None before today's first live call with no daily cap.
-    today: BudgetTotals | None
-    lineages_today: int
-    top_lineages: list[KeySpend]
-    top_clients: list[KeySpend]
 
 
 class LiveToggle(BaseModel):
@@ -127,17 +101,10 @@ class ClientKeyView(_View):
     cf_connecting_ip: str | None
 
 
-@router.get("/admin/spend", response_model=AdminSpendView, responses=problem_entries(*_ERRORS))
-async def get_spend(services: ServicesDep, x_admin_secret: AdminSecret = None) -> AdminSpendView:
+@router.get("/admin/live", response_model=LiveState, responses=problem_entries(*_ERRORS))
+async def get_live(services: ServicesDep, x_admin_secret: AdminSecret = None) -> LiveState:
     require_admin(services.settings, x_admin_secret)
-    report = await budget_pg.spend_report(services.sessionmaker)
-    return AdminSpendView(
-        live=_live_state(report.live),
-        today=_totals(report.today) if report.today is not None else None,
-        lineages_today=report.lineages_today,
-        top_lineages=[_key_spend(row) for row in report.top_lineages],
-        top_clients=[_key_spend(row) for row in report.top_clients],
-    )
+    return _live_state(await live_switch.live_report(services.sessionmaker))
 
 
 @router.post("/admin/live", response_model=LiveState, responses=problem_entries(*_ERRORS))
@@ -145,7 +112,7 @@ async def set_live(
     body: LiveToggle, services: ServicesDep, x_admin_secret: AdminSecret = None
 ) -> LiveState:
     require_admin(services.settings, x_admin_secret)
-    report = await budget_pg.set_live(services.sessionmaker, enabled=body.enabled)
+    report = await live_switch.set_live(services.sessionmaker, enabled=body.enabled)
     await _tell_live_worlds(services.sessionmaker)
     return _live_state(report)
 
@@ -220,40 +187,13 @@ async def _tell_live_worlds(sessionmaker: async_sessionmaker[AsyncSession]) -> N
             continue  # retired since the read: nobody is watching it
 
 
-def _totals(totals: budget_pg.Totals) -> BudgetTotals:
-    return BudgetTotals(
-        cap_usd=float(totals.cap_usd),
-        spent_usd=float(totals.spent_usd),
-        reserved_usd=float(totals.reserved_usd),
-    )
-
-
-def _key_spend(row: budget_pg.KeyTotals) -> KeySpend:
-    return KeySpend(
-        key=row.key,
-        cap_usd=float(row.cap_usd),
-        spent_usd=float(row.spent_usd),
-        reserved_usd=float(row.reserved_usd),
-    )
-
-
-def _live_state(report: budget_pg.LiveReport) -> LiveState:
-    # By alias: `global` is a keyword, so the typed constructor can't name it.
-    return LiveState.model_validate(
-        {
-            "paused": report.paused,
-            "provider_blocked_until": report.provider_blocked_until,
-            "global": _totals(report.global_) if report.global_ is not None else None,
-        }
-    )
+def _live_state(report: live_switch.LiveReport) -> LiveState:
+    return LiveState(paused=report.paused, provider_blocked_until=report.provider_blocked_until)
 
 
 __all__ = [
-    "AdminSpendView",
     "AdminWorldView",
-    "BudgetTotals",
     "ClientKeyView",
-    "KeySpend",
     "LiveState",
     "LiveToggle",
     "RetireWorkflowStatus",

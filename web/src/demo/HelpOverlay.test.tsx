@@ -7,8 +7,8 @@ import { renderLive } from "../test/shellHarness";
 import { demoStore } from "./store";
 
 /**
- * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The live
- * budget has no box, as when it isn't shown.
+ * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The
+ * live-models pill has no box, as when it isn't shown.
  */
 const BOXES: Record<string, [x: number, y: number, width: number, height: number]> = {
   "demo-controls": [62, 7, 121, 24],
@@ -70,7 +70,7 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
   // A control that isn't on screen goes without its callout.
   const shown = within(overlay).getAllByRole("listitem");
   expect(shown).toHaveLength(5);
-  expect(shown.map((item) => item.textContent).join(" ")).not.toContain("budget");
+  expect(shown.map((item) => item.textContent).join(" ")).not.toContain("Live models");
   expect(document.activeElement).toBe(within(overlay).getByRole("button", { name: "Close this guide" }));
 
   fireEvent.keyDown(overlay, { key: "Escape" });

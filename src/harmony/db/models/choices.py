@@ -32,7 +32,6 @@ __all__ = [
     "Provenance",
     "ReleasedBy",
     "ReopenBlock",
-    "ReservationStatus",
     "ScopeKind",
     "Side",
     "SteerDraftOutcome",
@@ -67,17 +66,16 @@ NoteAuthor = Literal["member", "claude"]
 ThreadState = Literal["active", "awaiting_principal", "closed", "expired"]
 # Why a turn failed or a thread stopped (3.5); one enum for every surface. The budget
 # reasons come from `BudgetKind` through `payloads.BUDGET_FAILURES`.
-FailureReason = Literal[
-    "session_budget", "daily_budget", "demo_budget", "paused", "model_error", "refused"
-]
+FailureReason = Literal["demo_budget", "paused", "model_error", "refused"]
 # Why a run of a thread ended (REOPEN.md §2.1): every surface shows "Closed" and this.
 # Null while the thread is open, and on terminal rows written before it existed.
 EndReason = Literal["closed", "quiet", "unsent", "turn_limit", "deadline", "stopped"]
 # Why the viewer's side can't reopen a thread (REOPEN.md §3.2). `unfinished` comes
 # only from the reopen route's 409, never from the thread read.
 ReopenBlock = Literal["history", "unfinished", "not_asked", "limit", "refused", "they_closed"]
-# Which hosted cap refused a call (`BudgetExhausted.kind`, 3.4).
-BudgetKind = Literal["session", "client", "daily", "global", "paused", "provider"]
+# What refused a live call (`BudgetExhausted.kind`, 3.4): the dev ledger's cap, the
+# live switch, or a block after the provider's own spend limit refused a call.
+BudgetKind = Literal["global", "paused", "provider"]
 ThreadMessageKind = Literal["message", "close"]
 # Every message says whether an agent, an agent with a named human's approval, or a
 # human who took over wrote it.
@@ -112,5 +110,3 @@ CardStatus = Literal["pending", "approved", "rejected", "superseded"]
 # How a rejected card was rejected: the Decline step, or a member message typed while it
 # waited.
 CardRejectedWith = Literal["decline", "message"]
-
-ReservationStatus = Literal["reserved", "settled", "released"]

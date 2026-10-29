@@ -58,8 +58,8 @@ async def reset_world(
     gate: GateDep,
     response: Response,
 ) -> ResetResult | JSONResponse:
-    """Fork a fresh world from the same scenario, keeping the acting member's slug and
-    the session's budget lineage; the old world is retired behind it. Bumps the epoch."""
+    """Fork a fresh world from the same scenario, keeping the acting member's slug; the
+    old world is retired behind it. Bumps the epoch."""
     try:
         switch = await worlds.fork_and_reset(
             actor.session_id,

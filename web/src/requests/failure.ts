@@ -14,13 +14,13 @@ import type { ApiProblem } from "./types";
 
 export type SteerFailure = NonNullable<SteerView["failure_reason"]>;
 
-type BudgetReason = Extract<FailureReason, "session_budget" | "daily_budget" | "demo_budget" | "paused">;
+type BudgetReason = Extract<FailureReason, "demo_budget" | "paused">;
 
 function isBudget(reason: SteerFailure | null): reason is BudgetReason {
-  return reason === "session_budget" || reason === "daily_budget" || reason === "demo_budget" || reason === "paused";
+  return reason === "demo_budget" || reason === "paused";
 }
 
-/** "the daily live-model budget ran out", to follow a colon. */
+/** "the demo's live-model budget ran out", to follow a colon. */
 function clause(sentence: string): string {
   return sentence.charAt(0).toLowerCase() + sentence.slice(1).replace(/\.$/, "");
 }
@@ -59,7 +59,7 @@ export function steerOutcome(steer: SteerView, budget: BudgetState, hasGuidance:
     return { text: "The conversation closed before Claude finished. Your instruction is saved.", tone: "failed", action: null };
   }
   if (isBudget(reason)) {
-    // The line names the cap that's spent now; once nothing is, trying again may work.
+    // The line says what stops live turns now; once nothing does, trying again may work.
     return {
       text: `Claude couldn't act on this. ${failureLine(reason, budget)}`,
       tone: "failed",
@@ -96,11 +96,11 @@ export function steerOutcome(steer: SteerView, budget: BudgetState, hasGuidance:
 
 /** Why one of our reopen attempts failed (REOPEN.md §9), and whether Try again could work now. */
 export function reopenFailure(reason: SteerFailure | null, budget: BudgetState): { text: string; retry: boolean } {
-  if (isBudget(reason) && reason !== "paused") {
-    const why = budgetLine(budget) ?? stoppedLine(reason, budget);
-    return { text: `Claude couldn't pick this up: ${clause(why)}.`, retry: budget === "ok" };
-  }
   switch (reason) {
+    case "demo_budget": {
+      const why = budgetLine(budget) ?? stoppedLine(reason, budget);
+      return { text: `Claude couldn't pick this up: ${clause(why)}.`, retry: budget === "ok" };
+    }
     case "model_error":
     case "paused":
       return { text: `Claude couldn't pick this up: ${clause(stoppedLine(reason, budget))}.`, retry: true };

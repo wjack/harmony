@@ -129,7 +129,7 @@ check_gate_walk() {
   done
   gated POST /api/session/start || return 1
   gated POST /api/admin/live -H 'Content-Type: application/json' --data '{"enabled": false}' || return 1
-  gated GET /api/admin/spend -H 'X-Admin-Secret: not-the-secret' || return 1
+  gated GET /api/admin/live -H 'X-Admin-Secret: not-the-secret' || return 1
   # `--head`, not `-X HEAD`: with -X curl still waits for the Content-Length body a HEAD
   # response never sends, and times out.
   status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
@@ -143,8 +143,8 @@ check_gate_walk() {
   [[ $status == 200 ]] || { echo "GET /api/gate: $status"; return 1; }
   # compose.ci.yaml's throwaway admin secret: the one credential besides the cookie.
   status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
-    -H 'X-Admin-Secret: ci-only-admin-secret' "$HARMONY_BASE_URL/api/admin/spend")" || return 1
-  [[ $status == 200 ]] || { echo "GET /api/admin/spend with the secret: $status"; return 1; }
+    -H 'X-Admin-Secret: ci-only-admin-secret' "$HARMONY_BASE_URL/api/admin/live")" || return 1
+  [[ $status == 200 ]] || { echo "GET /api/admin/live with the secret: $status"; return 1; }
   echo "healthz open to GET and HEAD; the gate page and the admin secret pass"
 }
 

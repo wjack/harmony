@@ -25,7 +25,6 @@ async def create_world(
             scenario=scenario,
             mode="live",
             build_sha="test",
-            budget_lineage=uuid4(),
         )
         uow.add_event(
             WorldCreated(scenario=scenario, mode="live", build_sha="test"), EventScope.world()

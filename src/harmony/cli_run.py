@@ -62,7 +62,6 @@ if TYPE_CHECKING:
     from harmony.storyrun.beats import StoryRun
     from harmony.storyrun.decide import Decisions
     from harmony.storyrun.play import StoryPlayer
-    from harmony.storyrun.spend import LineageMeter
     from harmony.storyrun.worker import ActivityLog, InProcessWorker
     from harmony.worlds.retirer import Retirer
 
@@ -288,12 +287,10 @@ async def _run(
     from harmony.storyrun import report
     from harmony.storyrun.api import ApiError, in_process
     from harmony.storyrun.play import StoryPlayer
-    from harmony.storyrun.spend import LineageMeter
     from harmony.worlds.retirer_temporal import TemporalRetirer
 
     engine = engine_from_settings(settings, application_name="harmony-run")
     sessionmaker = create_sessionmaker(engine)
-    meter = LineageMeter(sessionmaker)
     ledger_before = report.ledger_total(settings)
     try:
         async with _temporal(options, settings, sessionmaker) as (client, worker):
@@ -315,7 +312,6 @@ async def _run(
                     failures=worker.log.failures if worker is not None else None,
                     send_without_review=options.send_without_confirmation,
                     skip_approvals=options.skip_approvals,
-                    on_poll=meter.sample,
                     edits=edits,
                 )
                 try:
@@ -328,7 +324,6 @@ async def _run(
                         RunMeasures(
                             scenario=scenario.name,
                             log=worker.log if worker is not None else None,
-                            meter=meter,
                             ledger_before=ledger_before,
                         ),
                         settings,
@@ -362,7 +357,6 @@ class RunMeasures:
     scenario: str
     # The in-process worker's failed attempts; None on an external worker.
     log: ActivityLog | None
-    meter: LineageMeter
     ledger_before: Decimal | None
 
 
@@ -427,7 +421,6 @@ async def _engine_report(
             result,
             ledger_before=measures.ledger_before,
             ledger_after=report.ledger_total(settings),
-            measured_peak_usd=measures.meter.peak_usd,
         )
         + report.rss_lines(peak_rss_mb() if measures.log is not None else None)
     )

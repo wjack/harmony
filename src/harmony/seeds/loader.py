@@ -226,7 +226,6 @@ async def seed_world(
     scenario: Scenario,
     *,
     build_sha: str,
-    budget_lineage: UUID,
     mode: WorldMode = "live",
 ) -> SeededWorld:
     """Add `uow.world_id` as a new world seeded from `scenario`, and queue `world.created`.
@@ -241,7 +240,6 @@ async def seed_world(
         scenario=scenario.name,
         mode=mode,
         build_sha=build_sha,
-        budget_lineage=budget_lineage,
     )
     session.add_all(_community_rows(scenario, world_id))
     await session.flush()
@@ -278,22 +276,19 @@ async def load_world(
     scenario: str | Scenario,
     *,
     build_sha: str,
-    budget_lineage: UUID | None = None,
     world_id: UUID | None = None,
     root: Path = SCENARIOS_DIR,
 ) -> UUID:
     """Seed a new live world from `scenario` in one transaction; returns its ID.
 
     Not attached to any visitor session (the world service does that); used by
-    `harmony seed` and tests. A new budget lineage is minted unless one is given.
+    `harmony seed` and tests.
     """
     if isinstance(scenario, str):
         scenario = load_scenario(scenario, root)
     world_id = world_id or uuid4()
     async with unit_of_work(sessionmaker, world_id) as uow:
-        await seed_world(
-            uow, scenario, build_sha=build_sha, budget_lineage=budget_lineage or uuid4()
-        )
+        await seed_world(uow, scenario, build_sha=build_sha)
         await uow.commit()
     return world_id
 

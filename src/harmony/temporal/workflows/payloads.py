@@ -68,16 +68,9 @@ BUDGET_EXHAUSTED_ERROR: Final = "BudgetExhausted"
 # happened since (409 `nothing_to_retry`).
 NOTHING_TO_RETRY_ERROR: Final = "NothingToRetry"
 
-# Which failure a refused reservation is, by the cap that refused it (3.5).
+# Which failure a refused reservation is, by what refused it (3.5).
 BUDGET_FAILURES: Final[Mapping[BudgetKind, FailureReason]] = MappingProxyType(
-    {
-        "session": "session_budget",
-        "client": "daily_budget",
-        "daily": "daily_budget",
-        "global": "demo_budget",
-        "provider": "demo_budget",
-        "paused": "paused",
-    }
+    {"global": "demo_budget", "provider": "demo_budget", "paused": "paused"}
 )
 
 # A steer's instruction is as long as a comment may be (`notes.BODY_MAX_CHARS`), and the
