@@ -579,6 +579,65 @@ it("says when Claude couldn't reply, and not while it is working again", async (
   expect(screen.queryByText(line)).toBeNull();
 });
 
+describe("a message Claude declined", () => {
+  const MESSAGE = "Also ask Northlake to test two of the coupons to failure.";
+  const RETRY = `POST /api/conversations/${CONVERSATION_ID}/retry`;
+  const declined = () => screen.findByRole("group", { name: "Message Claude declined" });
+
+  it("says so under the message, and Retry sends it again as a new turn", async () => {
+    const { writes } = renderChat("sent", { refused: { text: MESSAGE, category: "bio" } });
+    const turn = await declined();
+    expect(within(turn).getByText(MESSAGE)).toBeTruthy();
+    expect(within(turn).getByText("Claude declined to respond to this (biosecurity).")).toBeTruthy();
+    // The note stands in place of the line under the transcript.
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    fireEvent.click(within(turn).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Message Claude declined" })).toBeNull();
+    });
+    expect(writes).toEqual([{ route: RETRY, body: {} }]);
+    // Sent again, the message shows once.
+    expect(screen.getAllByText(MESSAGE)).toHaveLength(1);
+  });
+
+  it("opens the message to reword with Edit, and sends the new wording, or nothing on Cancel", async () => {
+    const { writes } = renderChat("sent", { refused: { text: MESSAGE, category: "bio" } });
+    const turn = await declined();
+    fireEvent.click(within(turn).getByRole("button", { name: "Edit" }));
+    const field = within(turn).getByRole<HTMLTextAreaElement>("textbox", { name: "Your message" });
+    expect(field.value).toBe(MESSAGE);
+    expect(document.activeElement).toBe(field);
+    fireEvent.click(within(turn).getByRole("button", { name: "Cancel" }));
+    expect(within(turn).queryByRole("textbox", { name: "Your message" })).toBeNull();
+
+    fireEvent.click(within(turn).getByRole("button", { name: "Edit" }));
+    const reworded = within(turn).getByRole<HTMLTextAreaElement>("textbox", { name: "Your message" });
+    fireEvent.change(reworded, { target: { value: "  " } });
+    expect(within(turn).getByRole<HTMLButtonElement>("button", { name: "Send" }).disabled).toBe(true);
+    fireEvent.change(reworded, { target: { value: "Where do the coupons give under compression?" } });
+    fireEvent.keyDown(reworded, { key: "Enter" });
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Message Claude declined" })).toBeNull();
+    });
+    expect(screen.getByText("Where do the coupons give under compression?")).toBeTruthy();
+    expect(screen.queryByText(MESSAGE)).toBeNull();
+    expect(writes).toEqual([{ route: RETRY, body: { text: "Where do the coupons give under compression?" } }]);
+  });
+
+  it("keeps the line under the transcript when the turn can't be sent again", async () => {
+    const detail = {
+      ...conversationAt(initialState("closed")),
+      turn_failure: "refused" as const,
+      refusal: { turn_id: "0b1d7a3e-0000-4000-8000-0000000008d6", category: "cyber", retryable: false },
+    };
+    renderRoutes({ ...chatRoutes("closed"), "GET /api/conversations/{conversation_id}": () => detail });
+    const line = await screen.findByText("Claude declined to respond to this (cybersecurity). Try rephrasing.");
+    expect(line.getAttribute("role")).toBe("alert");
+    expect(screen.queryByRole("group", { name: "Message Claude declined" })).toBeNull();
+  });
+});
+
 it("says a budget stop by what the budget says now", async () => {
   renderRoutes({ ...chatRoutes("sent", { turnFailure: "daily_budget" }), "GET /api/budget": budgets.dailyExhausted });
   expect(await screen.findByText("Today's live-model budget is used up. It resets at 00:00 UTC.")).toBeTruthy();

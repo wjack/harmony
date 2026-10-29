@@ -1,12 +1,15 @@
 /**
  * What the decision card says about an open item (EDIT.md §8.3, composer.html): whose it
- * is, what it asks, why it waits, what approving and declining do, and how the held
- * item's org is set. Anyone who can see the item may act on it, so the words name the
+ * is, what it asks, why it waits (or what Claude declined), what approving and declining
+ * do, and how the held item's org is set. Anyone who can see the item may act on it, so the words name the
  * assignee when it isn't the viewer. Pure, so the wording is unit-tested.
  */
+import { declinedLine } from "../chat/failureCopy";
 import { firstName } from "../shell/names";
 import { possessive } from "./format";
 import type { ConsultView, EscalationDraft, EscalationView, MemberRef, OrgRef } from "./types";
+
+export type Refusal = NonNullable<EscalationView["refusal"]>;
 
 /** The longest answer or message the server takes with a resolution. */
 export const ANSWER_MAX_CHARS = 20_000;
@@ -31,6 +34,10 @@ export function eyebrow(escalation: EscalationView, them: OrgRef, memberId: stri
   if (escalation.kind === "consult") {
     const whose = mine ? "your" : possessive(either(escalation.assignees));
     return `Claude needs ${whose} answer before replying to ${them.name}`;
+  }
+  if (escalation.kind === "refused_turn") {
+    const who = mine ? "you" : either(escalation.assignees);
+    return `Claude stopped before replying to ${them.name} · ${who} can retry or end it`;
   }
   const wants = `Claude wants to send this to ${them.name}`;
   return mine ? wants : `${wants} · ${either(escalation.assignees)} reviews`;
@@ -68,6 +75,18 @@ const ASK_MODE_REASONS: ReadonlySet<string> = new Set([
 export function reasonLine(escalation: EscalationView): string | null {
   const reason = escalation.reason.trim();
   return reason === "" || ASK_MODE_REASONS.has(reason) ? null : reason;
+}
+
+/** The note in the reason's place when Claude declined the step the item waits on. */
+export function refusalLine(refusal: Refusal): string {
+  switch (refusal.step) {
+    case "answer":
+      return declinedLine("draft an answer", refusal.category);
+    case "sharing_check":
+      return declinedLine("check this answer against what you share", refusal.category);
+    case "turn":
+      return declinedLine("continue the conversation", refusal.category);
+  }
 }
 
 /** The draft part's name. */

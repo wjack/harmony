@@ -289,7 +289,7 @@ flowchart LR
   - a discovery refusal means `fit: unknown`, shown as such;
   - a consult-answerer refusal routes the consult to the default assignee with no draft;
   - a sharing check that refuses or fails counts as failed, so the answer goes to a person;
-  - a representative refusal closes the thread with no summary, and partial streamed text is retracted.
+  - a representative refusal holds the thread for that side's team (a `refused_turn` item: Retry, Edit, or end the conversation, which closes it with no summary), and partial streamed text is retracted.
 - Haiku 5.5 has no server-side fallback.
 
 ## 6. Discovery: direct agent matching

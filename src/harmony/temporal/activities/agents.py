@@ -203,6 +203,8 @@ class InternalTurnResult(_Payload):
     # An update look with no news since Claude last wrote or looked: no model call,
     # nothing stored.
     skipped: bool = False
+    # `stop_details.category` when `stop` is `refusal`.
+    refusal_category: str | None = None
 
 
 # --- rep_turn ------------------------------------------------------------------------
@@ -231,6 +233,9 @@ class RepTurnInput(_Payload):
     reopened: bool = False
     # The thread's highest message seq when this run began (`RepToolScope.run_start_seq`).
     run_start_seq: int = Field(default=0, ge=0)
+    # A Retry of the side's turn `retry_of`, which Claude declined: it opens as that turn
+    # did, and is asked to write.
+    retry_of: int | None = Field(default=None, ge=1)
 
 
 class RepTurnResult(_Payload):
@@ -267,6 +272,13 @@ class AnswerConsultInput(_Payload):
     # A rev the `use_answer` Update reserved (`draft_rev` > 1): the item whose member
     # answer it is drafted from.
     reuse_from: UUID | None = None
+    # A rev the `retry_answer` Update reserved (`draft_rev` > 1): the step Claude
+    # declined, again. With a draft on the item, only the sharing check runs, on that
+    # draft or on `draft_text`, the member's edit of it; with none, the answerer drafts,
+    # on `question`, the member's rewording of the question, when given.
+    retry: bool = False
+    draft_text: str | None = None
+    question: str | None = None
 
 
 # --- a steer's parts -----------------------------------------------------------------
@@ -491,6 +503,7 @@ class AgentActivities:
             card_id=card.card_id if card is not None else None,
             card_tool_use_id=card.tool_use_id if card is not None else None,
             card_auto=card.auto if card is not None else False,
+            refusal_category=outcome.refusal_category,
         )
 
     @activity.defn
@@ -528,16 +541,19 @@ class AgentActivities:
                     uow, thread_id=turn.thread_id, side=turn.side, turn_id=turn.turn_id
                 )
                 await uow.commit()
-            if turn.turn == 1:
+            # A refused call stored no notices: a Retry of the first turn needs the date too.
+            if (turn.retry_of or turn.turn) == 1:
                 notices = _joined(context.world_date_notice(today), notices)
             fallback = _fallback(turn, thread)
             nothing_new = not (turn.owed or incoming) and fallback == NOTHING_NEW
             # Nor does a held message declined without a reason leave anything to
             # answer: text after it acknowledges the representative's own side, and
             # sent, it would be held as a new message for the same person to decline.
-            # A reopened turn is asked to write, whatever it is owed.
-            quiet = not turn.reopened and (
-                nothing_new or (not incoming and _only_declined(turn.owed))
+            # A reopened turn, or a Retry, is asked to write, whatever it is owed.
+            quiet = (
+                not turn.reopened
+                and turn.retry_of is None
+                and (nothing_new or (not incoming and _only_declined(turn.owed)))
             )
             executor = RepToolExecutor(
                 self._sessionmaker,
@@ -667,8 +683,15 @@ class AgentActivities:
                 row = await consults.get(
                     session, world_id=consult.world_id, consult_id=consult.consult_id
                 )
+                drafted: DraftReady | AnswerFailed | None = (
+                    await _draft_to_check(session, consult) if consult.retry else None
+                )
+            if drafted is None and consult.retry and consult.question is not None:
+                async with unit_of_work(self._sessionmaker, consult.world_id) as uow:
+                    await consults.rephrase(uow, consult.consult_id, consult.question)
+                    await uow.commit()
             try:
-                drafted = await answerer.answer(
+                drafted = drafted or await answerer.answer(
                     self._sessionmaker,
                     model,
                     world_id=consult.world_id,
@@ -678,6 +701,7 @@ class AgentActivities:
                     base_text=consult.base_text,
                     member_name=consult.member_name,
                     reuse=reuse,
+                    retry=consult.retry,
                     attempt=attempt,
                     model_override=self._model_override,
                     cassette_thread=consult.cassette_thread,
@@ -708,6 +732,7 @@ class AgentActivities:
                     draft_rev=consult.draft_rev,
                     sharing=sharing,
                     reused_from=reuse.escalation_id if reuse is not None else None,
+                    retried=consult.retry,
                 )
                 await _record_consult_turns(
                     uow, consult, answered_ms, checked_ms if sharing is not None else None
@@ -778,9 +803,11 @@ class AgentActivities:
         """The sharing check's verdict when the release decision needs one: a draft the
         answerer would release, under *Auto* toward this counterparty (read live), or
         drafted from a member's earlier answer (`reused`) in any mode, and every first
-        draft while the world skips approvals. Any other redraft is a person's to
-        release, so it is never checked."""
-        if not isinstance(drafted, DraftReady) or (consult.draft_rev != 1 and not reused):
+        draft while the world skips approvals. A Retry's rev is decided as a first
+        draft's, under the mode alone. Any other redraft is a person's to release, so it
+        is never checked."""
+        first = consult.draft_rev == 1 or reused or consult.retry
+        if not isinstance(drafted, DraftReady) or not first:
             return None
         async with self._sessionmaker() as session:
             thread = await repo.get_required(session, Thread, consult.world_id, consult.thread_id)
@@ -790,7 +817,12 @@ class AgentActivities:
                 org_id=consult.org_id,
                 counterparty_org_id=thread_domain.org_of(thread, thread_domain.other(consult.side)),
             )
-            skip_people = not reused and await skips_approvals(session, consult.world_id)
+            # An open item is already a person's, under Skip approvals too.
+            skip_people = (
+                consult.draft_rev == 1
+                and not reused
+                and await skips_approvals(session, consult.world_id)
+            )
         if not release.needs_sharing_check(
             mode, drafted.draft, reused=reused, skip_people=skip_people
         ):
@@ -1074,6 +1106,31 @@ async def _unstored_updates(session: AsyncSession, turn: InternalTurnInput) -> l
     ]
 
 
+async def _draft_to_check(session: AsyncSession, consult: AnswerConsultInput) -> DraftReady | None:
+    """A Retry's draft when its item has one: the current rev as it stands, or with the
+    member's edit as its answer (`draft_text`), for the sharing check to run on again
+    with no answerer call. None when the item has no draft: the answerer drafts."""
+    escalation = await repo.get(
+        session, Escalation, consult.world_id, answerer.escalation_id_for(consult.consult_id)
+    )
+    current = None if escalation is None else await escalations.current_draft(session, escalation)
+    if current is None:
+        return None
+    draft = ConsultDraft(
+        answer=(consult.draft_text or current.answer).strip(),
+        needs_human=False,
+        needs_human_reason=None,
+        route=escalations.route_of(current),
+        rationale=current.rationale,
+        short_question=current.short_question,
+    )
+    return DraftReady(
+        draft=draft,
+        turn_id=current.turn_id or keys.consult_turn_id(consult.consult_id),
+        step_idx=0,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _Look:
     """An update look that has news to check: its opening note, and when Claude last
@@ -1192,7 +1249,7 @@ def _fallback(turn: RepTurnInput, thread: Thread) -> str:
         return REOPENED
     if thread.state in thread_domain.TERMINAL_STATES:
         return THREAD_ENDED
-    if turn.side == "requester" and turn.turn == 1:
+    if turn.side == "requester" and (turn.retry_of or turn.turn) == 1:
         return OPEN_THREAD
     return NOTHING_NEW
 

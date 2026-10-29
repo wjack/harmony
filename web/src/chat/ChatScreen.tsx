@@ -17,12 +17,13 @@ import {
   usePostMessage,
   useRejectCard,
   useResolveQuestion,
+  useRetryMessage,
   useSetSendMode,
 } from "./api";
 import { OutreachCard } from "./cards/OutreachCard";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
-import { budgetLine, failureLine, useBudgetState } from "./failureCopy";
+import { budgetLine, declinedLine, failureLine, useBudgetState } from "./failureCopy";
 import { optimisticBlock, pendingCard, settledMessages, toBlocks } from "./items";
 import { useChatStream, useConversationLive } from "./live";
 import { removeOptimistic, useOptimistic } from "./optimistic";
@@ -59,6 +60,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   const approve = useApproveCard(conversationId);
   const reject = useRejectCard(conversationId);
   const resolve = useResolveQuestion(conversationId);
+  const retry = useRetryMessage(conversationId);
   const setSendMode = useSetSendMode(conversationId);
   const budgetState = useBudgetState();
   const blocked = budgetLine(budgetState);
@@ -101,6 +103,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   }
   const cardDraft = card === null ? null : (cardDrafts[card.card_id] ?? initialDraft(card));
   const working = isWorking(detail) || unsent.length > 0;
+  const refusal = detail.refusal ?? null;
   // A look may write an update, so its text streams in; it shows no spark, and a silent one shows nothing.
   const streaming = useChatStream(conversationId, detail.items, working || isLooking(detail));
   const showSpark = working && card === null;
@@ -213,7 +216,25 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
             us={session.data?.member.org.name ?? "your organization"}
             working={working}
             showSpark={showSpark}
-            failure={detail.turn_failure !== null && !working ? failureLine(detail.turn_failure, budgetState) : null}
+            failure={
+              detail.turn_failure !== null && !working
+                ? failureLine(detail.turn_failure, budgetState, refusal?.category ?? null)
+                : null
+            }
+            declined={
+              refusal?.retryable === true && !working
+                ? {
+                    turnId: refusal.turn_id,
+                    note: declinedLine("respond to this", refusal.category),
+                    busy: retry.isPending,
+                    error: retry.error === null ? null : describeFailure(retry.error),
+                    blocked,
+                    onRetry: (text) => {
+                      retry.mutate(text);
+                    },
+                  }
+                : null
+            }
             streaming={streaming}
             pending={pending}
             editedCards={editedCards}

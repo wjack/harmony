@@ -64,6 +64,7 @@ export const TURN = {
   summary: id("8d3"),
   redraft: id("8d4"),
   declined: id("8d5"),
+  refused: id("8d6"),
 } as const;
 
 function minutesAgo(minutes: number): string {
@@ -388,6 +389,8 @@ export interface ChatOptions {
   stopReason?: FailureReason;
   /** How the first card was turned down: a message brings Claude's redraft. */
   rejected?: Rejection;
+  /** Alex's last message, which Claude declined to respond to, and the refusal's category. */
+  refused?: { text: string; category: string | null };
 }
 
 /** Mutable bits the routes change on top of the stage. */
@@ -403,6 +406,8 @@ export interface ChatState {
   answers: Readonly<Record<string, string>>;
   /** Messages sent in the gallery, after the stage's own. */
   sent: readonly UserTextItem[];
+  /** The message Claude declined to respond to (`refused`), until Retry or Edit sends it again. */
+  refused: UserTextItem | null;
   /** This chat's send-mode override, which `PATCH` changes. */
   override: boolean | null;
   options: ChatOptions;
@@ -417,6 +422,10 @@ export function initialState(stage: ChatStage, options: ChatOptions = {}): ChatS
     approved: null,
     answers: {},
     sent: [],
+    refused:
+      options.refused === undefined
+        ? null
+        : { ...user(id("7b0"), options.refused.text, 2), turn_id: TURN.refused },
     override: options.override ?? null,
     options,
     version: 1,
@@ -488,6 +497,7 @@ export function conversationAt(state: ChatState): ConversationDetail {
       reply(TURN.summary, 0, CLOSING_SUMMARY, 1),
     );
   }
+  if (state.refused !== null) items.push(state.refused);
   items.push(...state.sent);
   return detail(state, items, null, state.sent.length > 0);
 }
@@ -507,7 +517,11 @@ function detail(
     queued_message_ids: [],
     turn_in_flight: turnInFlight,
     looking: false,
-    turn_failure: turnInFlight ? null : (state.options.turnFailure ?? null),
+    turn_failure: turnInFlight ? null : state.refused !== null ? "refused" : (state.options.turnFailure ?? null),
+    refusal:
+      state.refused === null
+        ? null
+        : { turn_id: TURN.refused, category: state.options.refused?.category ?? null, retryable: true },
     send_mode: sendModeOf(state),
     version: state.version,
   };
@@ -705,6 +719,15 @@ export function chatStory(stage: ChatStage = "drafted", options: ChatOptions = {
       }
       update({ sent: [...state.sent, { ...user(messageId, text, 0), at: new Date().toISOString() }] });
       return { message_id: messageId, outcome: "queued" };
+    },
+    "POST /api/conversations/{conversation_id}/retry": ({ params, body }) => {
+      if (params.conversation_id !== CONVERSATION_ID) return notFound("conversation");
+      if (state.refused === null) return problem(409, "nothing_to_retry", "There's no declined message to retry.");
+      sentMessages += 1;
+      const messageId = id(`7b${sentMessages}`);
+      const text = textOf(body) || state.refused.text;
+      update({ refused: null, sent: [...state.sent, { ...user(messageId, text, 0), at: new Date().toISOString() }] });
+      return { message_ids: [messageId] };
     },
     "POST /api/cards/{card_id}/approve": ({ params, body }) => {
       if (state.stage !== "drafted" || params.card_id !== pendingId()) {

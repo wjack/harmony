@@ -295,6 +295,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/conversations/{conversation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Message
+         * @description Send the message Claude declined again, or the member's edit of it, as a new turn.
+         *     409 `nothing_to_retry` unless Claude's last turn declined it at its first call and
+         *     nothing has happened since.
+         */
+        post: operations["retry_message_api_conversations__conversation_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cards/{card_id}/approve": {
         parameters: {
             query?: never;
@@ -391,6 +413,28 @@ export interface paths {
         put?: never;
         /** Reassign Escalation */
         post: operations["reassign_escalation_api_escalations__escalation_id__reassign_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/escalations/{escalation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Escalation
+         * @description Run the step Claude declined on a question again, as its next draft (the thread's
+         *     `retry_answer`). Returns once the draft is reserved; the item shows it when written.
+         *     409 `nothing_to_retry` unless Claude declined the step the item waits on.
+         */
+        post: operations["retry_escalation_api_escalations__escalation_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -817,6 +861,19 @@ export interface components {
             retire_workflow: ("running" | "completed" | "failed" | "terminated") | null;
         };
         /**
+         * AnswerUsed
+         * @description `use_answer`'s and `retry_answer`'s result: the rev being drafted.
+         */
+        AnswerUsed: {
+            /**
+             * Escalation Id
+             * Format: uuid
+             */
+            escalation_id: string;
+            /** Draft Rev */
+            draft_rev: number;
+        };
+        /**
          * ApiProblem
          * @description A P1–P2 route's error body.
          */
@@ -827,7 +884,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "not_found" | "invalid" | "not_admin" | "card_not_pending" | "escalation_not_open" | "not_in_org" | "world_retired" | "passcode_required" | "passcode_invalid" | "too_many_attempts" | "payload_too_large" | "member_changed" | "steer_running" | "thread_closed" | "thread_open" | "reopen_in_progress" | "closing_in_progress" | "not_reopenable";
+            code: "not_found" | "invalid" | "not_admin" | "card_not_pending" | "escalation_not_open" | "not_in_org" | "world_retired" | "passcode_required" | "passcode_invalid" | "too_many_attempts" | "payload_too_large" | "member_changed" | "steer_running" | "thread_closed" | "thread_open" | "reopen_in_progress" | "closing_in_progress" | "not_reopenable" | "nothing_to_retry";
             resolved_by?: components["schemas"]["MemberRef"] | null;
             by?: components["schemas"]["MemberRef"] | null;
             member?: components["schemas"]["MemberRef"] | null;
@@ -923,6 +980,21 @@ export interface components {
             status: "pending" | "approved" | "rejected" | "superseded";
             /** Request Id */
             request_id?: string | null;
+        };
+        /**
+         * ChatRefusal
+         * @description Claude declined the chat's last turn (`stop_reason: "refusal"`).
+         */
+        ChatRefusal: {
+            /** Category */
+            category: string | null;
+            /**
+             * Turn Id
+             * Format: uuid
+             */
+            turn_id: string;
+            /** Retryable */
+            retryable: boolean;
         };
         /**
          * ClientKeyView
@@ -1032,6 +1104,7 @@ export interface components {
             looking: boolean;
             /** Turn Failure */
             turn_failure: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            refusal?: components["schemas"]["ChatRefusal"] | null;
             send_mode: components["schemas"]["SendMode"];
             /** Version */
             version: number;
@@ -1264,7 +1337,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "consult" | "outbound_review";
+            kind: "consult" | "outbound_review" | "refused_turn";
             /**
              * Status
              * @enum {string}
@@ -1274,6 +1347,7 @@ export interface components {
             consult_id: string | null;
             /** Reason */
             reason: string;
+            refusal?: components["schemas"]["RefusalView"] | null;
             /** Assignees */
             assignees: components["schemas"]["MemberRef"][];
             /** Current Draft Rev */
@@ -1437,7 +1511,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "consult" | "outbound_review";
+            kind: "consult" | "outbound_review" | "refused_turn";
             /**
              * Status
              * @enum {string}
@@ -1682,6 +1756,11 @@ export interface components {
             outcome: "queued" | "card_rejected";
             /** Card Id */
             card_id?: string | null;
+        };
+        /** MessagesRetried */
+        MessagesRetried: {
+            /** Message Ids */
+            message_ids: string[];
         };
         /** NetworkCounts */
         NetworkCounts: {
@@ -1978,6 +2057,25 @@ export interface components {
             /** Last Activity At */
             last_activity_at: string | null;
         };
+        /**
+         * RefusalView
+         * @description Claude declined the step an open item waits on (`stop_reason: "refusal"`):
+         *     drafting a question's answer, or checking the draft against what the org shares
+         *     (Retry runs that step again: `POST /api/escalations/{id}/retry`), or the
+         *     representative's turn itself (`turn`, a `refused_turn` item, which approving
+         *     retries).
+         */
+        RefusalView: {
+            /**
+             * Step
+             * @enum {string}
+             */
+            step: "answer" | "sharing_check" | "turn";
+            /** Category */
+            category: string | null;
+            /** Draft Rev */
+            draft_rev: number | null;
+        };
         /** RejectCard */
         RejectCard: {
             /** Feedback */
@@ -2166,6 +2264,18 @@ export interface components {
             draft_rev?: number | null;
             /** Also For */
             also_for?: string[];
+        };
+        /** RetryEscalation */
+        RetryEscalation: {
+            /** Draft Text */
+            draft_text?: string | null;
+            /** Question */
+            question?: string | null;
+        };
+        /** RetryMessage */
+        RetryMessage: {
+            /** Text */
+            text?: string | null;
         };
         /**
          * RewrittenBy
@@ -2775,6 +2885,8 @@ export interface components {
             text: string;
             /** Member Id */
             member_id: string | null;
+            /** Turn Id */
+            turn_id?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -4174,6 +4286,70 @@ export interface operations {
             };
         };
     };
+    retry_message_api_conversations__conversation_id__retry_post: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryMessage"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessagesRetried"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     approve_card_api_cards__card_id__approve_post: {
         parameters: {
             query?: {
@@ -4539,6 +4715,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_escalation_api_escalations__escalation_id__retry_post: {
+        parameters: {
+            query?: {
+                world?: "desk" | "network";
+            };
+            header?: never;
+            path: {
+                escalation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryEscalation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnswerUsed"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
                 };
             };
         };

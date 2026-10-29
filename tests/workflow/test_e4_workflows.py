@@ -45,6 +45,7 @@ from harmony.agents.runtime import (
 )
 from harmony.agents.tools.rep import CUT_OFF_CONSULT, CUT_OFF_HELD
 from harmony.db.models.choices import BudgetKind, FailureReason, Side, ThreadMessageKind
+from harmony.domain.escalations import refused_turn_id
 from harmony.ids import turn_id_for
 from harmony.temporal.activities.agents import (
     AnswerConsultInput,
@@ -72,12 +73,14 @@ from harmony.temporal.activities.network import (
     ReassignInput,
     RecordReopenInput,
     RecordSteerInput,
+    RefusedTurnInput,
     ResolutionApplied,
     RoundEnded,
     SettledCardInput,
     SettleSteerInput,
     StartRequestInput,
     SteerRecorded,
+    TakeBackInput,
     ThreadStateInput,
     UnsummarizedInput,
 )
@@ -97,9 +100,11 @@ from harmony.temporal.workflows.payloads import (
     ESCALATION_NOT_OPEN_ERROR,
     INVALID_RESOLUTION_ERROR,
     NOT_IN_ORG_ERROR,
+    NOTHING_TO_RETRY_ERROR,
     STEER_CONFLICT_ERROR,
     STEER_RUNNING_ERROR,
     THREAD_CLOSED_ERROR,
+    AnswerUsed,
     BudgetExhaustedDetails,
     CardResolved,
     ConversationCarry,
@@ -112,14 +117,18 @@ from harmony.temporal.workflows.payloads import (
     NetworkUpdate,
     Reassigned,
     Reassignment,
+    RefusedTurn,
     ReopenInput,
     RequestProgress,
+    RetryAnswer,
+    RetryTurn,
     SteerRequest,
     SteerStarted,
     ThreadCarry,
     ThreadChanged,
     ThreadInput,
     ThreadProgress,
+    TurnRetried,
     conversation_workflow_id,
     request_workflow_id,
     thread_workflow_id,
@@ -212,6 +221,8 @@ class Script:
         self.round_ends: list[RoundEnded] = []
         # Transient failures `start_network_request` raises before it succeeds.
         self.start_failures = 0
+        # What `take_back_turn` answers, one per call: taken once these run out.
+        self.take_backs: list[bool] = []
         # An activity named here waits for its event before it answers.
         self.gates: dict[str, asyncio.Event] = {}
         # Messages `internal_turn` signals to its own chat, by turn: before it returns,
@@ -326,6 +337,16 @@ class Script:
         if self.state_failures > 0:
             self.state_failures -= 1
             raise ApplicationError("the database is down")
+
+    @activity.defn(name="take_back_turn")
+    async def take_back_turn(self, take: TakeBackInput) -> bool:
+        self.calls.append(("take_back_turn", take))
+        return self.take_backs.pop(0) if self.take_backs else True
+
+    @activity.defn(name="open_refused_turn")
+    async def open_refused_turn(self, refused: RefusedTurnInput) -> UUID:
+        self.calls.append(("open_refused_turn", refused))
+        return refused_turn_id(refused.turn_id)
 
     @activity.defn(name="note_unsummarized")
     async def note_unsummarized(self, failed: UnsummarizedInput) -> None:
@@ -509,6 +530,8 @@ async def workers(env: WorkflowEnvironment) -> AsyncIterator[Script]:
         ],
         activities=[
             script.set_thread_state,
+            script.take_back_turn,
+            script.open_refused_turn,
             script.note_unsummarized,
             script.notify_conversation,
             script.apply_resolution,
@@ -708,6 +731,58 @@ async def steer(handle: WorkflowHandle[Any, Any], request: SteerRequest) -> Stee
     return await handle.execute_update(
         "steer", request, id=request.update_id, result_type=SteerStarted
     )
+
+
+MEMBER_OF: dict[UUID, UUID] = {HENDERSON: ALEX, NORTHLAKE: HELEN}
+
+
+async def refused_item(
+    handle: WorkflowHandle[Any, Any], thread: Thread, org_id: UUID, turn: int
+) -> UUID:
+    """The `refused_turn` item `org_id`'s refused turn `turn` opened, once the thread
+    waits on it."""
+    item = refused_turn_id(turn_id_for(thread.world_id, thread.thread_id, org_id, turn))
+    await eventually(
+        lambda: progress(handle),
+        lambda p: p.open_escalation_ids == [item] and p.state == "awaiting_principal",
+        "the refused turn",
+    )
+    return item
+
+
+async def settle_refused(
+    script: Script,
+    handle: WorkflowHandle[Any, Any],
+    thread: Thread,
+    side: Side,
+    org_id: UUID,
+    *,
+    turn: int,
+    action: EscalationAction,
+) -> UUID:
+    """A member of `side` retries (`approve`) or ends (`decline`) its refused turn."""
+    item = await refused_item(handle, thread, org_id, turn)
+    script.applied = ResolutionApplied(
+        resolved=EscalationResolved(escalation_id=item, action=action), owed=None, side=side
+    )
+    await handle.execute_update(
+        "resolve_escalation",
+        resolution(item, action, MEMBER_OF[org_id], org_id),
+        result_type=EscalationResolved,
+    )
+    return item
+
+
+async def end_refused(
+    script: Script,
+    handle: WorkflowHandle[Any, Any],
+    thread: Thread,
+    side: Side,
+    org_id: UUID,
+    *,
+    turn: int,
+) -> None:
+    await settle_refused(script, handle, thread, side, org_id, turn=turn, action="decline")
 
 
 async def test_turns_alternate_until_a_side_closes_and_the_other_writes_its_summary(
@@ -1062,7 +1137,7 @@ async def test_an_edit_rewrites_a_held_message_in_place(
         await replays(env, handle)
 
 
-async def test_a_refusal_closes_the_thread_and_the_last_turn_can_only_summarize(
+async def test_a_refusal_ended_by_its_side_closes_the_thread_and_the_last_turn_only_summarizes(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
     env = temporal_env_time_skipping
@@ -1071,7 +1146,8 @@ async def test_a_refusal_closes_the_thread_and_the_last_turn_can_only_summarize(
         script.rep[("responder", 1)] = Plan(stop="refusal")
         # The requester's last turn tries to consult: nothing comes of it.
         script.rep[("requester", 2)] = consulting(uuid4())
-        _, handle, request = await start_thread(env)
+        thread, handle, request = await start_thread(env)
+        await end_refused(script, handle, thread, "responder", NORTHLAKE, turn=1)
         result = await handle.result()
 
         assert (result.state, result.turns) == ("closed", 3)
@@ -1079,7 +1155,7 @@ async def test_a_refusal_closes_the_thread_and_the_last_turn_can_only_summarize(
         assert endings(script) == [("closed", "stopped", "responder")]
         assert stop_reasons(script) == [("closed", "refused")]
         assert script.named("answer_consult") == []
-        assert await request_saw(request) == ["closed"]
+        assert await request_saw(request) == ["awaiting_principal", "closed"]
         await stop(request)
         await replays(env, handle)
 
@@ -1090,10 +1166,11 @@ async def test_a_refusal_before_anything_crossed_never_wakes_the_responder(
     env = temporal_env_time_skipping
     async with workers(env) as script:
         # The requester's opener is refused outright: nobody wrote to the responder, so
-        # it has nothing to answer or summarize (3.13 E3).
+        # once Henderson ends it, it has nothing to answer or summarize (3.13 E3).
         script.rep[("requester", 1)] = Plan(stop="refusal")
         script.rep[("responder", 1)] = said("close")
-        _, handle, request = await start_thread(env)
+        thread, handle, request = await start_thread(env)
+        await end_refused(script, handle, thread, "requester", HENDERSON, turn=1)
         result = await handle.result()
 
         assert (result.state, result.turns) == ("closed", 1)
@@ -1105,7 +1182,7 @@ async def test_a_refusal_before_anything_crossed_never_wakes_the_responder(
         assert not calls[-1].last_turn
         assert stop_reasons(script) == [("closed", "refused")]
         assert script.named("note_unsummarized") == []
-        assert await request_saw(request) == ["closed"]
+        assert await request_saw(request) == ["awaiting_principal", "closed"]
         await stop(request)
         await replays(env, handle)
 
@@ -1116,7 +1193,7 @@ async def test_a_refusal_before_anything_crossed_never_wakes_the_responder(
         script.rep[("requester", 1)] = held(escalation_id)
         script.rep[("requester", 2)] = Plan(stop="refusal")
         script.rep[("responder", 1)] = said("close")
-        _, handle, request = await start_thread(env)
+        thread, handle, request = await start_thread(env)
         await eventually(
             lambda: progress(handle),
             lambda p: p.open_escalation_ids == [escalation_id],
@@ -1132,11 +1209,105 @@ async def test_a_refusal_before_anything_crossed_never_wakes_the_responder(
             resolution(escalation_id, "decline", ALEX, HENDERSON),
             result_type=EscalationResolved,
         )
+        await end_refused(script, handle, thread, "requester", HENDERSON, turn=2)
         result = await handle.result()
 
         assert (result.state, result.turns) == ("closed", 2)
         assert sides(script) == [("requester", 1), ("requester", 2)]
         assert stop_reasons(script) == [("closed", "refused")]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_a_refused_turn_waits_for_its_side_and_retry_sends_its_input_again(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """A refusal waits for the refusing side's team (a `refused_turn` item, the thread
+    `awaiting_principal` on that side). Retry takes the refused turn's input back and
+    runs the side's next turn on it; the turn after a Retry is asked to write."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = Plan(stop="refusal")
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 2)] = said("close")
+        thread, handle, request = await start_thread(env)
+        item = await refused_item(handle, thread, NORTHLAKE, 1)
+        [opened] = script.named("open_refused_turn")
+        assert (opened.side, opened.org_id) == ("responder", NORTHLAKE)
+        assert opened.turn_id == turn_id_for(thread.world_id, thread.thread_id, NORTHLAKE, 1)
+        assert (await progress(handle)).side_to_move == "responder"
+        # A declined turn is retried or ended: nobody writes it in its place.
+        failure = await update_error(
+            handle.execute_update(
+                "resolve_escalation",
+                resolution(item, "take_over", HELEN, NORTHLAKE, text="Wednesday."),
+                result_type=EscalationResolved,
+            )
+        )
+        assert failure.type == INVALID_RESOLUTION_ERROR
+
+        await settle_refused(
+            script, handle, thread, "responder", NORTHLAKE, turn=1, action="approve"
+        )
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 4)
+        assert sides(script) == [
+            ("requester", 1),
+            ("responder", 1),
+            ("responder", 2),
+            ("requester", 2),
+        ]
+        [taken] = script.named("take_back_turn")
+        assert taken.turn_id == opened.turn_id
+        turns: list[RepTurnInput] = script.named("rep_turn")
+        refused_turn, retried = turns[1], turns[2]
+        assert retried.retry_of == 1
+        assert refused_turn.retry_of is None
+        # The counterparty's message the refused turn took in is delivered again.
+        assert retried.deliver_after_seq == refused_turn.deliver_after_seq
+        assert stop_reasons(script) == [("closed", None)]
+        assert await request_saw(request) == ["awaiting_principal", "active", "closed"]
+        await stop(request)
+        await replays(env, handle)
+
+
+async def test_an_edit_on_a_refused_turn_guides_its_retry_and_nothing_is_rewritten(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """An Edit naming the refused turn's item writes the side's guidance only; the Retry
+    after it waits for the guidance and opens with it. A refused turn whose input the
+    model answered in part can't be taken back: its Retry opens as any turn would."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.rep[("requester", 1)] = Plan(stop="refusal")
+        script.rep[("requester", 2)] = said()
+        script.rep[("responder", 1)] = said("close")
+        script.rep[("requester", 3)] = said("close")
+        script.take_backs = [False]
+        gate = script.gates["write_guidance"] = asyncio.Event()
+        thread, handle, request = await start_thread(env)
+        item = await refused_item(handle, thread, HENDERSON, 1)
+
+        started = await steer(
+            handle, steer_request("requester", HENDERSON, ALEX, escalation_id=item)
+        )
+        assert (started.escalation_id, started.draft_rev) == (None, None)
+        await settle_refused(
+            script, handle, thread, "requester", HENDERSON, turn=1, action="approve"
+        )
+        # The Retry waits for the Edit's guidance.
+        assert sides(script) == [("requester", 1)]
+        gate.set()
+        result = await handle.result()
+
+        assert (result.state, result.turns) == ("closed", 4)
+        assert script.named("rewrite_held") == []
+        turns: list[RepTurnInput] = script.named("rep_turn")
+        assert (turns[1].retry_of, turns[1].guidance_version) == (1, 1)
+        # Nothing was taken back: the next turn's input is new.
+        assert turns[1].deliver_after_seq == turns[0].deliver_after_seq + 1
         await stop(request)
         await replays(env, handle)
 
@@ -2083,6 +2254,71 @@ async def test_a_rewrite_stops_when_its_item_is_resolved(
         await replays(env, handle)
 
 
+async def test_a_retry_runs_the_declined_step_again_as_the_next_rev(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """Claude declined to draft an answer, so the item opened without one. Retry, by the
+    item's own org only, drafts rev 2 as a Retry with the member's text, and the item
+    then waits on that rev."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        consult_id, escalation_id = uuid4(), uuid4()
+        script.rep[("requester", 1)] = said()
+        script.rep[("responder", 1)] = consulting(consult_id)
+        script.rep[("responder", 2)] = said("close")
+        script.rep[("requester", 2)] = said("close")
+        script.consults = [
+            escalated(consult_id, escalation_id, None),
+            escalated(consult_id, escalation_id, 2),
+        ]
+        _, handle, request = await start_thread(env)
+        await eventually(
+            lambda: progress(handle),
+            lambda p: p.open_escalation_ids == [escalation_id],
+            "the escalation",
+        )
+
+        def retry(org_id: UUID) -> Awaitable[AnswerUsed]:
+            return handle.execute_update(
+                "retry_answer",
+                RetryAnswer(escalation_id=escalation_id, org_id=org_id, draft_text="Nov 12 works."),
+                result_type=AnswerUsed,
+            )
+
+        assert (await update_error(retry(HENDERSON))).type == NOT_IN_ORG_ERROR
+        assert (await retry(NORTHLAKE)).draft_rev == 2
+        # While rev 2 is drafting, a second Retry waits for it.
+        assert (await update_error(retry(NORTHLAKE))).type == INVALID_RESOLUTION_ERROR
+        await eventually(
+            lambda: script.recorded("answer_consult"), lambda calls: len(calls) == 2, "the retry"
+        )
+        retried: AnswerConsultInput = script.named("answer_consult")[1]
+        assert (retried.draft_rev, retried.retry, retried.draft_text, retried.reuse_from) == (
+            2,
+            True,
+            "Nov 12 works.",
+            None,
+        )
+
+        script.applied = ResolutionApplied(
+            resolved=EscalationResolved(escalation_id=escalation_id, action="approve"),
+            owed=OwedResult(tool_use_id="", content="Nov 12 works."),
+            side="responder",
+        )
+        await retried_update(
+            lambda: handle.execute_update(
+                "resolve_escalation",
+                resolution(escalation_id, "approve", RAJ, NORTHLAKE, draft_rev=2),
+                result_type=EscalationResolved,
+            )
+        )
+        assert (await handle.result()).state == "closed"
+        (applied,) = script.named("apply_resolution")
+        assert applied.resolution.draft_rev == 2
+        await stop(request)
+        await replays(env, handle)
+
+
 async def test_a_steer_cut_short_by_the_end_of_its_thread_settles_as_closed(
     temporal_env_time_skipping: WorkflowEnvironment,
 ) -> None:
@@ -2462,6 +2698,85 @@ async def test_a_card_pauses_the_turn_until_it_is_approved(
         )
         started: list[StartRequestInput] = script.named("start_network_request")
         assert [s.request_id for s in started] == [request_id]
+
+
+async def test_a_turn_refused_at_its_first_call_can_be_sent_again(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """Claude declined the member's message before writing anything: the chat says so,
+    with the category, and Retry takes the stored message back and sends it again as a
+    new turn, here as the member's rewording of it."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.internal = [
+            _turn("refusal", next_step=0, refusal_category="bio"),
+            _turn("end_turn"),
+        ]
+        handle, message = await start_chat(env)
+        held = await eventually(
+            lambda: pending(handle),
+            lambda p: p.refused is not None and not p.turn_in_flight,
+            "the refusal",
+        )
+        first: InternalTurnInput = script.named("internal_turn")[0]
+        assert held.refused == RefusedTurn(
+            turn_id=first.turn_id, messages=[message], category="bio", retryable=True
+        )
+        assert held.turn_failure == "refused"
+
+        retry = RetryTurn(member_id=ALEX, text="Find CT time before Nov 6.", message_id=uuid4())
+        retried = await handle.execute_update("retry_turn", retry, result_type=TurnRetried)
+        assert retried.message_ids == [retry.message_id]
+        # The message is queued again, so there's nothing left to retry.
+        assert (await update_error(handle.execute_update("retry_turn", retry))).type == (
+            NOTHING_TO_RETRY_ERROR
+        )
+
+        assert (await handle.result()).turns == 2
+        (taken,) = script.named("take_back_turn")
+        assert taken.turn_id == first.turn_id
+        _, second = script.named("internal_turn")
+        assert second.turn_id != first.turn_id
+        assert [(m.message_id, m.text) for m in second.messages] == [
+            (retry.message_id, "Find CT time before Nov 6.")
+        ]
+        await replays(env, handle)
+
+
+async def test_a_refusal_is_not_retried_after_its_first_call_or_once_its_input_is_answered(
+    temporal_env_time_skipping: WorkflowEnvironment,
+) -> None:
+    """A turn refused after it ran tools can't be sent again as it was: its note stays,
+    without Retry. Nor can one whose stored input something answered since: the take
+    back fails, and Retry goes away."""
+    env = temporal_env_time_skipping
+    async with workers(env) as script:
+        script.internal = [_turn("refusal", next_step=1), _turn("refusal", next_step=0)]
+        script.take_backs = [False]
+        late, _ = await start_chat(env)
+        held = await eventually(
+            lambda: pending(late), lambda p: p.refused is not None, "the late refusal"
+        )
+        assert held.refused is not None
+        assert not held.refused.retryable
+        retry = RetryTurn(member_id=ALEX, message_id=uuid4())
+        assert (await update_error(late.execute_update("retry_turn", retry))).type == (
+            NOTHING_TO_RETRY_ERROR
+        )
+
+        answered, _ = await start_chat(env)
+        await eventually(
+            lambda: pending(answered), lambda p: p.refused is not None, "the first-call refusal"
+        )
+        assert (await update_error(answered.execute_update("retry_turn", retry))).type == (
+            NOTHING_TO_RETRY_ERROR
+        )
+        refused = (await pending(answered)).refused
+        assert refused is not None
+        assert not refused.retryable
+        assert len(script.named("take_back_turn")) == 1
+        assert [(await late.result()).turns, (await answered.result()).turns] == [1, 1]
+        await replays(env, late, answered)
 
 
 async def test_a_message_while_a_card_is_pending_rejects_it(

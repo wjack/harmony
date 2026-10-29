@@ -1,8 +1,10 @@
 """Escalations: the inbox (§7, §10; REVISION_UNSTRUCTURED.md §4, §6).
 
 An escalation is something waiting on a person: a consult answer the release decision
-didn't release (`consult`), or an outgoing message held because the org reviews every
-message in *Ask* (`outbound_review`).
+didn't release (`consult`), an outgoing message held because the org reviews every
+message in *Ask* (`outbound_review`), or a representative's turn Claude declined
+(`refused_turn`, with that turn's id), which a member retries or ends the conversation
+on. It has no drafts.
 
 `status`: `open` → `resolved` | `cancelled` (the thread ended first). Resolution is
 first-writer-wins: `resolve` updates `WHERE status = 'open'` and raises
@@ -94,6 +96,11 @@ def held_message_id(escalation: Escalation) -> UUID:
     return uuid5(escalation.id, "message")
 
 
+def refused_turn_id(turn_id: UUID) -> UUID:
+    """The `refused_turn` item for a representative's turn Claude declined."""
+    return uuid5(turn_id, "refused_turn")
+
+
 def assignee_ids(escalation: Escalation) -> list[UUID]:
     return [UUID(str(member_id)) for member_id in escalation.assignees]
 
@@ -127,6 +134,7 @@ async def open(
     thread_id: UUID | None = None,
     side: Side | None = None,
     consult_id: UUID | None = None,
+    turn_id: UUID | None = None,
 ) -> tuple[Escalation, bool]:
     """Open an escalation with no assignees yet. Returns `(escalation, created)`;
     `created` is False when an *open* escalation already has `dedupe_key` (a person is
@@ -165,6 +173,7 @@ async def open(
         side=side,
         kind=kind,
         consult_id=consult_id,
+        turn_id=turn_id,
         status="open",
         dedupe_key=dedupe_key if taken is None else f"{dedupe_key}{_REPEAT}{escalation_id}",
         assignees=[],
@@ -562,6 +571,7 @@ __all__ = [
     "locked",
     "open",
     "reassign",
+    "refused_turn_id",
     "resolve",
     "resolve_released",
     "resolved_draft",

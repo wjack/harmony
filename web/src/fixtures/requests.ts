@@ -26,6 +26,7 @@ import { problem, type FixtureRequest, type FixtureRoutes } from "./index";
 import { members, orgs, sessionAs, shellRoutes } from "./shell";
 import type {
   ActivityLine,
+  AnswerUsed,
   ConsultView,
   ContextPart,
   EscalationDraft,
@@ -39,6 +40,7 @@ import type {
   OrgRef,
   RepresentativeContext,
   ResolveEscalation,
+  RetryEscalation,
   Side,
   ThreadAccess,
   ThreadDetail,
@@ -81,6 +83,9 @@ const northlake: OrgRef = orgs.northlake;
 
 /** `api/routes/inbox.py`: how a held message (`outbound_review`) reads in the inbox. */
 const HELD_QUESTION = "Review the outgoing message";
+// A turn Claude declined (`refused_turn`), as the inbox and the workspace word it.
+const REFUSED_TURN_QUESTION = "Claude declined to continue the conversation";
+const REFUSED_TURN_REASON = "Retry Claude's turn, or end the conversation.";
 const HELD_REASON = "A teammate approves every message in Ask mode.";
 
 /** What the representative is told after a teammate replied directly (`take_over`). */
@@ -864,6 +869,77 @@ function rewrite(record: ThreadRecord, item: EscalationView, from: SteerView, re
   touch(record, at);
 }
 
+type RefusedStep = NonNullable<EscalationView["refusal"]>["step"];
+
+/** Why an answer waits in Ask mode once its check passes: the card shows no reason line for it. */
+const ASK_MODE_REASON = "A teammate approves every answer in Ask mode.";
+
+/**
+ * Claude declined the step `threadId`'s open question waits on: checking its draft
+ * against what we share, or, for `answer`, drafting one at all, which leaves no draft.
+ */
+export function declined(
+  world: RequestsWorld,
+  threadId: string,
+  step: RefusedStep,
+  category: string | null = "bio",
+): RequestsWorld {
+  const item = openEscalations(recordOf(world, threadId))[0];
+  if (item === undefined) return world;
+  if (step === "answer") {
+    item.drafts = [];
+    item.current_draft_rev = null;
+    item.reason = "Claude couldn't draft an answer.";
+  } else {
+    item.reason = "The sharing check couldn't run (the sharing check declined).";
+  }
+  item.refusal = { step, category, draft_rev: item.current_draft_rev ?? 1 };
+  return world;
+}
+
+/**
+ * Claude declined our side's turn on `threadId`: the open item becomes the turn's
+ * (`refused_turn`, with no draft or question), and the conversation waits for us.
+ */
+export function refusedTurn(world: RequestsWorld, threadId: string, category: string | null = "bio"): RequestsWorld {
+  const record = recordOf(world, threadId);
+  const item = openEscalations(record)[0];
+  if (item === undefined) return world;
+  record.workspace.consults = record.workspace.consults.filter((asked) => asked.id !== item.consult_id);
+  Object.assign(item, {
+    kind: "refused_turn",
+    consult_id: null,
+    drafts: [],
+    current_draft_rev: null,
+    reason: REFUSED_TURN_REASON,
+    refusal: { step: "turn", category, draft_rev: null },
+  });
+  record.detail.state = "awaiting_principal";
+  record.detail.side_to_move = record.detail.side;
+  return world;
+}
+
+/**
+ * A Retry of the declined step, which here goes through at once: the next rev lands,
+ * checked, as the member's edit of the draft if they sent one (else the draft as it was,
+ * or Henderson's answer when there was none).
+ */
+function applyRetry(record: ThreadRecord, item: EscalationView, body: RetryEscalation, at: string): AnswerUsed {
+  const draftText = body.draft_text ?? null;
+  const asked = record.workspace.consults.find((consult) => consult.id === item.consult_id);
+  if (asked !== undefined && body.question != null) asked.question = body.question;
+  const latest = item.drafts.at(-1);
+  const rev = Math.max(latest?.draft_rev ?? 0, item.refusal?.draft_rev ?? 0) + 1;
+  const base = latest ?? hendersonDraft(at);
+  item.drafts.push({ ...base, draft_rev: rev, answer: draftText ?? base.answer, rewritten_by: null, created_at: at });
+  item.current_draft_rev = rev;
+  item.refusal = null;
+  item.reason = ASK_MODE_REASON;
+  item.version += 1;
+  touch(record, at);
+  return { escalation_id: item.id, draft_rev: rev };
+}
+
 /** One of Helen's Edits on `threadId`, as `fields` leaves it (done, guidance updated, by default). */
 export function edited(world: RequestsWorld, threadId: string, fields: Partial<SteerView> = {}): RequestsWorld {
   const record = recordOf(world, threadId);
@@ -996,6 +1072,7 @@ function openEscalations(record: ThreadRecord): EscalationView[] {
 }
 
 function questionOf(record: ThreadRecord, item: EscalationView): string {
+  if (item.kind === "refused_turn") return REFUSED_TURN_QUESTION;
   return record.workspace.consults.find((asked) => asked.id === item.consult_id)?.question ?? HELD_QUESTION;
 }
 
@@ -1219,6 +1296,19 @@ function applyResolve(
     org_id: northlake.id,
   };
 
+  if (item.kind === "refused_turn") {
+    // Retry hands the turn back to our Claude; ending it closes the conversation on the refusal.
+    item.refusal = null;
+    if (action === "decline") {
+      endRun(record, { end_reason: "stopped", closed_by: record.detail.side, stop_reason: "refused" });
+    } else {
+      record.detail.state = "active";
+      record.detail.side_to_move = record.detail.side;
+    }
+    touch(record, at);
+    return { escalation_id: item.id, action, message_id: null };
+  }
+
   // Anything else (a past action no longer available) changes nothing.
   switch (action) {
     case "approve":
@@ -1294,6 +1384,14 @@ export function requestsRoutes(options: RequestsRouteOptions = {}): FixtureRoute
       if (options.resolvedFirstBy !== undefined) return notOpen(ref(options.resolvedFirstBy));
       if (found.item.status !== "open") return notOpen(found.item.resolved_by);
       return applyResolve(found.record, found.item, bodyOf<ResolveEscalation>(body), actor, new Date().toISOString());
+    },
+
+    "POST /api/escalations/{escalation_id}/retry": ({ params, body }) => {
+      const found = findEscalation(world, params.escalation_id ?? "");
+      if (found === null) return problem(404, "not_found", "Escalation not found.");
+      if (found.item.status !== "open") return notOpen(found.item.resolved_by);
+      if (found.item.refusal == null) return problem(409, "nothing_to_retry", "Claude didn't decline this question.");
+      return applyRetry(found.record, found.item, bodyOf<RetryEscalation>(body), new Date().toISOString());
     },
 
     "POST /api/escalations/{escalation_id}/reassign": ({ params, body }) => {

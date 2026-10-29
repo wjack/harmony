@@ -99,7 +99,10 @@ def proposed(recipients: Sequence[CardRecipient]) -> list[CardRecipient]:
 
 
 def as_drafted(pending: PendingEscalation) -> ResolveEscalation:
-    """The draft approved as written; a consult with no draft is declined."""
+    """The draft approved as written; a consult with no draft is declined, and a turn
+    Claude declined ends the conversation, as it did before a person could retry it."""
+    if pending.kind == "refused_turn":
+        return ResolveEscalation(action="decline")
     if pending.kind == "consult" and not pending.draft:
         return ResolveEscalation(action="decline", text=NO_DRAFT_TEXT)
     return ResolveEscalation(action="approve", draft_rev=pending.draft_rev)

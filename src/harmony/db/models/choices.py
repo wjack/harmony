@@ -95,7 +95,7 @@ SteerFailure = Literal[
 ]
 
 ConsultStatus = Literal["answering", "released", "needs_human", "declined"]
-EscalationKind = Literal["consult", "outbound_review"]
+EscalationKind = Literal["consult", "outbound_review", "refused_turn"]
 
 Fit = Literal["strong", "possible", "no", "unknown"]
 

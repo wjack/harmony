@@ -4,6 +4,7 @@ import { cx } from "../shell/ui/cx";
 import { InlineQuestionCard } from "./cards/InlineQuestionCard";
 import { EarlierVersion, OutreachRecord } from "./cards/OutreachCard";
 import { RequestStatusCard } from "./cards/RequestStatusCard";
+import { DeclinedTurn, type DeclinedTurnProps } from "./DeclinedTurn";
 import type { Block } from "./items";
 import type { StreamingText } from "./live";
 import { ActivityLine, AssistantMessage, StreamingSpark, UserMessage } from "./Messages";
@@ -31,6 +32,11 @@ export interface TranscriptProps extends TranscriptActions {
   showSpark: boolean;
   /** Why Claude's last turn failed (failureCopy.ts), while nothing has run since; else null. */
   failure: string | null;
+  /**
+   * The turn Claude declined at its first step, which can be sent again: its messages
+   * show with the note, Retry and Edit, in place of the failure line.
+   */
+  declined: ({ turnId: string } & Omit<DeclinedTurnProps, "texts">) | null;
   streaming: StreamingText | null;
   /** The outreach card waiting on the member, drawn by the chat in its block's place. */
   pending: { cardId: string; node: ReactNode } | null;
@@ -74,6 +80,7 @@ export function Transcript({
   working,
   showSpark,
   failure,
+  declined,
   streaming,
   pending,
   editedCards,
@@ -86,10 +93,30 @@ export function Transcript({
   const texts = replyTexts(blocks);
   const lastReplyKey = [...texts.keys()].at(-1);
   const sent = sentTimes(blocks);
+  // The declined turn's messages draw as one, at the last of them.
+  const declinedTexts = blocks.flatMap((block) =>
+    block.kind === "user" && !block.pending && declined !== null && block.item.turn_id === declined.turnId
+      ? [{ key: block.key, text: block.item.text }]
+      : [],
+  );
+  const lastDeclined = declinedTexts.at(-1)?.key;
+  const shown = blocks.filter((block) => block.key === lastDeclined || !declinedTexts.some(({ key }) => key === block.key));
 
   const render = (block: Block, next: Block | undefined): ReactNode => {
     switch (block.kind) {
       case "user":
+        if (declined !== null && block.key === lastDeclined) {
+          return (
+            <DeclinedTurn
+              texts={declinedTexts.map(({ text }) => text)}
+              note={declined.note}
+              busy={declined.busy}
+              error={declined.error}
+              blocked={declined.blocked}
+              onRetry={declined.onRetry}
+            />
+          );
+        }
         return <UserMessage text={block.item.text} />;
       case "assistant":
         return (
@@ -138,12 +165,12 @@ export function Transcript({
     }
   };
 
-  const last = blocks.at(-1);
+  const last = shown.at(-1);
   return (
     <div className="flex flex-col">
-      {blocks.map((block, index) => (
-        <div key={block.key} className={cx(spacing(block, blocks[index - 1]), CARD_KINDS.has(block.kind) && "-mx-2")}>
-          {render(block, blocks[index + 1])}
+      {shown.map((block, index) => (
+        <div key={block.key} className={cx(spacing(block, shown[index - 1]), CARD_KINDS.has(block.kind) && "-mx-2")}>
+          {render(block, shown[index + 1])}
         </div>
       ))}
       {streaming !== null && streaming.text !== "" && (
@@ -156,7 +183,7 @@ export function Transcript({
           <StreamingSpark />
         </div>
       )}
-      {failure !== null && !showSpark && (
+      {failure !== null && !showSpark && lastDeclined === undefined && (
         <p role="alert" className={cx(last?.kind === "user" ? "mt-12" : "mt-5", "text-[14px] leading-6 text-danger")}>
           {failure}
         </p>

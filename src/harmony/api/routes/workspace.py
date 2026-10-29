@@ -53,7 +53,7 @@ from harmony.api.deps import (
     snapshot_session,
 )
 from harmony.api.routes.acting import require_acting
-from harmony.api.routes.inbox import held_reason
+from harmony.api.routes.inbox import REFUSED_TURN_REASON, held_reason
 from harmony.api.routes.problems import (
     ApiProblemError,
     from_update_failure,
@@ -93,7 +93,16 @@ from harmony.db.models.choices import (
     SteerStatus,
 )
 from harmony.db.uow import unit_of_work
-from harmony.domain import clock, consults, escalations, notes, routing, steers, threads
+from harmony.domain import (
+    clock,
+    consults,
+    escalations,
+    notes,
+    refusals,
+    routing,
+    steers,
+    threads,
+)
 from harmony.domain.notes import BODY_MAX_CHARS
 from harmony.errors import WorldRetired
 from harmony.names import first_name
@@ -170,6 +179,21 @@ class EscalationDraftView(_View):
     created_at: datetime
 
 
+class RefusalView(_View):
+    """Claude declined the step an open item waits on (`stop_reason: "refusal"`):
+    drafting a question's answer, or checking the draft against what the org shares
+    (Retry runs that step again: `POST /api/escalations/{id}/retry`), or the
+    representative's turn itself (`turn`, a `refused_turn` item, which approving
+    retries)."""
+
+    step: refusals.RefusedStep
+    # The model's category for it (`stop_details.category`), when it gave one.
+    category: str | None
+    # The draft rev the declined call worked on: a Retry's (`AnswerUsed.draft_rev`) is newer.
+    # None for a turn.
+    draft_rev: int | None
+
+
 class EscalationView(_View):
     id: UUID
     kind: EscalationKind
@@ -177,6 +201,8 @@ class EscalationView(_View):
     consult_id: UUID | None
     # "Why this needs you" (`release.why_needed`, or the held-message reason).
     reason: str
+    # Set while it waits on a step Claude declined.
+    refusal: RefusalView | None = None
     assignees: list[MemberRef]
     current_draft_rev: int | None
     drafts: list[EscalationDraftView]
@@ -515,6 +541,22 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
     )
     by_consult = {row.id: row for row in consult_rows}
     drafted_from = await _drafted_from(db, actor, consult_rows)
+    declined = await refusals.consult_refusals(
+        db,
+        (
+            (row.consult_id, row.current_draft_rev)
+            for row in escalation_rows
+            if row.consult_id is not None and row.status == "open"
+        ),
+    )
+    turns_declined = await refusals.turn_refusals(
+        db,
+        (
+            row.turn_id
+            for row in escalation_rows
+            if row.turn_id is not None and row.status == "open"
+        ),
+    )
     return ThreadWorkspace(
         thread_id=thread.id,
         side=side,
@@ -528,6 +570,11 @@ async def _workspace(db: AsyncSession, actor: Actor, thread: Thread) -> ThreadWo
                 rewritten_by,
                 members,
                 org_slugs,
+                declined.get(row.consult_id)
+                if row.consult_id is not None
+                else turns_declined.get(row.turn_id)
+                if row.turn_id is not None
+                else None,
             )
             for row in escalation_rows
         ],
@@ -673,6 +720,7 @@ def _escalation_view(
     rewritten_by: Mapping[tuple[UUID, int], RewrittenBy],
     members: Mapping[UUID, MemberRef],
     org_slugs: Sequence[str],
+    refusal: refusals.Refusal | None,
 ) -> EscalationView:
     held = next((draft for draft in drafts if draft.draft_rev == 1), None)
     current = next((draft for draft in drafts if draft.draft_rev == row.current_draft_rev), None)
@@ -682,9 +730,16 @@ def _escalation_view(
         status=escalations.escalation_status(row.status),
         consult_id=row.consult_id,
         reason=(
-            release.why_needed(consult, current.held_reason if current is not None else None)
+            REFUSED_TURN_REASON
+            if row.kind == "refused_turn"
+            else release.why_needed(consult, current.held_reason if current is not None else None)
             if consult is not None
             else held_reason(held.rationale if held is not None else None)
+        ),
+        refusal=(
+            RefusalView(step=refusal.step, category=refusal.category, draft_rev=refusal.draft_rev)
+            if refusal is not None
+            else None
         ),
         assignees=_refs(row.assignees, members),
         current_draft_rev=row.current_draft_rev,

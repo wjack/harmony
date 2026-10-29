@@ -44,7 +44,15 @@ describe("drafts", () => {
     expect(shownAnswer(rev, {})).toBe(rev.answer);
     expect(shownAnswer(rev, { answer: "Edited." })).toBe("Edited.");
     expect(shownAnswer(null, {})).toBe("");
-    const first = { ...rev, draft_rev: 1 };
+    const first = { ...rev, draft_rev: 1, answer: "No, not before Nov 10." };
     expect(sortedDrafts([rev, first]).map((draft) => draft.draft_rev)).toEqual([1, 2]);
+  });
+
+  it("folds a Retry's rev that repeats the draft before it, but never a steer's", () => {
+    const first = { ...rev, draft_rev: 1 };
+    expect(sortedDrafts([rev, first]).map((draft) => draft.draft_rev)).toEqual([2]);
+    const helen = { id: "member-helen", slug: "helen", name: "Dr. Helen Ward" };
+    const steered = { ...rev, rewritten_by: { steer_id: "steer-1", author: helen } };
+    expect(sortedDrafts([steered, first]).map((draft) => draft.draft_rev)).toEqual([1, 2]);
   });
 });

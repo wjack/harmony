@@ -7,6 +7,8 @@
 - PATCH /api/conversations/{conversation_id} {send_without_confirmation}: the chat's
   send mode (null follows the org's default)
 - POST /api/conversations/{conversation_id}/messages {text}: send a message
+- POST /api/conversations/{conversation_id}/retry {text?}: send the message Claude
+  declined again, as written or edited (`ConversationWorkflow.retry_turn`)
 
 Only the owner sees a conversation (404 for anyone else). The API never calls the
 model and never writes the transcript: posting signal-with-starts the
@@ -29,6 +31,7 @@ from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from temporalio.client import WorkflowUpdateFailedError
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.service import RPCError
 
@@ -42,8 +45,10 @@ from harmony.api.deps import (
     snapshot_session,
 )
 from harmony.api.routes.problems import (
+    from_update_failure,
     member_ref,
     not_found,
+    problem,
     problems,
     temporal_of,
     world_retired,
@@ -56,12 +61,19 @@ from harmony.db.uow import unit_of_work
 from harmony.domain import cards, conversations
 from harmony.domain.conversations import SendMode
 from harmony.errors import WorldRetired
-from harmony.temporal.activities.network import conversation_input, run_query
+from harmony.temporal.activities.network import (
+    conversation_input,
+    run_query,
+    run_update,
+    workflow_missing,
+)
 from harmony.temporal.start import start_world_workflow
 from harmony.temporal.workflows.conversation import ConversationWorkflow
 from harmony.temporal.workflows.payloads import (
     ConversationPending,
     MemberMessage,
+    RetryTurn,
+    TurnRetried,
     conversation_workflow_id,
 )
 
@@ -109,6 +121,17 @@ class ConversationCreated(_View):
     message_id: UUID
 
 
+class ChatRefusal(_View):
+    """Claude declined the chat's last turn (`stop_reason: "refusal"`)."""
+
+    # The model's category for it (`stop_details.category`), when it gave one.
+    category: str | None
+    # The turn whose member messages it declined (`UserTextItem.turn_id`).
+    turn_id: UUID
+    # The member may send them again, as written or edited (`POST .../retry`).
+    retryable: bool
+
+
 class ConversationDetail(_View):
     id: UUID
     title: str
@@ -124,12 +147,24 @@ class ConversationDetail(_View):
     # Why Claude's last turn failed, if it did and nothing has run since: the chat says
     # why it couldn't reply, so the member can try again.
     turn_failure: FailureReason | None
+    # Set when that failure is a refusal.
+    refusal: ChatRefusal | None = None
     send_mode: SendMode
     version: int
 
 
 class PostMessage(BaseModel):
     text: str = Field(min_length=1, max_length=MESSAGE_MAX_CHARS)
+
+
+class RetryMessage(BaseModel):
+    # The member's edit of the declined message; omitted sends it again as written.
+    text: str | None = Field(default=None, min_length=1, max_length=MESSAGE_MAX_CHARS)
+
+
+class MessagesRetried(_View):
+    # The messages queued again: the edited one's id is new.
+    message_ids: list[UUID]
 
 
 class MessagePosted(_View):
@@ -245,6 +280,7 @@ async def get_conversation(
         turn_in_flight=held.turn_in_flight if held else False,
         looking=held.looking if held else False,
         turn_failure=held.turn_failure if held else None,
+        refusal=_refusal(held),
         send_mode=mode,
         version=conversation.version,
     )
@@ -303,6 +339,48 @@ async def post_message(
     if card is not None:
         return MessagePosted(message_id=message_id, outcome="card_rejected", card_id=card.id)
     return MessagePosted(message_id=message_id, outcome="queued")
+
+
+@router.post(
+    "/conversations/{conversation_id}/retry",
+    response_model=MessagesRetried,
+    responses=problems(status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT),
+)
+async def retry_message(
+    conversation_id: UUID,
+    body: RetryMessage,
+    actor: ActorDep,
+    sessionmaker: SessionmakerDep,
+    services: ServicesDep,
+) -> MessagesRetried:
+    """Send the message Claude declined again, or the member's edit of it, as a new turn.
+    409 `nothing_to_retry` unless Claude's last turn declined it at its first call and
+    nothing has happened since."""
+    client = temporal_of(services)
+    async with sessionmaker() as db:
+        conversation = await _owned(db, actor, conversation_id)
+    handle = client.get_workflow_handle(conversation_workflow_id(actor.world_id, conversation.id))
+    retry = RetryTurn(member_id=actor.member_id, text=body.text, message_id=uuid4())
+    try:
+        retried = await run_update(handle, "retry_turn", retry, TurnRetried)
+    except WorkflowUpdateFailedError as failed:
+        raise await from_update_failure(failed, sessionmaker, actor.world_id) from None
+    except RPCError as error:
+        if not workflow_missing(error):
+            raise
+        raise problem(
+            status.HTTP_409_CONFLICT, "nothing_to_retry", "there's no declined message to retry"
+        ) from None
+    return MessagesRetried(message_ids=retried.message_ids)
+
+
+def _refusal(held: ConversationPending | None) -> ChatRefusal | None:
+    refused = held.refused if held else None
+    if refused is None:
+        return None
+    return ChatRefusal(
+        category=refused.category, turn_id=refused.turn_id, retryable=refused.retryable
+    )
 
 
 async def _owned(db: AsyncSession, actor: Actor, conversation_id: UUID) -> Conversation:

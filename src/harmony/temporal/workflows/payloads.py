@@ -64,6 +64,9 @@ STEER_CONFLICT_ERROR: Final = "SteerConflict"
 # `details=[BudgetExhaustedDetails(...).model_dump()]`: an uncaught exception would
 # reach the workflow with only its class name and message (3.5).
 BUDGET_EXHAUSTED_ERROR: Final = "BudgetExhausted"
+# Retry names a step that isn't waiting on one: nothing refused, or something has
+# happened since (409 `nothing_to_retry`).
+NOTHING_TO_RETRY_ERROR: Final = "NothingToRetry"
 
 # Which failure a refused reservation is, by the cap that refused it (3.5).
 BUDGET_FAILURES: Final[Mapping[BudgetKind, FailureReason]] = MappingProxyType(
@@ -81,6 +84,8 @@ BUDGET_FAILURES: Final[Mapping[BudgetKind, FailureReason]] = MappingProxyType(
 # unsaved draft wording it carries at most `steers.draft_text`'s CHECK.
 STEER_BODY_MAX_CHARS: Final = 4000
 DRAFT_TEXT_MAX_CHARS: Final = 20_000
+# A member's rewording of a question is as long as a stored one (`consults.QUESTION_MAX_CHARS`).
+QUESTION_MAX_CHARS: Final = 2000
 
 # A conversation workflow continues as new after this many turns, and exits after
 # this long without a message, an update or a pending card.
@@ -172,6 +177,35 @@ class NetworkNews(_Payload):
     answered: bool = False
 
 
+class RefusedTurn(_Payload):
+    """A chat turn the model refused (`stop_reason: "refusal"`), with the member
+    messages it opened with. `retryable` when the refusal came at the turn's first call,
+    so the turn stored nothing but those messages: Retry takes them back and sends them
+    again, as written or as the member edited them (`retry_turn`)."""
+
+    turn_id: UUID
+    messages: list[MemberMessage]
+    # `stop_details.category`; None when the API gave none.
+    category: str | None = None
+    retryable: bool = False
+
+
+class RetryTurn(_Payload):
+    """Update `retry_turn`: send the refused turn's messages again, or `text` in their
+    place (the member's edit)."""
+
+    member_id: UUID
+    text: str | None = Field(default=None, min_length=1, max_length=20_000)
+    # The edited message's id; the original messages keep theirs.
+    message_id: UUID
+
+
+class TurnRetried(_Payload):
+    """`retry_turn`'s result: the ids of the messages queued again."""
+
+    message_ids: list[UUID]
+
+
 class ConversationCarry(_Payload):
     """What a conversation run hands to the next one on continue-as-new."""
 
@@ -188,6 +222,8 @@ class ConversationCarry(_Payload):
     undelivered_updates: list[NetworkUpdate] = []
     # Why the last turn failed, if it did and no turn has run since.
     turn_failure: FailureReason | None = None
+    # The last turn, when the model refused it and no turn has run since.
+    refused: RefusedTurn | None = None
     # Update looks taken (their cassette turn number continues from here; a look never
     # takes a chat turn number).
     looks: int = Field(default=0, ge=0)
@@ -237,6 +273,8 @@ class ConversationPending(_Payload):
     turns: int
     # Why the last turn failed (Claude couldn't reply), if no turn has run since.
     turn_failure: FailureReason | None = None
+    # The last turn, when the model refused it and no turn has run since.
+    refused: RefusedTurn | None = None
     # An update look is running: Claude is checking the news, and may say nothing.
     looking: bool = False
 
@@ -409,8 +447,20 @@ class UseAnswer(_Payload):
     from_escalation_id: UUID
 
 
+class RetryAnswer(_Payload):
+    """Update `retry_answer`: run the item's declined step again as its next rev (the
+    answerer when it has no draft, on the member's rewording of the question when given:
+    `question`; else the sharing check, on the member's edit of the draft when given:
+    `draft_text`). The API has checked that the member may act on it."""
+
+    escalation_id: UUID
+    org_id: UUID
+    draft_text: str | None = Field(default=None, min_length=1, max_length=DRAFT_TEXT_MAX_CHARS)
+    question: str | None = Field(default=None, min_length=1, max_length=QUESTION_MAX_CHARS)
+
+
 class AnswerUsed(_Payload):
-    """`use_answer`'s result: the rev being drafted."""
+    """`use_answer`'s and `retry_answer`'s result: the rev being drafted."""
 
     escalation_id: UUID
     draft_rev: int
@@ -443,6 +493,7 @@ __all__ = [
     "LOOK_EVERY",
     "LOOK_LATEST",
     "LOOK_LULL",
+    "NOTHING_TO_RETRY_ERROR",
     "NOT_FOUND_ERROR",
     "NOT_IN_ORG_ERROR",
     "REQUEST_KIND",
@@ -467,8 +518,11 @@ __all__ = [
     "NetworkUpdateKind",
     "Reassigned",
     "Reassignment",
+    "RefusedTurn",
     "ReopenInput",
     "RequestProgress",
+    "RetryAnswer",
+    "RetryTurn",
     "SteerRequest",
     "SteerStarted",
     "ThreadCarry",
@@ -477,6 +531,7 @@ __all__ = [
     "ThreadProgress",
     "ThreadProgressRef",
     "ThreadResult",
+    "TurnRetried",
     "UseAnswer",
     "conversation_workflow_id",
     "request_workflow_id",

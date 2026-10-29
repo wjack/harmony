@@ -1,8 +1,8 @@
 /**
  * The chat's /__gallery sections: the new-chat screen, Alex's conversation at each stage
  * of the story (over stateful fixtures, so its cards really work), the live demo's
- * variants (sending without review, a spent budget, a card declined or redrafted), and
- * each card on its own in every state.
+ * variants (sending without review, a spent budget, a card declined or redrafted, a
+ * message Claude declined), and each card on its own in every state.
  */
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -30,14 +30,18 @@ import { EarlierVersion, OutreachCard, OutreachRecord } from "./cards/OutreachCa
 import { RequestStatusPanel } from "./cards/RequestStatusCard";
 import { ChatScreen } from "./ChatScreen";
 import { Composer } from "./Composer";
+import { DeclinedTurn } from "./DeclinedTurn";
 import { toBlocks, type ActivityItem } from "./items";
 import { ActivityLine, AssistantMessage, StreamingSpark, UserMessage } from "./Messages";
 import { NewChat } from "./NewChat";
-import { budgetLine } from "./failureCopy";
+import { budgetLine, declinedLine } from "./failureCopy";
 import { initialDraft, partVersions, type OutreachDraft } from "./outreachDraft";
 import type { ChatItem, ChatItemOf, ChatItemType, InlineQuestionItem, OutreachCardItem, SendMode } from "./types";
 
 const noop = () => undefined;
+
+/** A follow-up of Alex's that the gallery has Claude decline. */
+const REFUSED_MESSAGE = "Also ask Northlake to test two of the coupons to failure, so we can see where they give.";
 const ALEX = members.alex.id;
 
 function itemsOf<T extends ChatItemType>(items: readonly ChatItem[], type: T): ChatItemOf<T>[] {
@@ -413,6 +417,48 @@ export default [
     fixtures: chatRoutes("sent", { turnFailure: "model_error" }),
     ...PAGE,
     render: () => <Chat />,
+  },
+  {
+    title: "Chat: Claude declined a message",
+    description:
+      "Claude declined Alex's follow-up (biosecurity). The note sits under the message: Retry sends it again as it was, and Edit opens it to reword first.",
+    fixtures: chatRoutes("sent", { refused: { text: REFUSED_MESSAGE, category: "bio" } }),
+    ...PAGE,
+    render: () => <Chat />,
+  },
+  {
+    title: "Declined message",
+    description:
+      "The note on its own: with a category; two messages sent together, after a Retry that didn't go through; and while the budget is used up, when Retry waits but Edit still opens.",
+    render: () => (
+      // Wider apart than a transcript's turns, so each example reads on its own.
+      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-16">
+        <DeclinedTurn
+          texts={[REFUSED_MESSAGE]}
+          note={declinedLine("respond to this", "cyber")}
+          busy={false}
+          error={null}
+          blocked={null}
+          onRetry={noop}
+        />
+        <DeclinedTurn
+          texts={[OPENING_MESSAGE, REFUSED_MESSAGE]}
+          note={declinedLine("respond to this", null)}
+          busy={false}
+          error="That didn't go through. Try again."
+          blocked={null}
+          onRetry={noop}
+        />
+        <DeclinedTurn
+          texts={[REFUSED_MESSAGE]}
+          note={declinedLine("respond to this", "bio")}
+          busy={false}
+          error={null}
+          blocked={budgetLine("daily_exhausted")}
+          onRetry={noop}
+        />
+      </div>
+    ),
   },
   {
     title: "Chat: Ridgeline asks Alex",

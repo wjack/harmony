@@ -192,12 +192,14 @@ def main_activities(deps: WorkerDeps) -> list[Callable[..., Any]]:
         network.settle_steer,
         network.set_thread_state,
         network.note_unsummarized,
+        network.open_refused_turn,
         network.record_reopen,
         network.begin_reopen,
         network.finish_run,
         network.end_round,
         network.notify_conversation,
         network.nudge_chat,
+        network.take_back_turn,
     ]
 
 

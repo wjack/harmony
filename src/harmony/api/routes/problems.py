@@ -15,6 +15,8 @@ How the API maps workflow and domain errors:
 - The `steer` Update's `STEER_RUNNING_ERROR` → 409 `steer_running` with `by` (who runs
   it), `THREAD_CLOSED_ERROR` → 409 `thread_closed`, `STEER_CONFLICT_ERROR` → 422
   `invalid`.
+- A Retry's `NOTHING_TO_RETRY_ERROR` → 409 `nothing_to_retry`: no refused step is waiting
+  for one, or something has happened since.
 
 Writes that name the member their tab shows (`as_member_id`: steers, reopen, notes)
 answer 409 `member_changed` with `member`, the session's current member, before they
@@ -58,6 +60,7 @@ from harmony.temporal.workflows.payloads import (
     INVALID_RESOLUTION_ERROR,
     NOT_FOUND_ERROR,
     NOT_IN_ORG_ERROR,
+    NOTHING_TO_RETRY_ERROR,
     STEER_CONFLICT_ERROR,
     STEER_RUNNING_ERROR,
     THREAD_CLOSED_ERROR,
@@ -82,6 +85,7 @@ ProblemCode = Literal[
     "reopen_in_progress",
     "closing_in_progress",
     "not_reopenable",
+    "nothing_to_retry",
 ]
 
 RETRY_AFTER: Final = "Retry-After"
@@ -164,6 +168,7 @@ _BY_TYPE: Final[Mapping[str, tuple[int, ProblemCode]]] = {
     STEER_RUNNING_ERROR: (status.HTTP_409_CONFLICT, "steer_running"),
     THREAD_CLOSED_ERROR: (status.HTTP_409_CONFLICT, "thread_closed"),
     STEER_CONFLICT_ERROR: (status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid"),
+    NOTHING_TO_RETRY_ERROR: (status.HTTP_409_CONFLICT, "nothing_to_retry"),
 }
 # The `ApplicationError` detail naming the member a problem's field refers to.
 _MEMBER_DETAILS: Final[Mapping[ProblemCode, tuple[str, Literal["resolved_by", "by"]]]] = {

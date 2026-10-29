@@ -27,18 +27,29 @@ const BUSY = "The live-model budget was busy or nearly used up. Try again in a m
 
 const MODEL_ERROR =
   "Claude couldn't reply because the model service returned an error. Send a message to try again.";
-const REFUSED = "Claude declined to respond to this. Try rephrasing.";
+
+/** The API's refusal categories (`stop_details.category`) as the notes name them; others show as given. */
+const CATEGORY: Readonly<Record<string, string>> = { bio: "biosecurity", cyber: "cybersecurity" };
 
 /**
- * What to say about a stopped turn or thread. A model error or a refusal reads the same
- * whatever the budget says. A budget refusal reads by the budget's state now: while a
- * cap is spent, that cap's line (the one that also stops the next turn, which may be a
- * different cap from the one that refused this call); once nothing is, the "busy" line,
- * since the next try may well go through.
+ * A note that Claude declined a step, naming the category when the API gave one:
+ * `declinedLine("respond to this", "bio")` is "Claude declined to respond to this (biosecurity)."
  */
-export function failureLine(reason: FailureReason, state: BudgetState): string {
+export function declinedLine(what: string, category: string | null): string {
+  if (category === null) return `Claude declined to ${what}.`;
+  return `Claude declined to ${what} (${CATEGORY[category] ?? category}).`;
+}
+
+/**
+ * What to say about a stopped turn or thread. A model error or a refusal (with its
+ * `category`, if any) reads the same whatever the budget says. A budget refusal reads by
+ * the budget's state now: while a cap is spent, that cap's line (the one that also stops
+ * the next turn, which may be a different cap from the one that refused this call); once
+ * nothing is, the "busy" line, since the next try may well go through.
+ */
+export function failureLine(reason: FailureReason, state: BudgetState, category: string | null = null): string {
   if (reason === "model_error") return MODEL_ERROR;
-  if (reason === "refused") return REFUSED;
+  if (reason === "refused") return `${declinedLine("respond to this", category)} Try rephrasing.`;
   return state === "ok" ? BUSY : EXHAUSTED[state];
 }
 

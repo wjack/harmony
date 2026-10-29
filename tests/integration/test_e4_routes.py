@@ -8,8 +8,10 @@ they answer when a thread, request or chat has already ended."""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any, Final, cast
 from uuid import UUID, uuid4
 
@@ -26,7 +28,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from harmony.agents import consult as answerer
-from harmony.agents import context, transcript
+from harmony.agents import context, keys, transcript
 from harmony.agents import steer as steer_agent
 from harmony.agents.consult import ConsultDraft
 from harmony.agents.models import (
@@ -42,6 +44,7 @@ from harmony.agents.runtime import OwedResult, text_block
 from harmony.agents.transcript import RepSideTranscript, WireMessage
 from harmony.api.app import create_app
 from harmony.api.routes import cards as cards_route
+from harmony.api.routes import conversations as conversations_route
 from harmony.api.routes.problems import from_update_failure
 from harmony.auth.session import current_actor, resolve_actor
 from harmony.config import Settings
@@ -50,6 +53,8 @@ from harmony.db.models import (
     Conversation,
     Escalation,
     Event,
+    Member,
+    ModelCall,
     NetworkRequest,
     RepNotice,
     RepSession,
@@ -71,13 +76,16 @@ from harmony.temporal.activities.agents import (
 from harmony.temporal.activities.network import (
     ApplyResolutionInput,
     NetworkActivities,
+    RefusedTurnInput,
     ThreadStateInput,
 )
 from harmony.temporal.policies import MAIN_TASK_QUEUE, MODEL_TASK_QUEUE
 from harmony.temporal.workflows.payloads import (
     STEER_RUNNING_ERROR,
     CardResolved,
+    RetryTurn,
     ThreadInput,
+    TurnRetried,
     thread_workflow_id,
 )
 from harmony.temporal.workflows.thread import ThreadWorkflow
@@ -411,6 +419,69 @@ async def test_a_drafts_route_is_served_as_the_members_it_named(
         }
 
 
+async def test_a_refused_turn_waits_in_its_sides_inbox_naming_its_category(
+    app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    """Claude declined Northlake's turn: `open_refused_turn` opens an item routed as a
+    held message is, once, and holds the thread on Northlake's side. The inbox names it,
+    and the workspace gives the category from the turn's model call."""
+    async with visitor(app) as v:
+        world_id = await _world(v)
+        outreach = await approved_outreach(db_sessionmaker, world_id, NORTHLAKE, CALDER)
+        thread_id = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
+        turn_id = uuid4()
+        activities = NetworkActivities(cast(Client, None), db_sessionmaker)
+        refused = RefusedTurnInput(
+            world_id=world_id,
+            thread_id=thread_id,
+            side="responder",
+            org_id=NORTHLAKE,
+            turn_id=turn_id,
+        )
+        item_id = await activities.open_refused_turn(refused)
+        assert await activities.open_refused_turn(refused) == item_id
+        async with db_sessionmaker.begin() as session:
+            row = await repo.get_required(session, Escalation, world_id, item_id)
+            assert (row.kind, row.turn_id, row.status) == ("refused_turn", turn_id, "open")
+            [assignee] = escalations.assignee_ids(row)
+            member = await repo.get_required(session, Member, world_id, assignee)
+            thread = await repo.get_required(session, Thread, world_id, thread_id)
+            assert (thread.state, thread.side_to_move) == ("awaiting_principal", "responder")
+            session.add(
+                ModelCall(
+                    turn_id=turn_id,
+                    step_idx=0,
+                    world_id=world_id,
+                    request_text="{}",
+                    response_text=json.dumps(
+                        {
+                            "role": "assistant",
+                            "content": [],
+                            "stop_reason": "refusal",
+                            "stop_details": {"type": "refusal", "category": "cyber"},
+                        }
+                    ),
+                    served_model="scripted",
+                    usage_json={},
+                    cost_usd=Decimal(0),
+                    attempt=1,
+                )
+            )
+
+        await v.act_as(member.slug)
+        [item] = (await v.json("GET", "/inbox"))["needs_you"]
+        assert item["escalation"]["kind"] == "refused_turn"
+        assert item["escalation"]["question"] == "Claude declined to continue the conversation"
+        assert item["escalation"]["reason"] == "Retry Claude's turn, or end the conversation."
+        workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
+        [view] = workspace["escalations"]
+        assert view["refusal"] == {"step": "turn", "category": "cyber", "draft_rev": None}
+        assert view["drafts"] == []
+        # Retry is the item's own resolution, not a question's Retry.
+        problem = await v.json("POST", f"/escalations/{item_id}/retry", json={}, expect=422)
+        assert problem["code"] == "invalid"
+
+
 async def test_drafts_and_close_summaries_stay_with_their_side_after_the_thread_ends(
     app: FastAPI, db_sessionmaker: Sessionmaker
 ) -> None:
@@ -670,6 +741,57 @@ async def test_escalation_actions_check_who_and_whether_it_is_open(
         problem = await v.json("POST", f"{path}/resolve", json=approve, expect=409)
         assert problem["code"] == "escalation_not_open"
         assert problem["resolved_by"]["slug"] == "helen"
+
+
+async def test_a_question_is_retried_only_while_claude_declined_its_step(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker
+) -> None:
+    """Retry is for the step Claude declined: the workspace names it (with its category
+    and rev), and the route takes it to the thread's workflow only then."""
+    async with visitor(temporal_app) as v:
+        outreach, thread_id, escalation_id = await _story(v, db_sessionmaker)
+        path = f"/escalations/{escalation_id}/retry"
+        await v.act_as("alex")
+        assert (await v.json("POST", path, json={}, expect=404))["code"] == "not_found"
+
+        await v.act_as("helen")
+        problem = await v.json("POST", path, json={}, expect=409)
+        assert problem["code"] == "nothing_to_retry"
+        await v.request("POST", path, json={"draft_text": ""}, expect=422)
+
+        # The check of rev 1 ended in a refusal.
+        async with db_sessionmaker.begin() as session:
+            row = await repo.get_required(session, Escalation, outreach.world_id, escalation_id)
+            assert row.consult_id is not None
+            session.add(
+                ModelCall(
+                    turn_id=keys.sharing_turn_id(row.consult_id),
+                    step_idx=0,
+                    world_id=outreach.world_id,
+                    request_text="{}",
+                    response_text=json.dumps(
+                        {
+                            "role": "assistant",
+                            "content": [],
+                            "stop_reason": "refusal",
+                            "stop_details": {"type": "refusal", "category": "bio"},
+                        }
+                    ),
+                    served_model="scripted",
+                    usage_json={},
+                    cost_usd=Decimal(0),
+                    attempt=1,
+                )
+            )
+        workspace = await v.json("GET", f"/threads/{thread_id}/workspace")
+        [item] = [e for e in workspace["escalations"] if e["id"] == str(escalation_id)]
+        assert item["refusal"] == {"step": "sharing_check", "category": "bio", "draft_rev": 1}
+        # The question is reworded only for an answer Claude declined to draft.
+        problem = await v.json("POST", path, json={"question": "Which day?"}, expect=422)
+        assert problem["code"] == "invalid"
+        # Now it goes to the workflow, which has ended: the item isn't open any more.
+        problem = await v.json("POST", path, json={"draft_text": "Yes, Nov 4."}, expect=409)
+        assert problem["code"] == "escalation_not_open"
 
 
 async def test_a_steer_is_its_sides_own_and_needs_a_running_thread(
@@ -1707,6 +1829,39 @@ async def test_an_outreach_decline_takes_an_optional_reason(
         None,
         "decline",
     )
+
+
+async def test_a_declined_chat_message_is_its_owners_to_send_again(
+    temporal_app: FastAPI, db_sessionmaker: Sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry and Edit of a message Claude declined: the chat's owner only, the edit
+    within a message's limits, and a chat with nothing declined conflicts."""
+    async with visitor(temporal_app) as v:
+        world_id = await _world(v)
+        chat_id = await start_chat(db_sessionmaker, world_id)
+        path = f"/conversations/{chat_id}/retry"
+        await v.act_as("raj")
+        await v.request("POST", path, json={}, expect=404)
+
+        await v.act_as("alex")
+        # No workflow holds a refused turn.
+        assert (await v.json("POST", path, json={}, expect=409))["code"] == "nothing_to_retry"
+        await v.request("POST", path, json={"text": ""}, expect=422)
+
+        sent: list[RetryTurn] = []
+
+        async def run_update(
+            handle: object, name: str, retry: RetryTurn, result_type: type[TurnRetried]
+        ) -> TurnRetried:
+            sent.append(retry)
+            return TurnRetried(message_ids=[retry.message_id])
+
+        monkeypatch.setattr(conversations_route, "run_update", run_update)
+        retried = await v.json("POST", path, json={"text": "Find CT time before Nov 6."})
+
+    (retry,) = sent
+    assert (retry.member_id, retry.text) == (ALEX, "Find CT time before Nov 6.")
+    assert retried["message_ids"] == [str(retry.message_id)]
 
 
 async def test_an_auto_card_the_workflow_rejects_stays_auto_and_shows_its_proposal(

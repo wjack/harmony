@@ -286,6 +286,9 @@ class EscalationText(_View):
 HELD_MESSAGE_QUESTION: Final = "Review the outgoing message"
 # Why a held message (`outbound_review`) waits, for one whose rev 1 doesn't say.
 HELD_MESSAGE_REASON: Final = "A teammate approves every message in Ask mode."
+# A representative's turn Claude declined (`refused_turn`).
+REFUSED_TURN_QUESTION: Final = "Claude declined to continue the conversation"
+REFUSED_TURN_REASON: Final = "Retry Claude's turn, or end the conversation."
 
 
 def held_reason(rationale: str | None) -> str:
@@ -325,7 +328,7 @@ async def escalation_texts(
     for draft in drafts:
         short_questions[draft.escalation_id] = draft.short_question
         held_reasons[draft.escalation_id] = draft.held_reason
-    held = [row.id for row in rows if row.consult_id is None]
+    held = [row.id for row in rows if row.kind == "outbound_review"]
     reasons: dict[UUID, str] = (
         dict(
             (
@@ -343,6 +346,11 @@ async def escalation_texts(
     )
     texts: dict[UUID, EscalationText] = {}
     for row in rows:
+        if row.kind == "refused_turn":
+            texts[row.id] = EscalationText(
+                question=REFUSED_TURN_QUESTION, reason=REFUSED_TURN_REASON
+            )
+            continue
         consult = asked.get(row.consult_id) if row.consult_id is not None else None
         texts[row.id] = (
             EscalationText(

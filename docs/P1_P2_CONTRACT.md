@@ -57,7 +57,7 @@ The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this
   - `answer_turn_id`, which keys the answerer's `model_calls`: its tool calls are what it looked at;
   - `sharing_check` (`{within_sharing, reason}`, nullable);
   - `released_text`, `released_by` (`auto` | `member`), `released_by_member_id` and `released_at`.
-- `escalations(…, kind, consult_id?, status, dedupe_key, assignees, priority, current_draft_rev, resolution, resolved_by_member_id, resolved_at)`.
+- `escalations(…, kind, consult_id?, turn_id?, status, dedupe_key, assignees, priority, current_draft_rev, resolution, resolved_by_member_id, resolved_at)`.
 - `escalation_drafts(escalation_id, draft_rev, answer, route, rationale, turn_id)`: a consult's draft revision, or the held message of an `outbound_review`.
 - `agent_turns(id, role, org_id, thread_id?, conversation_id?, side?, cost_usd, latency_ms, completed_at)` is unchanged from P0 and now written (`domain/agent_turns.record`): one row per finished internal, representative or screener turn, and one per draft rev of a consult's answerer and sharing check.
 
@@ -67,7 +67,7 @@ The live demo ([LIVE_DEMO_PLAN.md](LIVE_DEMO_PLAN.md), "3.n" there) adds to this
 - `ThreadMessageKind` = `message` | `close`.
 - `Provenance` = `agent` | `agent_approved` | `human`.
 - `ConsultStatus` = `answering` | `released` | `needs_human` | `declined`.
-- `EscalationKind` = `consult` | `outbound_review`.
+- `EscalationKind` = `consult` | `outbound_review` | `refused_turn` (a representative's turn Claude declined; `turn_id` names it, and it has no drafts; migration `0007_refused_turn`).
 - `ReleasedBy` = `auto` | `member`.
 - `Fit` = `strong` | `possible` | `no` | `unknown`.
 - `CardKind` = `outreach`.
@@ -315,13 +315,16 @@ The requester's representative opens. A side's turn is a tool loop (R§5). When 
   - Decline: nothing is sent, and the same side moves again with the owed refusal.
   - Take over: the member's text goes out with `human` provenance, and the counterparty moves next.
 - **`close`.** The thread becomes `closed` for both sides, `end_reason` `closed`. The other side gets a `closed` notice and one last turn, in which only `close` (its own summary) takes effect.
-- **Bounds.** `max_steps` hands the move to the other side, like `end_turn`. A refusal closes the thread with no summary (`end_reason` `stopped`). The thread ends `expired` at `max_turns` (both sides' turns together, `turn_limit`) or at `deadline_at` (`deadline`), which bounds every wait, a person's included. These bounds are R§5's turn cap and idle timeout; there is no separate idle timer.
+- **A refusal.** The thread goes `awaiting_principal` on the refusing side, which gets a `refused_turn` item (`open_refused_turn`), routed to the default assignee as a held message is.
+  - Retry (`approve`): the side moves again. When the model answered none of the refused turn's input, it is taken back (`take_back_turn`) and delivered again; the turn opens with any guidance an Edit wrote meanwhile.
+  - End the conversation (`decline`): the thread closes with no summary (`end_reason` `stopped`, `stop_reason` `refused`), as every refusal did before. Runs started before this (`workflow.patched("refused-turn")` false) and story runs still close at once.
+- **Bounds.** `max_steps` hands the move to the other side, like `end_turn`. The thread ends `expired` at `max_turns` (both sides' turns together, `turn_limit`) or at `deadline_at` (`deadline`), which bounds every wait, a person's included. These bounds are R§5's turn cap and idle timeout; there is no separate idle timer.
 
 Handlers:
 - Update `resolve_escalation(EscalationResolution) -> EscalationResolved(escalation_id, action, message_id?)`. The validator rejects:
   - with `ESCALATION_NOT_OPEN_ERROR` an escalation that isn't open on this thread;
   - with `NOT_IN_ORG_ERROR` a `resolution.org_id` that isn't the escalation's org;
-  - with `INVALID_RESOLUTION_ERROR` a `take_over` without text, a consult `approve` with neither text nor a draft, or a `draft_rev` that hasn't been written yet.
+  - with `INVALID_RESOLUTION_ERROR` a `take_over` without text, a consult `approve` with neither text nor a draft, a `draft_rev` that hasn't been written yet, or a `take_over` or `draft_rev` on a `refused_turn`.
 
   A consult resolution is pinned to a draft rev: the one it names, else the newest one written.
 - Update `reassign(Reassignment(escalation_id, to_member_id, by_member_id)) -> Reassigned(escalation_id, assignees)`. It moves the item and its routed thread access, and records nothing for learning.
@@ -334,7 +337,7 @@ Handlers:
 `AgentActivities` runs on `harmony-model` (`activities/agents.py`):
 - `internal_turn(InternalTurnInput) -> InternalTurnResult`.
 - Each internal or representative turn writes its `agent_turns` row once `run_turn` returns. A turn paused on a card is written again when it resumes and ends.
-- `rep_turn(RepTurnInput(world_id, thread_id, side, org_id, cassette_thread, turn_id, turn, owed, deliver_after_seq, guidance_version?, steer_seq=0, reopened=false, run_start_seq=0)) -> RepTurnResult(turn_id, stop, next_step, effects, owed?, refusal_category?, delivered_through_seq)`.
+- `rep_turn(RepTurnInput(world_id, thread_id, side, org_id, cassette_thread, turn_id, turn, owed, deliver_after_seq, guidance_version?, steer_seq=0, reopened=false, run_start_seq=0, retry_of?)) -> RepTurnResult(turn_id, stop, next_step, effects, owed?, refusal_category?, delivered_through_seq)`.
 - `answer_consult(AnswerConsultInput(world_id, consult_id, thread_id, side, org_id, cassette_thread, consult_turn, draft_rev, instruction?))` returns one of:
   - `ConsultReleased(consult_id, owed)`;
   - `ConsultEscalated(consult_id, escalation_id, draft_rev?, assignee_ids)`.
@@ -350,6 +353,7 @@ Handlers:
 - `reassign_escalation(ReassignInput(world_id, reassignment)) -> Reassigned`.
 - `set_thread_state(ThreadStateInput)` and `notify_conversation(NotifyConversationInput)`. `ThreadStateInput` gains `end_reason`, `closed_by` and `last_turn` (round 2).
 - `settled_card`, `stored_resolution` (the retry paths) and `note_unsummarized`.
+- `open_refused_turn(RefusedTurnInput(world_id, thread_id, side, org_id, turn_id)) -> UUID`: opens the `refused_turn` item (id `uuid5(turn_id, "refused_turn")`, dedupe key `refused_turn:{turn_id}`), routes it and holds the thread `awaiting_principal`.
 - Round 2 adds `record_steer`, `settle_steer`, `record_reopen`, `begin_reopen`, `finish_run` and `end_round`. `set_request_status` and `report_redraft_failed` are gone.
 
 `post_holding`, `holding_delay`, `record_acceptance`, `accept_delegated` and `countersign` are deleted, and so is their registration in `worker.main_activities`.
@@ -367,7 +371,8 @@ Errors are `ApiProblem{detail, code, resolved_by?}`, where `code` is one of:
 - `not_in_org`;
 - `world_retired`;
 - the live phase's `passcode_required`, `passcode_invalid`, `too_many_attempts` and `payload_too_large` (see [Live phase](#live-phase));
-- round 2's `member_changed`, `steer_running`, `thread_closed`, `thread_open`, `reopen_in_progress`, `closing_in_progress` and `not_reopenable` (see [Round 2](#round-2)). `ApiProblem` gains `by`, `member`, `reopened_by` and `block` for them.
+- round 2's `member_changed`, `steer_running`, `thread_closed`, `thread_open`, `reopen_in_progress`, `closing_in_progress` and `not_reopenable` (see [Round 2](#round-2)). `ApiProblem` gains `by`, `member`, `reopened_by` and `block` for them;
+- `nothing_to_retry`: a Retry with no step Claude declined waiting on it.
 
 A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor`. The `/api/offers` route and the grant, permission and knowledge-visibility endpoints are gone.
 
@@ -375,15 +380,17 @@ A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor
 |---|---|---|
 | `GET /api/conversations` | → `ConversationSummary[]` (cursor) | The sidebar Recents. |
 | `POST /api/conversations` | `{text, send_without_confirmation?: bool \| null}` → `ConversationCreated{id, message_id}` | Start a chat, with its send mode (null follows the org's default). |
-| `GET /api/conversations/{id}` | → `ConversationDetail{id, title, owner, items: ChatItem[], pending_card_id, queued_message_ids, turn_in_flight, turn_failure, send_mode, version}` (cursor) | The chat view. Owner only. |
+| `GET /api/conversations/{id}` | → `ConversationDetail{id, title, owner, items: ChatItem[], pending_card_id, queued_message_ids, turn_in_flight, turn_failure, refusal?, send_mode, version}` (cursor) | The chat view. Owner only. `refusal{turn_id, category, retryable}` is set while Claude's last turn ended in a refusal. |
 | `PATCH /api/conversations/{id}` | `ConversationUpdate{send_without_confirmation: bool \| null}` → `SendMode{override, org_default, effective}` | The chat's send mode (Live phase). Owner only (404 otherwise); 409 `world_retired`. |
 | `POST /api/conversations/{id}/messages` | `{text}` → `MessagePosted{message_id, outcome: queued \| card_rejected, card_id}` | A member message. A pending card is rejected with the text as feedback. |
+| `POST /api/conversations/{id}/retry` | `{text?}` (1..20000) → `MessagesRetried{message_ids}` | Send the messages Claude declined again, or `text` (the member's edit of them), as a new turn. Owner only (404 otherwise). 409 `nothing_to_retry` unless the last turn was refused at its first call and nothing has happened since. |
 | `POST /api/cards/{card_id}/approve` | `{recipients?: uuid[] (min 1), brief?: string, asks?: {org id: string}}` → `CardResolved{card_id, status, request_id?}` | Approve the outreach card, with the member's brief, asks and a subset of the proposed recipients. The web always sends `recipients`. Errors: 409 `card_not_pending` (also for an `auto` card); 422 `invalid` (recipients or asks outside the proposed ones); 404. |
 | `POST /api/cards/{card_id}/reject` | `{feedback?}` (1..4000) → `CardResolved` | The card's Decline (`rejected_with: decline`), with an optional reason that only Claude in this chat reads. |
 | `GET /api/requests/{id}` | → `RequestStatusView` (cursor) | Per-recipient status, latest line and own-side close summary. |
 | `GET /api/inbox` | → `Inbox{needs_you, with_your_team, claude_handling, shared_with_you, done}` (cursor) | Each section is a list of `InboxItem{thread_id, title, side, counterparty, thread_state, stop_reason?, side_to_move, escalation: InboxEscalation{id, kind, status, question, short_question?, reason, assignees, priority, created_at, version}?, shared_by?, shared_question?, access_reasons, last_activity_at}`. `title` is `threads.thread_title`. `reason` is "Why this needs you". `side_to_move` is whose turn it is; while the thread is `awaiting_principal`, it is the side checking with its team. A live thread with an item open for a teammate (not the member) is `with_your_team`. A thread whose items are all resolved stays under `claude_handling` (or `shared_with_you`) until it closes or expires; only those are `done`. There are no routing stats. |
-| `POST /api/escalations/{id}/resolve` | `{action: approve \| decline \| take_over, text? (≤ 20000), draft_rev?}` → `EscalationResolved` | Approve and send (`text` is the member's wording of the draft), Decline (`text` is the reason), or Take over (needs `text`). `draft_rev` pins the draft the member saw, held messages included. `revise` is refused (422). Errors: 409 `escalation_not_open` (with `resolved_by`); 403 `not_in_org`; 422 `invalid`; 404. |
+| `POST /api/escalations/{id}/resolve` | `{action: approve \| decline \| take_over, text? (≤ 20000), draft_rev?}` → `EscalationResolved` | Approve and send (`text` is the member's wording of the draft), Decline (`text` is the reason), or Take over (needs `text`). `draft_rev` pins the draft the member saw, held messages included. `revise` is refused (422). On a `refused_turn`, approve is Retry and decline ends the conversation; take over is 422 `invalid`. Errors: 409 `escalation_not_open` (with `resolved_by`); 403 `not_in_org`; 422 `invalid`; 404. |
 | `POST /api/escalations/{id}/reassign` | `{member_id}` → `Reassigned` | Move the item. The target must be a member of the escalation's org. |
+| `POST /api/escalations/{id}/retry` | `{draft_text?, question?}` (1..20000, 1..2000) → `AnswerUsed{escalation_id, draft_rev}` | Run the step Claude declined on a question again, as its next draft rev: the answerer (on `question`, the member's rewording, which replaces the stored question), or the sharing check on the current draft (or on `draft_text`, the member's edit of it). `EscalationView.refusal{step, category, draft_rev}` says which. Errors: 409 `nothing_to_retry` unless Claude declined the step the item waits on; 409 `escalation_not_open`; 422 `invalid` for a held message, or `question` when the check is the declined step; 404. |
 | `GET /api/threads/{id}/workspace` | → `ThreadWorkspace` (cursor) | Own side only; details below the table. |
 | `POST /api/threads/{id}/notes` | `{body, as_member_id}` → `NoteView` | A comment for the team, which no Claude reads. An `@slug` mention shares the thread. Errors: 409 `member_changed` (with `member`: the tab's member is stale after a switch elsewhere), checked first; 404. |
 | `POST /api/threads/{id}/steers` | `AddSteer` → 202 `SteerStarted` | Edit: tell this side's Claude what to do differently (round 2). |
@@ -399,7 +406,7 @@ A 401 keeps FastAPI's `{detail}`. Routes marked "cursor" carry `X-Harmony-Cursor
 
 **`ThreadWorkspace`** is `{thread_id, side, consults, escalations, notes, representative, close_summary, steers, guidance, earlier_summaries, version}` (round 2 adds the last three; see [Round 2](#round-2)):
 - `consults`: `ConsultView{id, question, status, answer, needs_human, needs_human_reason, sharing_check, released_text, released_by, released_by_member, created_at, released_at, version}`.
-- `escalations`: `EscalationView{id, kind, status, consult_id, reason, assignees, priority, current_draft_rev, drafts: EscalationDraftView{draft_rev, answer, short_question?, route: RouteView{assignees: {slug, why}[]}?, rationale, activity: ActivityLine[], rewritten_by: RewrittenBy{steer_id, author}?, created_at}[], resolution, resolved_by, resolved_at, created_at, version}`. A held message's `reason` is rev 1's own (an Edit's hold, a guided bare reply, or *Ask*).
+- `escalations`: `EscalationView{id, kind, status, consult_id, reason, assignees, priority, current_draft_rev, drafts: EscalationDraftView{draft_rev, answer, short_question?, route: RouteView{assignees: {slug, why}[]}?, rationale, activity: ActivityLine[], rewritten_by: RewrittenBy{steer_id, author}?, created_at}[], refusal: RefusalView{step: answer | sharing_check | turn, category?, draft_rev?}?, resolution, resolved_by, resolved_at, created_at, version}`. A held message's `reason` is rev 1's own (an Edit's hold, a guided bare reply, or *Ask*). `refusal` is set while the item waits on a step Claude declined; a `refused_turn`'s is step `turn` with no `draft_rev`.
 - `representative`: `RepresentativeContext{parts: ContextPart[], notices: DeliveredNotice[], released: ReleasedAnswerView[], guidance: DeliveredGuidance[], frozen_at}`. It is "What our representative saw", and is null before the side's first turn. `notices` (`{kind, text, delivered_at}`), `released` and `guidance` list only what a stored call of that side carried.
 
 **`HarmonySettingsView`** is `{org, settings_version, public_summary, instructions, sharing_description, autonomy, trusted_organizations, directory_visibility, routing_prompt, default_assignee, send_without_confirmation, members, policy_version, editable}`:
@@ -508,7 +515,7 @@ Without the cookie, every other `/api/*` path, and any method but `GET` and `HEA
 - Across the activity boundary, a refused reservation is a non-retryable `ApplicationError(type=BUDGET_EXHAUSTED_ERROR ("BudgetExhausted"), details=[BudgetExhaustedDetails(kind).model_dump()])`. The workflows read `kind` from the cause's details.
 - A refused reservation publishes `demo.notice {kind: "budget", entity_id: null}` in the demo scope. `DemoNotice.kind` is free text, so the event schema doesn't change. The SPA refetches `GET /api/budget` on it.
 - `threads.stop_reason` (a `FailureReason`, CHECK `ck_threads_stop_reason`) says why the system stopped a thread. It reaches `ThreadSummary.stop_reason`, `InboxItem.stop_reason`, `NetworkEdge.stop_reason` and `RecipientStatus.stop_reason`; it is status, not content, so `scoped` keeps it.
-- `ConversationDetail.turn_failure: FailureReason | None` replaces `turn_failed`, as do `ConversationCarry.turn_failure` and `ConversationPending.turn_failure`. The workflows classify the cause: `BudgetExhausted` by its `kind`; `BadRequest`, `TurnIncomplete` and `ModelCallError` after its retries give `model_error`; an internal turn that stops on `refusal` gives `refused`. The next member message clears it. A thread whose turn is refused closes with `stop_reason` `refused`.
+- `ConversationDetail.turn_failure: FailureReason | None` replaces `turn_failed`, as do `ConversationCarry.turn_failure` and `ConversationPending.turn_failure`. The workflows classify the cause: `BudgetExhausted` by its `kind`; `BadRequest`, `TurnIncomplete` and `ModelCallError` after its retries give `model_error`; an internal turn that stops on `refusal` gives `refused`. The next member message clears it. A thread whose turn is refused waits for that side's team (`refused_turn`); one they end closes with `stop_reason` `refused`.
 - `ModelCallError` (429, 529, 5xx, a broken stream) is retried 6 times from 5 s, doubling, at most 60 s (`policies.model_retry_policy`).
 - `live_controls(key PK, paused, provider_blocked_until?, updated_at)` is the live switch: one row, key `live`, inserted by `0002`. `budget_pg.ensure_hosted_rows(sessionmaker, settings)` runs in the API lifespan and at worker start: it inserts the switch row if missing and upserts the `global` row and today's `daily:` row with the configured caps. `sessions.client_key_hash` replaces `access_code_hash`, and `budget_pg.access_key` is gone.
 - **Hosted caps** (`HostedCaps`) apply to live calls in prod, or locally with `HOSTED_CAPS_IN_DEV`. `hosted_budget_keys` gives `lineage:<id>`, `client:<hash>:<date>` (when the session has a hash), `daily:<date>` and `global`, creating missing lineage, client and daily rows; the `global` row comes only from boot, and a missing one refuses as `global`. `HostedBudgets.reserve` reads the switch first (paused, a missing row, or an active provider block refuse before any budget row is locked), then locks every key in key order. When several caps refuse, the widest is named: `paused`, `provider`, `global`, `session`, `daily`, `client`.

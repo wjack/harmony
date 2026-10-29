@@ -40,7 +40,15 @@ export function declineBody(reason: string, rev: EscalationDraft | null): Resolv
   return { action: "decline", text: text === "" ? null : text, draft_rev: rev?.draft_rev ?? null };
 }
 
-/** Drafts oldest first, so the pager reads "2 of 2" for the newest. */
+/**
+ * Drafts oldest first, so the pager reads "2 of 2" for the newest. A rev that repeats the
+ * one before it word for word without a steer (a Retry of the sharing check) stands in
+ * for it: there's nothing to page back to.
+ */
 export function sortedDrafts(drafts: readonly EscalationDraft[]): EscalationDraft[] {
-  return [...drafts].sort((a, b) => a.draft_rev - b.draft_rev);
+  const sorted = [...drafts].sort((a, b) => a.draft_rev - b.draft_rev);
+  return sorted.filter((draft, index) => {
+    const next = sorted[index + 1];
+    return !(next?.rewritten_by === null && next.answer === draft.answer);
+  });
 }

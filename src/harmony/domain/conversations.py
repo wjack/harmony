@@ -694,6 +694,7 @@ def _transcript_item(
             at=row.created_at,
             text=text,
             member_id=row.author_member_id or conversation.owner_member_id,
+            turn_id=row.turn_id,
         )
     if kind == "text" and isinstance(text, str) and text.strip():
         return AssistantTextItem(id=item_id, at=row.created_at, markdown=text, turn_id=row.turn_id)
