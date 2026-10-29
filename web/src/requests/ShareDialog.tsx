@@ -135,7 +135,7 @@ export function ShareDialog({
               setQuestion(event.target.value);
             }}
             rows={3}
-            placeholder="e.g. Can we run the reserve XRD slot on Nov 4?"
+            placeholder="e.g. Can we run the reserve compression slot on Nov 4?"
             className="w-full resize-none rounded-control border border-border-strong bg-surface px-3 py-2 text-[14px] leading-5 outline-none placeholder:text-faint focus:border-muted"
           />
         </label>

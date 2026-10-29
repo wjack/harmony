@@ -309,7 +309,7 @@ async def test_concurrent_resets_of_one_world_fork_it_once(
 
 # The Vantage probe of Northlake: requester Vantage (Jordan), recipient Northlake (Helen,
 # Raj).
-ADVERSARY = demo_id("network_request", "vantage-northlake-thursday-sem")
+ADVERSARY = demo_id("network_request", "vantage-northlake-thursday-ct")
 
 
 class _RecordingStarter:

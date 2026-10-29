@@ -5,8 +5,8 @@ import type { GallerySection } from "../gallery/types";
 import { CardFoot, CardHint, DeclineStep, EditableText, PartLabel, useApproveShortcut } from ".";
 
 const DRAFTS = [
-  "Thanks for the follow-up questions. SEM/EDS can run on November 4 to 6, and XRD opens on November 10.",
-  "Thanks for the follow-up questions. SEM/EDS can run on November 4 to 6. XRD opens on November 10 and results are ready on November 12.",
+  "Thanks for the follow-up questions. CT can run on November 4 to 6, and compression testing opens on November 10.",
+  "Thanks for the follow-up questions. CT can run on November 4 to 6. Compression testing opens on November 10 and results are ready on November 12.",
 ];
 
 function Card({ required }: { required: boolean }) {
@@ -24,7 +24,7 @@ function Card({ required }: { required: boolean }) {
   return (
     <section ref={card} className="max-w-[640px] rounded-composer border border-border-strong bg-surface shadow-card">
       <div className="flex flex-col gap-2 px-4 pt-4">
-        <h3 className="text-ui-title font-medium text-ink">Can SEM/EDS stay air-free, and can all 14 finish by Nov 11?</h3>
+        <h3 className="text-ui-title font-medium text-ink">Can CT come before the compression tests, and can all 14 finish by Nov 11?</h3>
         <CardHint>Claude wrote this before your side's latest edit reached it.</CardHint>
         <div className="mt-2 border-t border-border pt-3">
           <PartLabel
@@ -47,7 +47,7 @@ function Card({ required }: { required: boolean }) {
         <DeclineStep
           required={required}
           title={required ? "Decline to answer" : "Don't send this request"}
-          caption={required ? "Claude may pass this reason on to Henderson Lab." : "Only Claude in this chat sees this."}
+          caption={required ? "Claude may pass this reason on to Henderson Frame Lab." : "Only Claude in this chat sees this."}
           onCancel={() => { setDeclining(false); }}
           onConfirm={(reason) => {
             setDeclining(false);
@@ -58,7 +58,7 @@ function Card({ required }: { required: boolean }) {
         <CardFoot
           onDecline={() => { setDeclining(true); }}
           onApprove={() => { setDone("Approved"); }}
-          hintRight={<>Claude replies to Henderson Lab with this answer · ⌘↵</>}
+          hintRight={<>Claude replies to Henderson Frame Lab with this answer · ⌘↵</>}
         />
       )}
     </section>

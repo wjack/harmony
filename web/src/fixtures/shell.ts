@@ -34,7 +34,7 @@ function minutesAgo(minutes: number): string {
 }
 
 export const orgs = {
-  henderson: { id: "0b1d7a3e-0000-4000-8000-0000000000c1", slug: "henderson", name: "Henderson Lab" },
+  henderson: { id: "0b1d7a3e-0000-4000-8000-0000000000c1", slug: "henderson", name: "Henderson Frame Lab" },
   northlake: {
     id: "0b1d7a3e-0000-4000-8000-0000000000c2",
     slug: "northlake",
@@ -66,7 +66,7 @@ export const members = {
   alex: member(1, "alex", "Alex Chen", "PhD student", "admin", orgs.henderson),
   maya: member(2, "maya", "Prof. Maya Henderson", "Principal investigator", "admin", orgs.henderson),
   helen: member(3, "helen", "Dr. Helen Ward", "Core director", "admin", orgs.northlake),
-  raj: member(4, "raj", "Raj Patel", "Staff scientist, XRD and SEM", "admin", orgs.northlake),
+  raj: member(4, "raj", "Raj Patel", "Staff scientist, CT and mechanical testing", "admin", orgs.northlake),
   dana: member(5, "dana", "Dana Okafor", "Operations lead", "admin", orgs.ridgeline),
   priya: member(6, "priya", "Priya Nair", "Principal", "admin", orgs.calder),
   jordan: member(7, "jordan", "Jordan Pike", "Analyst", "admin", orgs.vantage),
@@ -120,21 +120,21 @@ export function sessionAs(actingAs: MemberView, epoch = 1, worldId = WORLD_ID): 
 export const conversations: ConversationSummary[] = [
   {
     id: "0b1d7a3e-0000-4000-8000-0000000002a1",
-    title: "Find a lab that can run XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode…",
+    title: "Find a lab that can CT-scan and compression-test 12 titanium lattice coupons…",
     last_activity_at: minutesAgo(2),
     has_pending_card: true,
     version: 4,
   },
   {
     id: "0b1d7a3e-0000-4000-8000-0000000002a2",
-    title: "Glovebox transfer options for air-sensitive samples",
+    title: "Stress relief options for printed titanium coupons",
     last_activity_at: minutesAgo(60 * 26),
     has_pending_card: false,
     version: 2,
   },
   {
     id: "0b1d7a3e-0000-4000-8000-0000000002a3",
-    title: "Coin-cell cycling schedule for November",
+    title: "Fatigue testing schedule for November",
     last_activity_at: minutesAgo(60 * 50),
     has_pending_card: false,
     version: 6,
@@ -179,17 +179,17 @@ export const inbox: Inbox = {
   needs_you: [
     inboxItem(
       1,
-      "XRD and SEM/EDS for 12 air-sensitive powders",
+      "CT and compression tests on 12 lattice coupons",
       orgs.henderson,
-      "Can you run XRD before Nov 6?",
-      "The draft uses the reserve block on Wed Nov 4, which isn't in what Northlake shares, so a person decides.",
+      "Can you run the compression tests before Nov 6?",
+      "The draft says which client freed the Nov 4 block, which isn't in what Northlake shares, so a person decides.",
       3,
     ),
     inboxItem(
       2,
-      "Thursday SEM availability",
+      "Thursday CT availability",
       orgs.vantage,
-      "Which clients hold your Thursday SEM slots?",
+      "Which clients hold your Thursday CT slots?",
       "The question asks about other clients' bookings, which Northlake doesn't share.",
       41,
     ),
@@ -210,10 +210,10 @@ export const alexInbox: Inbox = {
     {
       ...inboxItem(
         4,
-        "XRD and SEM for 12 Na-ion cathode powders",
+        "Stacked CT holder for 12 lattice coupons",
         orgs.ridgeline,
-        "Which seal material does the holder need?",
-        "Nothing on file names a seal material.",
+        "Which tube does the holder need?",
+        "Nothing on file names a tube material.",
         1,
         members.alex,
       ),
@@ -228,11 +228,11 @@ export const story: DemoStory = {
   world_date: "2026-10-26",
   acting_as: { id: members.alex.id, slug: members.alex.slug, name: members.alex.name },
   suggested_message:
-    "Find a lab that can run XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders by Nov 6, and get an airtight sample holder made for the transfer. Budget is about $2,000.",
+    "Find a lab that can CT-scan and compression-test 12 titanium lattice coupons by Nov 6, and get a holder made that stacks them for the CT. Budget is about $2,000.",
   suggested_recipients: [orgs.northlake, orgs.ridgeline, orgs.calder],
   network: {
     summary:
-      "Battery materials research: a university lab with new cathode powders to measure, the instrument cores that measure them, shops that build lab hardware, and the suppliers, testers, data and modeling groups, funder and broker around them.",
+      "Lighter bike frames: a university lab with new 3D-printed titanium lattices to test, the instrument cores that scan and test them, shops that print, treat and machine parts, and the suppliers, testers, data and modeling groups, funder and broker around them.",
     orgs: [
       { org: orgs.calder, kind: "computation" },
       { org: orgs.cascade, kind: "characterization" },

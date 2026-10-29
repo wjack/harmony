@@ -2,7 +2,7 @@
  * The request view against the seeded world on ScriptedModel (FEEDBACK_R2_PLAN §2.4,
  * EDIT.md §9, REOPEN.md §10.6), at desktop sizes.
  *
- * Raj opens Ridgeline's "SEM on argon-stored seals" at 1000×860. Its Northlake reply is
+ * Raj opens Ridgeline's "CT on two welded brackets" at 1000×860. Its Northlake reply is
  * long on purpose: it shows in full, Details opens as a sheet below the demo bar,
  * nothing scrolls sideways, and the seeded thread reads Closed with no Reopen.
  *
@@ -23,8 +23,8 @@ import { unlock } from "./unlock";
 const TURNS = { timeout: 90_000 };
 const LAPTOP = { width: 1000, height: 860 };
 
-const SEALS = "SEM on argon-stored seals";
-const VANTAGE_REQUEST = "Rush SEM slot enquiry";
+const BRACKETS = "CT on two welded brackets";
+const VANTAGE_REQUEST = "Rush CT slot enquiry";
 const VANTAGE = "Vantage Market Intelligence";
 const NORTHLAKE = "Northlake Characterization Core";
 const EDIT_TEXT = "Don't say who books the afternoons. Just say they aren't available.";
@@ -108,12 +108,12 @@ test("at 1000×860 a seeded request fits: Details below the demo bar, a long rep
   await switchToNetworkMember(page, "Alex Chen", "Raj Patel");
   await page.setViewportSize(LAPTOP);
   await page.goto("/requests");
-  await page.getByRole("main").getByRole("link").filter({ hasText: SEALS }).first().click();
-  await expect(page.getByRole("heading", { level: 1, name: SEALS })).toBeVisible();
+  await page.getByRole("main").getByRole("link").filter({ hasText: BRACKETS }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: BRACKETS })).toBeVisible();
 
   await test.step("Northlake's long reply shows in full, with no View more", async () => {
-    const reply = conversation(page).getByRole("article").filter({ hasText: "Yes, we can image both." });
-    await expect(reply).toContainText("add air-free transfer at $150 for the batch.");
+    const reply = conversation(page).getByRole("article").filter({ hasText: "Yes, we can scan both." });
+    await expect(reply).toContainText("Intake and setup is $150 for the batch.");
     expect(await cutShort(reply.locator("p").first())).toBeLessThanOrEqual(0);
     await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
   });

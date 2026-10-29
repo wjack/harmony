@@ -111,8 +111,8 @@ describe("CardFoot", () => {
       <CardFoot
         onDecline={onDecline}
         onApprove={onApprove}
-        hintLeft="Ask mode with Henderson Lab"
-        hintRight="Claude replies to Henderson Lab with this answer"
+        hintLeft="Ask mode with Henderson Frame Lab"
+        hintRight="Claude replies to Henderson Frame Lab with this answer"
       />,
     );
     expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
@@ -123,7 +123,7 @@ describe("CardFoot", () => {
     expect(onApprove).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Decline" }));
     expect(onDecline).toHaveBeenCalledOnce();
-    expect(screen.getByText("Claude replies to Henderson Lab with this answer")).toBeTruthy();
+    expect(screen.getByText("Claude replies to Henderson Frame Lab with this answer")).toBeTruthy();
     // Sticks to the bottom of the scroll area while the card is taller than the view.
     const foot = container.querySelector("[data-card-foot]");
     expect(foot?.className).toMatch(/\bsticky\b/);

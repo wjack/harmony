@@ -105,12 +105,12 @@ META_NOTE: Final = re.compile(
     r"|leav(?:e|ing) the (?:thread|conversation) open"
 )
 # What a thread's first message to a recipient must not say, by scenario and recipient
-# (section 5.2): another recipient's part of the request.
+# (section 5.2): another recipient's part of the request. Ridgeline's holder is for the
+# CT, so naming the CT is its own business; asking for compression tests is Northlake's.
 OPENER_LEAKS: Final[Mapping[str, Mapping[str, re.Pattern[str]]]] = {
     "harmony-demo": {
         "ridgeline": re.compile(
-            r"(?i)\bSEM\b|\bEDS\b|characteri[sz]ation core|Northlake Characteri"
-            r"|run (the )?XRD|XRD (and|on) \d+"
+            r"(?i)\bcompression\b|characteri[sz]ation core|Northlake Characteri"
         ),
         "northlake": re.compile(r"(?i)Ridgeline|holder|machin"),
     }

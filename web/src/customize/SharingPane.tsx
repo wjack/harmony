@@ -108,7 +108,7 @@ function TrustedRow({ org, row, saved, defaultMode, editable, focused, onChange,
 }
 
 interface SharingPaneProps extends PaneProps {
-  /** The organization a link asked about ("Edit what you share with Henderson Lab"). */
+  /** The organization a link asked about ("Edit what you share with Henderson Frame Lab"). */
   focusOrgId: string | null;
 }
 

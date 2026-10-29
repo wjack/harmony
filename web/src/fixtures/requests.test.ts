@@ -39,7 +39,7 @@ describe("inboxFor", () => {
 
   it("carries each item's question and why it needs a person", () => {
     const [held, question] = inboxFor(requestsWorld(NOW), members.helen).needs_you;
-    expect(question?.escalation).toMatchObject({ kind: "consult", reason: expect.stringContaining("reserve") as unknown });
+    expect(question?.escalation).toMatchObject({ kind: "consult", reason: expect.stringContaining("another client") as unknown });
     // A held message reads the way `api/routes/inbox.py` writes it.
     expect(held?.escalation).toMatchObject({
       kind: "outbound_review",

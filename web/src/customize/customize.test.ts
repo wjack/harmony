@@ -86,9 +86,9 @@ describe("draft", () => {
 
   it("sends only the members whose profile changed, in the same PUT", () => {
     const raj = members.raj.id;
-    const edits = patched({ profiles: { [raj]: "XRD and SEM queues." } });
+    const edits = patched({ profiles: { [raj]: "CT and compression queues." } });
     expect(changedFields(view, edits)).toEqual(["profiles"]);
-    expect(toUpdate(view, edits)).toEqual({ policy_version: 7, member_profiles: { [raj]: "XRD and SEM queues." } });
+    expect(toUpdate(view, edits)).toEqual({ policy_version: 7, member_profiles: { [raj]: "CT and compression queues." } });
     expect(toUpdate(view, withPatch(view, edits, { profiles: { [raj]: applyEdits(view, {}).profiles[raj] ?? "" } }))).toBeNull();
     // Someone outside the org has no profile here to edit.
     expect(patched({ profiles: { [members.alex.id]: "Not ours." } })).toEqual({});
@@ -228,10 +228,10 @@ describe("settings fixtures", () => {
 
   it("saves members' profiles without moving the policy version", async () => {
     const api = createFixtureApi(customizeRoutes(members.helen));
-    const body = { policy_version: 7, member_profiles: { [members.raj.id]: "XRD and SEM queues." } };
+    const body = { policy_version: 7, member_profiles: { [members.raj.id]: "CT and compression queues." } };
     const saved = await api.PUT("/api/orgs/{slug}/harmony", { ...path, body });
     expect(saved.data?.policy_version).toBe(7);
-    expect(saved.data?.members.find((member) => member.member.id === members.raj.id)?.profile).toBe("XRD and SEM queues.");
+    expect(saved.data?.members.find((member) => member.member.id === members.raj.id)?.profile).toBe("CT and compression queues.");
   });
 
   it("adds, updates and removes trusted organizations, each at its own version", async () => {

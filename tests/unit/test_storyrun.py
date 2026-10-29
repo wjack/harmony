@@ -68,7 +68,7 @@ from harmony.llm.pricing import HAIKU_5_5, OPUS_5_5, call_cost, worst_case_cost
 from harmony.llm.requests import ROLE_PROFILES, Tier, production_body
 from harmony.llm.scripted import ToolUseBlock, load_cassettes
 from harmony.seeds.loader import load_scenario
-from harmony.seeds.schema import InlineQuestion, Resolved, Routed, StorySpec
+from harmony.seeds.schema import HumanRule, InlineQuestion, Resolved, StorySpec
 from harmony.storyrun.api import ApiError, HarmonyApi
 from harmony.storyrun.beats import free_form, recast
 from harmony.storyrun.checks import (
@@ -157,7 +157,8 @@ class Escalation:
     thread_id: UUID
     question: str
     reason: str
-    go_ahead: bool = False
+    # Henderson Frame Lab's review of Northlake's quote.
+    review: bool = False
     kind: EscalationKind = "consult"
     resolution: ResolveEscalation | None = None
 
@@ -170,14 +171,15 @@ class Escalation:
 class FakeStory:
     """A world that plays the suggested story as the backend would, a poll at a time.
 
-    Once the outreach is approved, Ridgeline's seal question reaches Alex in the chat
-    and Northlake's slot reaches its assignee's inbox. Once an answer is released, that
-    thread's go-ahead reaches Alex; once he says yes, the thread closes. Once every
+    Once the outreach is approved, Henderson Frame Lab's review of Northlake's quote reaches
+    its assignee (Alex, in the chat), and on the next poll Ridgeline's thread closes with
+    nobody asked. Once the review is answered, Northlake's thread closes. Once every
     thread has closed the request closes, and on the next poll Claude sums up.
 
-    As in the real contract, a request's `waiting_on` names only Henderson Lab's own
-    assignees, and an inbox's `needs_you` only the acting member's escalations: the
-    player finds Northlake's escalation by reading Northlake's members' inboxes.
+    As in the real contract, a request's `waiting_on` names only Henderson Frame Lab's own
+    assignees, an inline question shows only the chat owner's escalations, and an
+    inbox's `needs_you` only the acting member's: the player finds an escalation on
+    Northlake's side by reading Northlake's members' inboxes.
     """
 
     acting: str = "alex"
@@ -196,12 +198,16 @@ class FakeStory:
     followed: set[UUID] = field(default_factory=set[UUID])
     calls: list[str] = field(default_factory=list[str])
     polls: int = 0
+    # Whether the threads have started, once the outreach was approved.
+    opened: bool = False
     # Claude never proposes anything: the run can only time out.
     stalled: bool = False
     # Claude never sums up once the request closes.
     silent: bool = False
-    # Who Northlake's consult is routed to.
-    northlake_assignee: str = "helen"
+    # Who Henderson Frame Lab's review of Northlake's quote is routed to.
+    review_assignee: str = "alex"
+    # A Northlake member its side asks before it quotes, off the story's path.
+    northlake_asks: str | None = None
     # Northlake's thread expires once the outreach is approved.
     northlake_expires: bool = False
     # How long the world has been live when the story starts.
@@ -372,30 +378,38 @@ class FakeStory:
                     AssistantTextItem(
                         id="msg:2",
                         at=NOW + timedelta(minutes=10),
-                        markdown="$1,735 in total, inside your budget.",
+                        markdown="$1,759 in total, inside your budget.",
                         turn_id=None,
                     )
                 )
             return
-        if not self.escalations:
-            self._open("henderson", "ridgeline", "alex", "Which seal material?")
+        if not self.opened:
+            self.opened = True
             if self.northlake_expires:
                 self.ended["northlake"] = "expired"
+            elif self.northlake_asks is not None:
+                self._open("northlake", "henderson", self.northlake_asks, "Book Nov 4?")
             else:
-                self._open("northlake", "henderson", self.northlake_assignee, "XRD by Nov 6?")
+                self._review()
             return
+        # Ridgeline's questions were answered from Henderson Frame Lab's records, and its quote
+        # was within what the representative may accept.
+        self.ended.setdefault("ridgeline", "closed")
         for e in list(self.escalations.values()):
             if e.resolution is None or e.id in self.followed:
                 continue
             self.followed.add(e.id)
-            if e.go_ahead:
-                self.ended[e.thread_org] = "closed"
+            if e.review:
+                self.ended["northlake"] = "closed"
             else:
-                question = f"Go ahead with {e.thread_org}?"
-                self._open("henderson", e.thread_org, "alex", question, go_ahead=True)
+                self._review()
+
+    def _review(self) -> None:
+        question = "Book Northlake's priority option, $1,434 with reports by Nov 5?"
+        self._open("henderson", "northlake", self.review_assignee, question, review=True)
 
     def _open(
-        self, org: str, counterparty: str, member: str, question: str, *, go_ahead: bool = False
+        self, org: str, counterparty: str, member: str, question: str, *, review: bool = False
     ) -> None:
         thread_org = counterparty if org == "henderson" else org
         escalation = Escalation(
@@ -406,7 +420,7 @@ class FakeStory:
             self.threads[thread_org],
             question,
             reason="Only a person can say.",
-            go_ahead=go_ahead,
+            review=review,
         )
         self.escalations[escalation.id] = escalation
 
@@ -454,13 +468,13 @@ class FakeStory:
                 answered_at=None,
             )
             for e in self.escalations.values()
-            if e.org == "henderson"
+            if e.org == "henderson" and e.member == "alex"
         ]
         return [card, *questions]
 
     def _recipient(self, slug: str) -> RecipientStatus:
         """As `domain.requests.status` builds it: an ended thread first, then an open
-        escalation on either side; `waiting_on` names Henderson Lab's assignees only. A
+        escalation on either side; `waiting_on` names Henderson Frame Lab's assignees only. A
         recipient without a thread (Calder, here) is only screened."""
         thread = self.threads.get(slug)
         if thread is None:
@@ -572,34 +586,23 @@ async def test_the_story_plays_through_every_beat() -> None:
     run = await play.play()
     assert (run.outcome, run.detail) == ("done", None)
     assert run.missing() == []
+    # A person is asked twice: the outreach, and Alex's review of Northlake's quote.
     assert actions(world) == [
         "approve outreach to northlake, ridgeline",
         "resolve henderson consult as alex",
-        "resolve northlake consult as helen",
-        "resolve henderson consult as alex",
-        "resolve henderson consult as alex",
     ]
-    # Nothing in the request's status named Helen: she was read as a Northlake member,
-    # first because the story's rule names her.
-    northlake_reads = [c for c in world.calls if c in ("act-as helen", "act-as raj")]
-    assert northlake_reads[0] == "act-as helen"
-    assert answers(world) == [
-        (
-            "henderson",
-            "ridgeline",
-            "Kalrez, please. The powders may sit under argon for a few weeks.",
-        ),
-        ("northlake", "northlake", None),
-        ("henderson", "ridgeline", "Yes, go ahead with Ridgeline."),
-        ("henderson", "northlake", "Yes, go ahead with Northlake."),
-    ]
+    # Nothing in the request's status named a Northlake member, yet both inboxes were
+    # read while its thread was open; neither held anything.
+    assert {"act-as helen", "act-as raj"} <= set(world.calls)
+    # The review's recommendation goes out as drafted.
+    assert answers(world) == [("henderson", "northlake", None)]
     assert all(
         e.resolution is not None and (e.resolution.action, e.resolution.draft_rev) == ("approve", 1)
         for e in world.escalations.values()
     )
     # Counted from the anchor, not from the world's date four days on.
     assert any("by Nov 6," in line for line in lines)
-    assert any("Kalrez, please." in line for line in lines)
+    assert "  Alex Chen: As drafted." in lines
     assert all(line.startswith("  ok") for line in beat_lines(run))
 
 
@@ -619,7 +622,7 @@ async def test_settling_waits_for_the_request_to_close_and_claudes_summary() -> 
     assert await play.settle(run)
     chat, _ = await play.transcripts(run)
     assert chat is not None
-    assert "$1,735 in total" in "\n".join(chat_lines(chat))
+    assert "$1,759 in total" in "\n".join(chat_lines(chat))
 
 
 async def test_settling_gives_up_when_claude_stays_silent() -> None:
@@ -630,16 +633,28 @@ async def test_settling_gives_up_when_claude_stays_silent() -> None:
 
 
 async def test_an_escalation_routed_to_someone_no_rule_names_is_still_resolved() -> None:
-    world = FakeStory(northlake_assignee="raj")
+    world = FakeStory(northlake_asks="raj")
     play, _ = player(world, timeout_s=60)
     run = await play.play()
     assert "resolve northlake consult as raj" in world.calls
-    # The rule for Northlake applies to whoever decides: approve as drafted.
+    # No rule names Northlake: its draft goes out as written.
     assert ("northlake", "northlake", None) in answers(world)
-    # The story's own beats name Helen, so they stay missing, but the run doesn't
-    # wait out its timeout: the request closes, and the run says so.
+    # Off the story's path, so it still finishes; the run records whom it reached.
+    assert (run.outcome, run.missing()) == ("done", [])
+    assert ("routed", "northlake", "raj") in run.seen_atoms
+
+
+async def test_a_review_that_reaches_someone_else_ends_without_the_storys_beats() -> None:
+    world = FakeStory(review_assignee="maya")
+    play, _ = player(world, timeout_s=60)
+    run = await play.play()
+    # Found in Maya's inbox, not the chat; the rule applies to whoever it reached.
+    assert "resolve henderson consult as maya" in world.calls
+    assert answers(world) == [("henderson", "northlake", None)]
+    # The story's own beats name Alex, so they stay missing, but the run doesn't wait
+    # out its timeout: the request closes, and the run says so.
     assert run.outcome == "ended"
-    assert {step.id for step in run.missing()} == {"northlake-routed", "northlake-approved"}
+    assert {step.id for step in run.missing()} == {"review-quote", "review-answer"}
 
 
 async def test_a_conversation_that_expires_ends_the_run_early() -> None:
@@ -873,18 +888,41 @@ def pending(org: str, counterparty: str, *, with_draft: bool = True) -> PendingE
     )
 
 
-async def test_decisions_use_the_story_rules_in_order() -> None:
+# A story with several decisions per org and counterparty: a question, then a go-ahead.
+RULED = STORY.model_copy(
+    update={
+        "humans": [
+            HumanRule.model_validate(rule)
+            for rule in (
+                {"org": "henderson", "counterparty": "ridgeline", "as": "alex", "text": "Kalrez."},
+                {"org": "northlake", "counterparty": "henderson", "as": "helen"},
+                {"org": "henderson", "counterparty": "northlake", "as": "alex", "text": "Yes."},
+                {"org": "henderson", "counterparty": "ridgeline", "as": "alex", "text": "Go on."},
+            )
+        ]
+    }
+)
+
+
+async def test_the_storys_review_goes_out_as_drafted() -> None:
     decide = StoryDecisions(STORY)
+    review = await decide.escalation(pending("henderson", "northlake"))
+    assert (review.action, review.text, review.draft_rev) == ("approve", None, 2)
+    # Any other escalation has no rule: approved as drafted too.
+    ridgeline = await decide.escalation(pending("henderson", "ridgeline"))
+    assert (ridgeline.action, ridgeline.text, ridgeline.draft_rev) == ("approve", None, 2)
+
+
+async def test_decisions_use_the_story_rules_in_order() -> None:
+    decide = StoryDecisions(RULED)
     seal = await decide.escalation(pending("henderson", "ridgeline"))
-    assert (seal.action, seal.draft_rev) == ("approve", 2)
-    assert seal.text is not None
-    assert seal.text.startswith("Kalrez")
+    assert (seal.action, seal.text, seal.draft_rev) == ("approve", "Kalrez.", 2)
     slot = await decide.escalation(pending("northlake", "henderson"))
     assert (slot.action, slot.text) == ("approve", None), "as drafted"
     northlake = await decide.escalation(pending("henderson", "northlake"))
-    assert northlake.text == "Yes, go ahead with Northlake."
+    assert northlake.text == "Yes."
     ridgeline = await decide.escalation(pending("henderson", "ridgeline"))
-    assert ridgeline.text == "Yes, go ahead with Ridgeline."
+    assert ridgeline.text == "Go on."
     # No rule left: the draft goes out as written, or with no draft, a decline.
     again = await decide.escalation(pending("henderson", "ridgeline"))
     assert (again.action, again.text, again.draft_rev) == ("approve", None, 2)
@@ -893,14 +931,12 @@ async def test_decisions_use_the_story_rules_in_order() -> None:
 
 
 async def test_an_escalation_asked_again_keeps_its_rule() -> None:
-    decide = StoryDecisions(STORY)
+    decide = StoryDecisions(RULED)
     seal = pending("henderson", "ridgeline")
     first, second = await decide.escalation(seal), await decide.escalation(seal)
-    assert first.text == second.text
-    assert first.text is not None
-    assert first.text.startswith("Kalrez")
+    assert first.text == second.text == "Kalrez."
     go_ahead = await decide.escalation(pending("henderson", "ridgeline"))
-    assert go_ahead.text == "Yes, go ahead with Ridgeline."
+    assert go_ahead.text == "Go on."
 
 
 def card(
@@ -969,29 +1005,31 @@ async def test_prompting_defaults_to_the_storys_choice() -> None:
     text = "\n".join(shown)
     assert "XRD and SEM/EDS on 12 powders by Nov 6, and a holder" in text
     assert "Calder Computational (no), left out" in text
-    seal = pending("henderson", "ridgeline")
-    resolved = await decide.escalation(seal)
-    assert resolved.action == "approve"
-    assert resolved.text is not None
-    assert resolved.text.startswith("Kalrez")
+    # The story's review: Enter keeps the draft.
+    review = await decide.escalation(pending("henderson", "northlake"))
+    assert (review.action, review.text, review.draft_rev) == ("approve", None, 2)
+    assert "  Claude's draft: As drafted." in shown
+    # A rule's text is the default.
+    ruled = PromptDecisions(RULED, ask=lambda prompt, default: default, show=shown.append)
+    seal = await ruled.escalation(pending("henderson", "ridgeline"))
+    assert (seal.action, seal.text) == ("approve", "Kalrez.")
 
 
 def test_recasting_hands_the_story_members_part_to_another() -> None:
     story = recast(STORY, "maya")
     assert story.member == "maya"
     beats = {step.id: step.expect for step in story.steps}
-    assert beats["seal-question"] == InlineQuestion(
-        beat="inline_question", org="ridgeline", member="maya"
-    )
-    assert beats["seal-answer"] == Resolved(
-        beat="resolved", org="henderson", member="maya", action="approve"
-    )
-    assert beats["northlake-routed"] == Routed(beat="routed", org="northlake", member="helen")
-    assert beats["go-ahead"] == InlineQuestion(
+    assert beats["review-quote"] == InlineQuestion(
         beat="inline_question", org="northlake", member="maya"
     )
-    assert {step.id: step.act_as for step in story.steps}["go-ahead"] == "maya"
-    assert [(rule.org, rule.member) for rule in story.humans] == [
+    assert beats["review-answer"] == Resolved(
+        beat="resolved", org="henderson", member="maya", action="approve"
+    )
+    acts = {step.id: step.act_as for step in story.steps}
+    assert (acts["review-quote"], acts["what-it-saw"]) == ("maya", "helen")
+    assert [(rule.org, rule.member) for rule in story.humans] == [("henderson", "maya")]
+    # Others keep their rules.
+    assert [(rule.org, rule.member) for rule in recast(RULED, "maya").humans] == [
         ("henderson", "maya"),
         ("northlake", "helen"),
         ("henderson", "maya"),
@@ -1124,9 +1162,9 @@ def openers() -> dict[str, str]:
 
 def test_the_opener_patterns_pass_the_cassette_openers() -> None:
     said = openers()
-    # Henderson Lab's own affiliation and the XRD dome mount are its own business.
+    # Henderson Frame Lab's own affiliation and its coupons' test order are its own business.
     assert "Northlake University" in said["ridgeline"]
-    assert "dome mount" in said["northlake"]
+    assert "the CT has to come first" in said["northlake"]
     assert opener_leak("harmony-demo", "northlake", said["northlake"]) is None
     assert opener_leak("harmony-demo", "ridgeline", said["ridgeline"]) is None
     assert opener_leak("harmony-demo", "calder", said["calder"]) is None
@@ -1135,15 +1173,15 @@ def test_the_opener_patterns_pass_the_cassette_openers() -> None:
 @pytest.mark.parametrize(
     ("recipient", "opener", "leak"),
     [
-        ("ridgeline", "We also need SEM/EDS on the powders.", "SEM"),
+        ("ridgeline", "We also need compression tests on the coupons.", "compression"),
         (
             "ridgeline",
-            "Northlake's characterization core will run the XRD.",
+            "Northlake's characterization core will run the CT.",
             "characterization core",
         ),
-        ("ridgeline", "We need XRD on 12 powders and a holder.", "XRD on 12"),
+        ("ridgeline", "Northlake Characterization Core scans them.", "Northlake Characteri"),
         ("northlake", "Ridgeline is making the holder.", "Ridgeline"),
-        ("northlake", "We're having a transfer holder machined.", "holder"),
+        ("northlake", "We're having a stacked holder machined.", "holder"),
     ],
 )
 def test_the_opener_patterns_catch_another_recipients_part(
@@ -1154,7 +1192,7 @@ def test_the_opener_patterns_catch_another_recipients_part(
 
 _TURN = UUID(int=21)
 _CARD_CALL = "toolu_card"
-_NOTHING_NEW_TEXT = "No new message from Henderson Lab since your last turn."
+_NOTHING_NEW_TEXT = "No new message from Henderson Frame Lab since your last turn."
 
 
 def _empty(step_idx: int, *opening: dict[str, JsonValue], notices: bool = False) -> EmptyEndTurn:
@@ -1491,7 +1529,7 @@ def test_a_poller_from_an_exited_local_process_is_stale() -> None:
         (["harmony-demo", "--live", "--worker", "external"], "drop --worker external"),
         (["harmony-demo", "--worker", "elsewhere"], "in-process or external"),
         (["harmony-demo", "--as", "maya"], "the cassettes play alex's chat (chat:alex:1)"),
-        (["harmony-demo", "--as", "helen", "--live"], "the story is Henderson Lab's request"),
+        (["harmony-demo", "--as", "helen", "--live"], "the story is Henderson Frame Lab's request"),
         (["harmony-demo", "--as", "nobody"], "play it as one of alex, maya"),
         (["harmony-demo", "--message", "Book it by {someday}"], "--message:"),
         (["harmony-demo", "--message", "Hi", "--as", "nobody"], "no member 'nobody'"),

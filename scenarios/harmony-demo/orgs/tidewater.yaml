@@ -1,6 +1,6 @@
-# Tidewater Electrochem, background (docs/SCENARIO.md): not a fit for the story.
+# Tidewater Fatigue Lab, background (docs/SCENARIO.md): not a fit for the story.
 slug: tidewater
-name: Tidewater Electrochem
+name: Tidewater Fatigue Lab
 kind: testing
 
 members:
@@ -8,21 +8,21 @@ members:
     name: Mei Tanaka
     title: Testing lead
     role: admin
-    profile: Runs the cycling lab; quotes, test plans and scheduling.
+    profile: Runs the fatigue lab; quotes, test plans and scheduling.
 
 settings:
   public_summary: >-
-    Tidewater Electrochem does contract electrochemical testing on the East Coast:
-    coin- and pouch-cell cycling, rate tests and impedance spectroscopy, starting within
-    a week. We don't do materials characterization or cell fabrication.
+    Tidewater Fatigue Lab does contract fatigue testing on the East Coast: bike frames,
+    forks and handlebars to ISO 4210, and fatigue life of material coupons, starting in
+    about three weeks. We don't do CT or static compression tests.
   instructions: >-
-    You represent Tidewater Electrochem. Consult for prices, test plans and long
+    You represent Tidewater Fatigue Lab. Consult for prices, test plans and long
     campaigns.
 
 policy:
   autonomy: skip
   sharing_description: >-
-    Our price list, test plans and start dates. Not: channel load or other clients.
+    Our price list, test plans and start dates. Not: rig load or other clients.
   routing_prompt: Everything goes to Mei.
   default_assignee: mei
 
@@ -30,14 +30,14 @@ knowledge:
   - slug: about
     title: About Tidewater
     kind: profile
-    body: Contract electrochemical cycling and impedance testing.
+    body: Contract fatigue testing of bike frames, components and coupons.
   - slug: price-list
     title: Price list
     kind: price-list
     body: >-
-      Cycling $12 per channel per day. Impedance spectroscopy $150 per cell. Test plans
-      written free with an order.
-  - slug: channel-load
-    title: Channel load
+      Frame fatigue test to ISO 4210 $1,800 per frame. Coupon fatigue life $40 per rig
+      per day. Test plans written free with an order.
+  - slug: rig-load
+    title: Rig load
     kind: note
-    body: About 40 of our 96 channels are free until December.
+    body: About 6 of our 16 rigs are free from mid-November.

@@ -1,5 +1,5 @@
 # Ostrander Materials Lab, background (docs/SCENARIO.md): a possible fit for the
-# characterization search, but booked through December.
+# testing search, but booked through December.
 slug: ostrander
 name: Ostrander Materials Lab
 kind: characterization
@@ -7,15 +7,15 @@ kind: characterization
 members:
   - slug: tomas
     name: Dr. Tomas Reyes
-    title: XRD facility manager
+    title: CT facility manager
     role: admin
-    profile: Runs the XRD service; scheduling, quotes and external users.
+    profile: Runs the CT service; scheduling, quotes and external users.
 
 settings:
   public_summary: >-
-    Ostrander Materials Lab is a university powder XRD service in the Midwest, open to
+    Ostrander Materials Lab is a university micro-CT service in the Midwest, open to
     outside users. We're booked through December; the next open slots are in January,
-    and we can ask about cancellations. No SEM and no air-free sample handling.
+    and we can ask about cancellations. No mechanical testing.
   instructions: >-
     You represent the Ostrander Materials Lab. Be honest that the calendar is full
     through December. Consult for prices and cancellation slots.
@@ -32,11 +32,11 @@ knowledge:
   - slug: about
     title: About Ostrander
     kind: profile
-    body: University powder XRD service open to outside users.
+    body: University micro-CT service open to outside users.
   - slug: price-list
     title: Price list, external
     kind: price-list
-    body: Powder XRD $55 per sample, external users. Calendar full through December.
+    body: Micro-CT $75 per part, external users. Calendar full through December.
   - slug: cancellations
     title: Cancellations
     kind: note

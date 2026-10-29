@@ -30,8 +30,8 @@ def demo_id(kind: SeedKind, key: str) -> UUID:
     return seed_id("harmony-demo", kind, key)
 
 
-HISTORY = demo_id("thread", "henderson-northlake-precursor-xrd")
-RAJ_THREAD = demo_id("thread", "ridgeline-northlake-seal-sem")
+HISTORY = demo_id("thread", "henderson-northlake-test-ct")
+RAJ_THREAD = demo_id("thread", "ridgeline-northlake-bracket-ct")
 
 
 def build_app(settings: Settings, engine: AsyncEngine, **overrides: Any) -> FastAPI:

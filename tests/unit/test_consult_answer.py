@@ -87,7 +87,7 @@ def test_a_draft_routes_each_assignee_with_why_and_asks_one_short_question() -> 
                 {"member": "raj", "why": "you run the XRD"},
             ]
         },
-        "short_question": "Release the Nov 4 reserve block to Henderson Lab?",
+        "short_question": "Release the Nov 4 reserve block to Henderson Frame Lab?",
     }
     parsed = parse_answer(message(json.dumps(output)), turn_id=TURN, step_idx=0)
     assert isinstance(parsed, DraftReady)
@@ -96,7 +96,7 @@ def test_a_draft_routes_each_assignee_with_why_and_asks_one_short_question() -> 
         RouteAssignee(member="helen", why="you approve reserve-slot exceptions"),
         RouteAssignee(member="raj", why="you run the XRD"),
     ]
-    assert parsed.draft.short_question == "Release the Nov 4 reserve block to Henderson Lab?"
+    assert parsed.draft.short_question == "Release the Nov 4 reserve block to Henderson Frame Lab?"
     # A draft recorded before the short question has none.
     old = parse_answer(message(json.dumps(DRAFT)), turn_id=TURN, step_idx=0)
     assert isinstance(old, DraftReady)
@@ -110,7 +110,7 @@ def test_the_output_schema_asks_for_a_why_per_assignee() -> None:
     assignee = route["properties"]["assignees"]["items"]
     assert assignee["required"] == ["member", "why"]
     assert assignee["additionalProperties"] is False
-    assert "you run XRD and SEM" in assignee["properties"]["why"]["description"]
+    assert "you run the CT" in assignee["properties"]["why"]["description"]
     assert "short_question" in schema["required"]
 
 

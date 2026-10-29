@@ -59,7 +59,7 @@ from tests.integration._visitors import ADMIN_SECRET, Visitor, visitor
 type Sessionmaker = async_sessionmaker[AsyncSession]
 type Json = dict[str, Any]
 
-HENDERSON_NAME: Final = "Henderson Lab"
+HENDERSON_NAME: Final = "Henderson Frame Lab"
 NORTHLAKE_NAME: Final = "Northlake Characterization Core"
 REOPEN_TEXT: Final = "Ask whether Nov 5 works instead."
 SUMMARY: Final = "Northlake can run it on Nov 4."
@@ -498,7 +498,7 @@ async def test_what_cant_be_reopened(temporal_app: FastAPI, db_sessionmaker: Ses
         for body in ("   ", "x" * 4001):
             await v.request("POST", path, json=_reopen(alex, body), expect=422)
         await v.json("POST", f"/threads/{uuid4()}/reopen", json=_reopen(alex), expect=404)
-        seeded = sid("thread", "henderson-northlake-precursor-xrd")
+        seeded = sid("thread", "henderson-northlake-test-ct")
         problem = await v.json("POST", f"/threads/{seeded}/reopen", json=_reopen(alex), expect=409)
         assert (problem["code"], problem["block"]) == ("not_reopenable", "history")
         problem = await v.json(

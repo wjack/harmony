@@ -146,9 +146,9 @@ def test_values_are_inserted_verbatim(value: str) -> None:
 
 def test_the_representative_prompt_describes_the_real_delimiter() -> None:
     values = {key: f"<<{key}>>" for key in placeholders("representative")}
-    values["counterparty_name"] = "Henderson Lab"
+    values["counterparty_name"] = "Henderson Frame Lab"
     text = render("representative", values)
-    assert COUNTERPARTY_OPEN.format(counterparty_name="Henderson Lab") in text
+    assert COUNTERPARTY_OPEN.format(counterparty_name="Henderson Frame Lab") in text
     assert COUNTERPARTY_CLOSE in text
     assert UNVERIFIED_MARK.strip() in text
     assert "only statement of identity" in text
@@ -246,9 +246,9 @@ def test_the_representative_consults_before_it_replies() -> None:
 def test_the_representative_knows_plain_text_is_never_sent() -> None:
     """Section 5 bug 2: bare text is never sent (`runtime.BARE_TEXT_NOT_SENT`)."""
     values = dict.fromkeys(placeholders("representative"), "x")
-    values["counterparty_name"] = "Henderson Lab"
+    values["counterparty_name"] = "Henderson Frame Lab"
     text = render("representative", values)
-    assert "Only `send_message` reaches Henderson Lab" in text
+    assert "Only `send_message` reaches Henderson Frame Lab" in text
     assert "fallback" not in text
 
 

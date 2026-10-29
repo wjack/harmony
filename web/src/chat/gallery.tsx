@@ -294,7 +294,7 @@ function InlineQuestionSection() {
   if (open === undefined || resolved === undefined || goAhead === undefined) {
     throw new Error("no questions in the fixture");
   }
-  const us = "Henderson Lab";
+  const us = "Henderson Frame Lab";
   return (
     <Column>
       <InlineQuestionCard

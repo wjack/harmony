@@ -48,22 +48,22 @@ describe("labels", () => {
   });
 
   it("makes possessives that read naturally", () => {
-    expect(possessive("Henderson Lab")).toBe("Henderson Lab's");
+    expect(possessive("Henderson Frame Lab")).toBe("Henderson Frame Lab's");
     expect(possessive("Cascade Thin Films")).toBe("Cascade Thin Films'");
   });
 
   it("describes a thread from our side", () => {
     const ours = { side: "responder", side_to_move: "responder" } as const;
-    expect(stateLabel({ ...ours, state: "active" }, "Henderson Lab")).toBe("Claude is handling");
-    expect(stateLabel({ ...ours, state: "awaiting_principal" }, "Henderson Lab")).toBe("Checking with the team");
-    expect(stateLabel({ state: "closed", side: "responder", side_to_move: null }, "Henderson Lab")).toBe("Closed");
+    expect(stateLabel({ ...ours, state: "active" }, "Henderson Frame Lab")).toBe("Claude is handling");
+    expect(stateLabel({ ...ours, state: "awaiting_principal" }, "Henderson Frame Lab")).toBe("Checking with the team");
+    expect(stateLabel({ state: "closed", side: "responder", side_to_move: null }, "Henderson Frame Lab")).toBe("Closed");
   });
 
   it("says it's their move whether their Claude writes or waits on a person, and Closed however it ended", () => {
     const theirs = { state: "awaiting_principal", side: "responder", side_to_move: "requester" } as const;
-    expect(stateLabel(theirs, "Henderson Lab")).toBe("Waiting on Henderson Lab");
-    expect(stateLabel({ ...theirs, state: "active" }, "Henderson Lab")).toBe("Waiting on Henderson Lab");
-    expect(stateLabel({ ...theirs, state: "expired", side_to_move: null }, "Henderson Lab")).toBe("Closed");
+    expect(stateLabel(theirs, "Henderson Frame Lab")).toBe("Waiting on Henderson Frame Lab");
+    expect(stateLabel({ ...theirs, state: "active" }, "Henderson Frame Lab")).toBe("Waiting on Henderson Frame Lab");
+    expect(stateLabel({ ...theirs, state: "expired", side_to_move: null }, "Henderson Frame Lab")).toBe("Closed");
   });
 
   it("says what an open item asks of the member", () => {
@@ -112,17 +112,17 @@ describe("why a run ended", () => {
   });
 
   it("gives the reason for each way a run ends without a close", () => {
-    expect(endLine(ending("quiet"), "responder", "Henderson Lab", "ok")).toBe("both sides went quiet");
-    expect(endLine(ending("unsent"), "requester", "Henderson Lab", "ok")).toBe("nothing was sent");
-    expect(endLine(ending("turn_limit"), "responder", "Henderson Lab", "ok")).toBe("it reached its turn limit");
-    expect(endLine(ending("deadline"), "requester", "Henderson Lab", "ok")).toBe("it reached its deadline");
-    expect(endLine(ending(null), "responder", "Henderson Lab", "ok")).toBeNull();
+    expect(endLine(ending("quiet"), "responder", "Henderson Frame Lab", "ok")).toBe("both sides went quiet");
+    expect(endLine(ending("unsent"), "requester", "Henderson Frame Lab", "ok")).toBe("nothing was sent");
+    expect(endLine(ending("turn_limit"), "responder", "Henderson Frame Lab", "ok")).toBe("it reached its turn limit");
+    expect(endLine(ending("deadline"), "requester", "Henderson Frame Lab", "ok")).toBe("it reached its deadline");
+    expect(endLine(ending(null), "responder", "Henderson Frame Lab", "ok")).toBeNull();
   });
 
   it("says why the system stopped it, from what the budget says now", () => {
     const stopped = { endReason: "stopped" as const, closedBy: null, stopReason: "demo_budget" as const };
-    expect(endLine(stopped, "responder", "Henderson Lab", "demo_exhausted")).toBe("The demo's live-model budget ran out.");
-    expect(endLine({ ...stopped, stopReason: "refused" }, "requester", "Henderson Lab", "ok")).toBe(
+    expect(endLine(stopped, "responder", "Henderson Frame Lab", "demo_exhausted")).toBe("The demo's live-model budget ran out.");
+    expect(endLine({ ...stopped, stopReason: "refused" }, "requester", "Henderson Frame Lab", "ok")).toBe(
       "Claude declined to continue this conversation.",
     );
     expect(reasonLine({ endReason: "stopped", stopReason: null }, null, "ok")).toBeNull();

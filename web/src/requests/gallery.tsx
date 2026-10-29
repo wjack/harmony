@@ -46,10 +46,10 @@ function sawWithGuidance(): RepresentativeContext | null {
   return {
     ...representative,
     guidance: [
-      { version: 1, text: "Quote the broad-ion-beam price only; don't quote FIB time this quarter.", delivered_at: at(40) },
+      { version: 1, text: "Quote the overview scan price only; don't quote high-resolution scans this quarter.", delivered_at: at(40) },
       {
         version: 2,
-        text: "Quote the broad-ion-beam price only; don't quote FIB time this quarter. Say nothing is booked until they confirm.",
+        text: "Quote the overview scan price only; don't quote high-resolution scans this quarter. Say nothing is booked until they confirm.",
         delivered_at: at(12),
       },
     ],
@@ -121,7 +121,7 @@ export default [
   view(
     "A request, in the app",
     THREAD.henderson,
-    "Helen at Northlake. Claude's draft for Henderson Lab uses the internal reserve block, so the sharing check sent it to her. Change the wording in place, approve and send, decline, reassign, comment, or switch the box to Edit to tell Claude what to do differently; the fixtures are stateful.",
+    "Helen at Northlake. Claude's draft for Henderson Frame Lab says which client freed the Nov 4 block, so the sharing check sent it to her. Change the wording in place, approve and send, decline, reassign, comment, or switch the box to Edit to tell Claude what to do differently; the fixtures are stateful.",
   ),
   {
     title: "Requests list",
@@ -179,7 +179,7 @@ export default [
   view(
     "A non-admin's card",
     THREAD.henderson,
-    "Helen as a non-admin: she can read, not change, what Northlake shares with Henderson Lab.",
+    "Helen as a non-admin: she can read, not change, what Northlake shares with Henderson Frame Lab.",
     { as: nonAdmin(members.helen) },
   ),
   view(

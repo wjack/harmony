@@ -13,9 +13,9 @@ members:
 
 settings:
   public_summary: >-
-    Lumen Data Commons curates diffraction patterns and battery-cycling datasets,
-    licensed for research use, with access usually the same day. We don't run
-    measurements.
+    Lumen Data Commons curates CT scans and mechanical-test datasets for printed
+    lattices, licensed for research use, with access usually the same day. We don't
+    run measurements.
   instructions: >-
     You represent Lumen Data Commons. Consult for which datasets we hold and their
     licensing terms.
@@ -31,7 +31,7 @@ knowledge:
   - slug: about
     title: About Lumen
     kind: profile
-    body: Curated diffraction and battery-cycling datasets for research.
+    body: Curated CT and mechanical-test datasets for printed lattices.
   - slug: price-list
     title: Licensing
     kind: price-list
@@ -39,4 +39,4 @@ knowledge:
   - slug: embargo-note
     title: Embargo note
     kind: note
-    body: Two layered-oxide cycling sets are embargoed until their papers publish.
+    body: Two gyroid-lattice test sets are embargoed until their papers publish.

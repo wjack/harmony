@@ -1,5 +1,5 @@
 /**
- * Customize → Harmony fixtures: Northlake's and Henderson Lab's settings from the
+ * Customize → Harmony fixtures: Northlake's and Henderson Frame Lab's settings from the
  * harmony-demo scenario (docs/SCENARIO.md), with stateful writes that behave as the
  * API's do (src/harmony/api/routes/orgs.py, docs/P1_P2_CONTRACT.md):
  * - admins only (403 `not_admin`);
@@ -45,24 +45,25 @@ export const northlakeSettings: HarmonySettingsView = {
   settings_version: 3,
   public_summary:
     "Northlake Characterization Core is the shared-instrument facility at Northlake University, open to external academic and industry users. " +
-    "We run powder XRD (Bruker D8, with air-free dome holders), SEM with EDS, and XPS.\n\n" +
-    "Ask us for quotes, scheduling and sample-prep requirements. We don't do synthesis, sample shipping, or data interpretation beyond our standard reports. " +
-    "Typical turnaround is 5–10 business days; priority by arrangement.",
+    "We run micro-CT (Zeiss Xradia 620 Versa), mechanical testing (Instron 5985, up to 250 kN) and SEM.\n\n" +
+    "Ask us for quotes, scheduling and coupon-prep requirements. We don't do printing, part shipping, or data interpretation beyond our standard reports. " +
+    "Typical turnaround is 5–10 business days, with priority compression-test blocks for a published fee.",
   instructions:
     "Represent the Northlake Characterization Core to outside labs and companies. Be friendly, precise and brief.\n\n" +
     "Quote from the external academic price list. Never quote below it, and never mention another client by name.\n\n" +
-    "For priority requests, reserve slots or pricing exceptions, check with the team before you commit: Helen decides those. " +
-    "For sample-prep and air-free handling questions, Raj is the expert.\n\n" +
-    "If a request is outside our services (synthesis, shipping, interpretation), decline politely and say what we can do instead.",
+    "Once your side says a slot is open, you may confirm a booking at published prices. " +
+    "For off-list pricing exceptions, check with the team before you commit: Helen decides those. " +
+    "For coupon prep and drop-off questions, Raj is the expert.\n\n" +
+    "If a request is outside our services (printing, shipping, interpretation), decline politely and say what we can do instead.",
   sharing_description:
-    "Our external academic price list, what is open on the public instrument calendar, sample-prep and air-free handling requirements, and typical turnaround. " +
-    "Not: other clients or their bookings, internal reserve slots, or discounts.",
+    "Our external academic price list and its published terms, what is open on the public instrument calendar, coupon prep and drop-off requirements, and typical turnaround. " +
+    "Not: other clients or their bookings, staff notes, or off-list pricing.",
   autonomy: "auto",
   trusted_organizations: [
     trusted(
       orgs.pacific,
       null,
-      "Our full XRD calendar, including internal reserve blocks, so we can line up beamtime with lab time.",
+      "Our full CT calendar, including sessions held for staff, so we can line up beamtime with lab time.",
       members.helen,
       12,
     ),
@@ -70,8 +71,8 @@ export const northlakeSettings: HarmonySettingsView = {
   ],
   directory_visibility: "public",
   routing_prompt:
-    "Instrument scheduling, priority or reserve-slot requests, and pricing exceptions go to Helen. " +
-    "Sample-prep and air-free handling questions go to Raj.",
+    "Instrument scheduling and off-list pricing exceptions go to Helen. " +
+    "Coupon prep and drop-off questions go to Raj.",
   default_assignee: ref(members.helen),
   members: [
     {
@@ -83,8 +84,8 @@ export const northlakeSettings: HarmonySettingsView = {
     {
       member: ref(members.raj),
       role: "member",
-      title: "Staff scientist, XRD and SEM",
-      profile: "Runs the instruments. Sample prep and air-free handling questions.",
+      title: "Staff scientist, CT and mechanical testing",
+      profile: "Runs the instruments. Coupon prep and drop-off questions.",
     },
   ],
   send_without_confirmation: false,
@@ -96,24 +97,24 @@ export const hendersonSettings: HarmonySettingsView = {
   org: orgs.henderson,
   settings_version: 2,
   public_summary:
-    "Henderson Lab, Dept. of Materials Science, Northlake University. Battery materials research: sodium-ion cathodes from Earth-abundant elements. " +
-    "We can run coin-cell cycling for collaborators on request.",
+    "Henderson Frame Lab, Dept. of Mechanical Engineering, Northlake University. We design 3D-printed titanium lattices for lighter bike frames. " +
+    "We can provide metal 3D-printing time for collaborators on request.",
   instructions:
-    "We mostly request services: characterization, fabrication and compute. Keep sample compositions and budgets private. " +
-    "Ask Alex about samples and logistics; anything about spending goes to Maya.",
+    "We mostly request services: testing, CT scanning and fabrication. Keep lattice designs, print settings and budgets private. " +
+    "Ask Alex about coupons and logistics; anything about spending goes to Maya.",
   sharing_description:
-    "Sample counts, sample handling needs (air-sensitive, glovebox), deadlines and the lab's contact details. Not: compositions, dopants or budgets.",
+    "Coupon counts, how the coupons get to the core, deadlines and the lab's contact details. Not: lattice designs, print settings or budgets.",
   autonomy: "auto",
   trusted_organizations: [],
   directory_visibility: "communities",
-  routing_prompt: "Questions about samples and logistics go to Alex. Spending, contracts and collaborations go to Maya.",
+  routing_prompt: "Questions about coupons and logistics go to Alex. Spending, contracts and collaborations go to Maya.",
   default_assignee: ref(members.maya),
   members: [
     {
       member: ref(members.alex),
       role: "member",
       title: "PhD student",
-      profile: "Runs the Na-ion cathode synthesis and owns sample logistics.",
+      profile: "Designs and prints the lattice coupons and owns test logistics.",
     },
     {
       member: ref(members.maya),
@@ -182,11 +183,11 @@ export interface CustomizeFixtureOptions {
 
 /** Their save, in the `conflict` scenario. */
 export const THEIR_SHARING =
-  "Our external academic price list, the public instrument calendar, sample-prep requirements and typical turnaround. Not: other clients, reserve slots or discounts.";
+  "Our external academic price list, the public instrument calendar, coupon-prep requirements and typical turnaround. Not: other clients, staff notes or off-list pricing.";
 
 /**
  * Shell routes acting as `actingAs`, plus the Harmony settings and trusted-organization
- * routes over Northlake's and Henderson Lab's settings. Only the actor's own org is
+ * routes over Northlake's and Henderson Frame Lab's settings. Only the actor's own org is
  * visible, and only an admin of it may write.
  */
 export function customizeRoutes(actingAs: MemberView, options: CustomizeFixtureOptions = {}): FixtureRoutes {
