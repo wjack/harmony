@@ -1486,7 +1486,7 @@ async def test_the_story_suggests_the_message_to_its_sender(app: FastAPI) -> Non
         ]
         assert story["steps"][0]["act_as"]["slug"] == "alex"
         network = story["network"]
-        assert network["summary"].startswith("Lighter bike frames")
+        assert network["summary"].startswith("Labs, shops and suppliers")
         # Every org, whoever is acting: it's the demo's picture of the network.
         kinds = {row["org"]["slug"]: row["kind"] for row in network["orgs"]}
         assert len(kinds) == 15

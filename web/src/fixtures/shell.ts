@@ -232,7 +232,7 @@ export const story: DemoStory = {
   suggested_recipients: [orgs.northlake, orgs.ridgeline, orgs.calder],
   network: {
     summary:
-      "Lighter bike frames: a university lab with new 3D-printed titanium lattices to test, the instrument cores that scan and test them, shops that print, treat and machine parts, and the suppliers, testers, data and modeling groups, funder and broker around them.",
+      "Labs, shops and suppliers that make and test parts. Ask Claude for what you need and it finds who can help: CT scans and inspection, strength and fatigue testing, metal 3D printing, machining, heat treatment and custom fixtures, alloy stock, simulation, test datasets and seed funding.",
     orgs: [
       { org: orgs.calder, kind: "computation" },
       { org: orgs.cascade, kind: "characterization" },

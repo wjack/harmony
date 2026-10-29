@@ -15,7 +15,7 @@ The demo is about lighter bike frames: a university lab has 3D-printed titanium 
 
 - `suggested_message`: "Find a lab that can CT-scan and compression-test 12 titanium lattice coupons by {+11d}, and get a holder made that stacks them for the CT. Budget is about $2,000."
 - `suggested_recipients`: northlake, ridgeline, calder (ringed and tagged in the network view).
-- `network`: one sentence on who's on the network, shown in What's on screen's "This network" card over every org.
+- `network`: what the network can do, shown in What's on screen's "This network" card over every org: a picture of what a visitor could ask for, not the suggested request (user, 2026-10-28).
 
 The beats (spec §10), and what in the content makes each one happen. Nothing forces them: the cassettes play them, and a live model should arrive at about the same place.
 
