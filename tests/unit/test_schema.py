@@ -52,8 +52,6 @@ EXPECTED_TABLES = {
     "reviews",
     "events",
     "world_event_seq",
-    "budgets",
-    "budget_reservations",
     "live_controls",
     "world_workflows",
     "cards",
@@ -66,7 +64,7 @@ EXPECTED_TABLES = {
 # model_calls is keyed by the globally unique turn: `call_model_checkpointed` looks
 # a call up by (turn_id, step_idx) alone. It still carries world_id for cleanup.
 KEYED_BY_TURN = {"model_calls"}
-NOT_WORLD_SCOPED = {"worlds", "sessions", "budgets", "budget_reservations", "live_controls"}
+NOT_WORLD_SCOPED = {"worlds", "sessions", "live_controls"}
 WORLD_SCOPED = {name for name, table in TABLES.items() if "world_id" in table.c} - KEYED_BY_TURN
 
 
@@ -81,6 +79,8 @@ def _fks(table: Table) -> list[ForeignKeyConstraint]:
 def test_every_section_4_table_exists_and_the_dropped_shape_does_not() -> None:
     assert set(TABLES) == EXPECTED_TABLES
     assert not {"routing_rules", "capabilities", "proposals", "intents"} & set(TABLES)
+    # No in-app spend caps (migration 0008).
+    assert not {"budgets", "budget_reservations"} & set(TABLES)
 
 
 def test_a_trusted_organization_is_one_row_per_counterparty_never_the_org_itself() -> None:

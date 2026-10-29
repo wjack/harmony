@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -104,7 +104,6 @@ async def call_model_checkpointed(
     *,
     on_stream_event: StreamEventCallback | None = None,
     heartbeat: HeartbeatCallback | None = None,
-    budget_keys: Sequence[str] = (),
 ) -> CheckpointedCall:
     key = request.key
     request_text = canonical_json(request.body)
@@ -133,7 +132,6 @@ async def call_model_checkpointed(
         store,
         on_stream_event=on_stream_event,
         heartbeat=heartbeat,
-        budget_keys=budget_keys,
     )
 
 
@@ -145,13 +143,12 @@ async def metered_call[T](
     *,
     on_stream_event: StreamEventCallback | None = None,
     heartbeat: HeartbeatCallback | None = None,
-    budget_keys: Sequence[str] = (),
 ) -> T:
     """Reserve, call, `store` the result, settle. Settles partial usage (or releases)
     when the call fails, and settles the full cost even when `store` fails."""
     _check_pairing(client, guard)
     requested_model = as_str(request.body.get("model")) or ""
-    reservation = await guard.reserve(request, budget_keys=budget_keys)
+    reservation = await guard.reserve(request)
     tracker = StreamUsageTracker()
 
     async def observe(event: Mapping[str, JsonValue]) -> None:

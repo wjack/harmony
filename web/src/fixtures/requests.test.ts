@@ -183,7 +183,7 @@ describe("requestsRoutes", () => {
 
   it("says what the budget is doing", async () => {
     const api = createFixtureApi(requestsRoutes({ world: requestsWorld(NOW), budget: "paused" }));
-    expect(await unwrap(api.GET("/api/budget"))).toEqual({ live: false, state: "paused" });
+    expect(await unwrap(api.GET("/api/budget"))).toEqual({ live: true, state: "paused" });
   });
 
   it("answers a second resolve with who got there first", async () => {

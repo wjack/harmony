@@ -31,6 +31,7 @@ from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 
+from harmony.llm.live_switch import ensure_live_switch
 from harmony.temporal.policies import (
     CHAT_TASK_QUEUE,
     MAIN_TASK_QUEUE,
@@ -40,13 +41,7 @@ from harmony.temporal.policies import (
     model_retry_policy,
 )
 from harmony.temporal.start import world_workflow_id
-from harmony.temporal.worker import (
-    WorkerConfig,
-    WorkerDeps,
-    build_workers,
-    hosted_spend,
-    serve,
-)
+from harmony.temporal.worker import WorkerConfig, WorkerDeps, build_workers, serve
 from harmony.temporal.workflows.payloads import BUDGET_EXHAUSTED_ERROR
 
 # A poller seen this recently is a live worker (pollers long-poll for about a minute).
@@ -201,20 +196,20 @@ class InProcessWorker:
 @asynccontextmanager
 async def running_worker(deps: WorkerDeps) -> AsyncGenerator[InProcessWorker]:
     """Serve `deps`' workers until the block exits, with their activity failures read
-    by the yielded `InProcessWorker.log`. Hosted spend is set up first, as for
-    `harmony worker` (`hosted_spend`)."""
+    by the yielded `InProcessWorker.log`. The live switch row is made sure of first, as
+    for `harmony worker` (`ensure_live_switch`)."""
     log = ActivityLog()
     logger = activity.logger.base_logger
-    async with hosted_spend(deps.settings, deps.sessionmaker):
-        logger.addFilter(log)
-        stop = asyncio.Event()
-        workers = build_workers(deps, WorkerConfig.from_settings(deps.settings))
-        worker = InProcessWorker(asyncio.create_task(serve(workers, stop)), log)
+    await ensure_live_switch(deps.sessionmaker)
+    logger.addFilter(log)
+    stop = asyncio.Event()
+    workers = build_workers(deps, WorkerConfig.from_settings(deps.settings))
+    worker = InProcessWorker(asyncio.create_task(serve(workers, stop)), log)
+    try:
+        yield worker
+    finally:
+        stop.set()
         try:
-            yield worker
+            await worker.serving
         finally:
-            stop.set()
-            try:
-                await worker.serving
-            finally:
-                logger.removeFilter(log)
+            logger.removeFilter(log)

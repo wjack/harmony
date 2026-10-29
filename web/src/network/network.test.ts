@@ -217,10 +217,10 @@ describe("status", () => {
     const stopped = networkStopped.edges.find((edge) => edge.thread_id === THREAD_RIDGELINE);
     if (stopped === undefined) throw new Error("no stopped edge");
     const parties = [orgs.henderson.name, orgs.ridgeline.name];
-    expect(stopped.stop_reason).toBe("daily_budget");
-    expect(edgeLabel(stopped, parties, "daily_exhausted")).toBe("Closed: The daily live-model budget ran out.");
-    expect(edgeLabel(stopped, parties, "ok")).toBe("Closed: The daily live-model budget was busy or nearly used up.");
-    expect(closingLine(stopped, parties, "daily_exhausted")).toBe(stoppedLine("daily_budget", "daily_exhausted"));
+    expect(stopped.stop_reason).toBe("demo_budget");
+    expect(edgeLabel(stopped, parties, "demo_exhausted")).toBe("Closed: The demo's live-model budget ran out.");
+    expect(edgeLabel(stopped, parties, "ok")).toBe("Closed: The demo's live-model budget ran out for a while.");
+    expect(closingLine(stopped, parties, "demo_exhausted")).toBe(stoppedLine("demo_budget", "demo_exhausted"));
     // After the other side refused, our side's last turn wrote a summary: it shows.
     const summarized = { ...stopped, stop_reason: "refused" as const, close_summary: "They declined; no quote." };
     expect(edgeLabel(summarized, parties, "ok")).toBe("They declined; no quote.");

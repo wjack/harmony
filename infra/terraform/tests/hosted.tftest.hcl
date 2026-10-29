@@ -12,10 +12,6 @@ variables {
   model_override           = "claude-haiku-5-5"
   access_code              = null
   client_ip_header         = "true-client-ip"
-  lineage_budget_usd       = 11
-  client_daily_budget_usd  = 26
-  daily_budget_usd         = 61
-  global_budget_usd        = 251
   worker_model_concurrency = 13
   worker_model_rate        = 2.5
   worker_chat_concurrency  = 5
@@ -37,16 +33,6 @@ run "both_services_get_the_live_settings" {
   assert {
     condition     = local.app_env.ACCESS_CODE == local.access_code
     error_message = "ACCESS_CODE must be local.access_code."
-  }
-
-  assert {
-    condition = (
-      local.app_env.LINEAGE_BUDGET_USD == "11"
-      && local.app_env.CLIENT_DAILY_BUDGET_USD == "26"
-      && local.app_env.DAILY_BUDGET_USD == "61"
-      && local.app_env.GLOBAL_BUDGET_USD == "251"
-    )
-    error_message = "Both services must get all four caps."
   }
 
   assert {

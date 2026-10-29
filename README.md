@@ -58,7 +58,7 @@ migrated template; set `HARMONY_TEST_DB_PREFIX` when several runs share a server
 Tests marked `minio` or `compose` are opt-in: `make up-storage test-minio`.
 Stop any local dev stack on the shared Compose Postgres before the backend suite: the
 two together can exhaust its `max_connections` (100), which shows up as
-`TooManyConnectionsError` in `test_budget_concurrency` or `test_hosted_caps`.
+`TooManyConnectionsError` in the database tests.
 
 `make compose-smoke` always tears its stack down; `SMOKE_KEEP=1` leaves it running for
 debugging, and `SMOKE_ALLOW_MISSING=1` reports a check whose script doesn't exist yet as
@@ -82,7 +82,7 @@ echoing it, runs Terraform under `umask 077` and keeps every state file at mode 
 `apply` is refused unless `HARMONY_TF_ALLOW_APPLY=1`, which is set only once the user has
 approved a deploy. `infra/terraform/terraform.tfvars` (gitignored; start from
 `terraform.tfvars.example`) wins over `.env.local`: it holds `anthropic_api_key`, the
-hosted workspace's key, and optionally the master passcode, the caps and the provider
+hosted workspace's key, and optionally the master passcode and the provider
 credentials, which `scripts/tfvars_from_env.sh` copies over from `.env.local`.
 
 ## Deploy
@@ -99,8 +99,8 @@ spends money, pushes, merges, applies or redeploys waits for the user's explicit
   as Alex (Opus, "Opus 5.5 · Adaptive") and one as Bayside (Haiku).
 - **Steps 2–5:** commit, push, CI green, merge to `main`, each as approved.
 - **Step 6, bootstrap by hand:** connect GitHub to Render, set the production Console
-  workspace's spend limit, optionally set `access_code` and the caps in
-  `terraform.tfvars`, then run `scripts/tfvars_from_env.sh`.
+  workspace's spend limit (the app has no spend caps of its own), optionally set
+  `access_code` in `terraform.tfvars`, then run `scripts/tfvars_from_env.sh`.
 - **Step 7:** `scripts/ping_prod_key.sh`, two calls on the production key (about $0.01).
 - **Steps 8–9b:** `scripts/tf.sh plan` (14 resources to add), then
   `HARMONY_TF_ALLOW_APPLY=1 scripts/tf.sh apply`; `make doctor` confirms the state is
@@ -120,8 +120,8 @@ spends money, pushes, merges, applies or redeploys waits for the user's explicit
 
   `--save-jar` keeps the default run's cookies (mode 600) for the rotation drill's
   `--previous-jar`. It refuses a path inside the repository: the jar holds a working gate
-  cookie until the rotation. `--refused-turn` needs hosted caps (the hosted app, or a
-  local live stack with `HOSTED_CAPS_IN_DEV=1`); on compose-smoke it stops at once.
+  cookie until the rotation. `--refused-turn` needs live models (the hosted app, or a
+  local stack with `MODEL_MODE=live`); on compose-smoke it stops at once.
   `--build-sha` is required: healthz must report main's HEAD, not an older build Render
   kept live. Then `harmony storage check` in Render Shell on the web service; if the API
   is ever down, `harmony live pause` there is the kill switch.

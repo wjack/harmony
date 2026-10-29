@@ -56,8 +56,6 @@ from harmony.temporal.workflows.payloads import (
 
 POLL_S = 0.5
 TIMEOUT_S = 600.0
-# Called with the world on every poll (the run's spend meter).
-type PollHook = Callable[[UUID], Awaitable[None]]
 # After the last beat, how long `settle` waits for the request to close and Claude's
 # summary.
 SETTLE_S = 60.0
@@ -85,7 +83,6 @@ class StoryPlayer:
         failures: Mapping[str, str] | None = None,
         send_without_review: bool = False,
         skip_approvals: bool = False,
-        on_poll: PollHook | None = None,
         edits: Sequence[PlannedEdit] = (),
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -109,7 +106,6 @@ class StoryPlayer:
         self._failures: Mapping[str, str] = failures if failures is not None else {}
         self._send_without_review = send_without_review
         self._skip_approvals = skip_approvals
-        self._on_poll = on_poll
         # Not posted yet.
         self._edits = list(edits)
         self._clock = clock
@@ -206,8 +202,6 @@ class StoryPlayer:
             if self._worker is not None and self._worker.done():
                 run.outcome, run.detail = "failed", "the worker stopped"
                 return
-            if self._on_poll is not None:
-                await self._on_poll(run.world_id)
             stop = await self._tick(run)
             if run.complete and run.expected:
                 run.outcome = "done"

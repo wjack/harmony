@@ -951,9 +951,6 @@ async def test_two_silent_turns_in_a_row_expire_the_thread(
 
 # Why a model activity fails for good, and the reason the chat or thread shows (3.5).
 FAILURES: list[tuple[str, ApplicationError, FailureReason]] = [
-    ("session", refused("session"), "session_budget"),
-    ("client", refused("client"), "daily_budget"),
-    ("daily", refused("daily"), "daily_budget"),
     ("global", refused("global"), "demo_budget"),
     ("provider", refused("provider"), "demo_budget"),
     ("paused", refused("paused"), "paused"),
@@ -1058,12 +1055,12 @@ async def test_a_refused_answer_stops_the_thread_rather_than_asking_a_person(
     async with workers(env) as script:
         script.rep[("requester", 1)] = said()
         script.rep[("responder", 1)] = consulting(uuid4())
-        script.consults = [refused("daily")]
+        script.consults = [refused("global")]
         _, handle, request = await start_thread(env)
         result = await handle.result()
 
         assert result.state == "closed"
-        assert stop_reasons(script) == [("closed", "daily_budget")]
+        assert stop_reasons(script) == [("closed", "demo_budget")]
         assert endings(script) == [("closed", "stopped", None)]
         assert script.named("notify_conversation") == []
         # Waiting on the answer, then ended: nobody was asked.
@@ -2531,7 +2528,7 @@ async def test_a_responder_reopens_moves_first_and_sending_nothing_ends_it_unsen
 @pytest.mark.parametrize(
     ("written", "failure"),
     [
-        (refused("daily"), "daily_budget"),
+        (refused("global"), "demo_budget"),
         (GuidanceWritten(outcome="unchanged"), None),
         (GuidanceWritten(outcome="rejected"), None),
     ],

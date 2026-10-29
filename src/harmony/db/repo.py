@@ -65,7 +65,6 @@ def add_world(
     scenario: str,
     mode: WorldMode,
     build_sha: str,
-    budget_lineage: UUID,
     ff_offset_s: int = 0,
 ) -> World:
     """Add a `live` world and its event counter to the session (not yet flushed).
@@ -80,7 +79,6 @@ def add_world(
         mode=mode,
         status="live",
         build_sha=build_sha,
-        budget_lineage=budget_lineage,
         ff_offset_s=ff_offset_s,
     )
     session.add_all([world, WorldEventSeq(world_id=world_id, seq=0)])

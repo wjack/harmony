@@ -146,12 +146,6 @@ def key_digest(key: str, settings: Settings) -> str:
     return hmac.new(secret, key.encode(), sha256).hexdigest()
 
 
-def client_key_hash(scope: Scope, settings: Settings) -> str | None:
-    """`sessions.client_key_hash` for a session created by this request (3.3)."""
-    key = client_key(scope, settings)
-    return key_digest(key, settings)[:32] if key is not None else None
-
-
 # --- `next` ---------------------------------------------------------------------------
 
 
@@ -577,7 +571,6 @@ __all__ = [
     "GateUnlocked",
     "PasscodeGate",
     "client_key",
-    "client_key_hash",
     "client_network",
     "gate_of",
     "key_digest",

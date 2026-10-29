@@ -639,13 +639,13 @@ describe("a message Claude declined", () => {
 });
 
 it("says a budget stop by what the budget says now", async () => {
-  renderRoutes({ ...chatRoutes("sent", { turnFailure: "daily_budget" }), "GET /api/budget": budgets.dailyExhausted });
-  expect(await screen.findByText("Today's live-model budget is used up. It resets at 00:00 UTC.")).toBeTruthy();
+  renderRoutes({ ...chatRoutes("sent", { turnFailure: "demo_budget" }), "GET /api/budget": budgets.demoExhausted });
+  expect(await screen.findByText("The demo's live-model budget is used up.")).toBeTruthy();
   cleanup();
 
   // Spent no longer: the next try may well go through.
-  renderChat("sent", { turnFailure: "daily_budget" });
-  expect(await screen.findByText(failureLine("daily_budget", "ok"))).toBeTruthy();
+  renderChat("sent", { turnFailure: "demo_budget" });
+  expect(await screen.findByText(failureLine("demo_budget", "ok"))).toBeTruthy();
 });
 
 it("never loads images in Claude's text", () => {
@@ -683,8 +683,6 @@ it("says so when the chat isn't there", async () => {
 // --- The live demo's failure states (LIVE_DEMO_PLAN 3.5) ---------------------------------
 
 const BLOCKED = [
-  ["session_exhausted", budgets.sessionExhausted, "Session budget used up"],
-  ["daily_exhausted", budgets.dailyExhausted, "Today's demo budget is used up"],
   ["demo_exhausted", budgets.demoExhausted, "The demo's live-model budget is used up"],
   ["paused", budgets.paused, "Live models are paused"],
 ] as const;
@@ -701,16 +699,16 @@ it.each(BLOCKED)("disables the composer while the budget is %s, and says so", as
   expect(writes).toEqual([]);
 });
 
-it("enables the composer while the budget is ok, and again once a cap resets", async () => {
-  let budget: (typeof budgets)[keyof typeof budgets] = budgets.dailyExhausted;
+it("enables the composer while the budget is ok, and again once it's back", async () => {
+  let budget: (typeof budgets)[keyof typeof budgets] = budgets.demoExhausted;
   const { writes, queryClient } = renderRoutes({ ...chatRoutes("sent"), "GET /api/budget": () => budget });
-  await screen.findByText("Today's demo budget is used up");
+  await screen.findByText("The demo's live-model budget is used up");
   expect(await composer()).toHaveProperty("disabled", true);
 
   budget = budgets.ok;
   await act(() => queryClient.invalidateQueries({ queryKey: queryKeys.budget }));
   await waitFor(() => {
-    expect(screen.queryByText("Today's demo budget is used up")).toBeNull();
+    expect(screen.queryByText("The demo's live-model budget is used up")).toBeNull();
   });
   const box = await composer();
   expect(box).toHaveProperty("disabled", false);
@@ -725,7 +723,7 @@ it("enables the composer while the budget is ok, and again once a cap resets", a
 // turn would be refused and its thread ended for good: those hold too (3.4).
 const HOLDS = [
   ["paused", budgets.paused, "Live models are paused"],
-  ["session_exhausted", budgets.sessionExhausted, "Session budget used up"],
+  ["demo_exhausted", budgets.demoExhausted, "The demo's live-model budget is used up"],
 ] as const;
 
 it.each(HOLDS)("holds Approve, Decline and the box on a waiting card while the budget is %s", async (_state, budget, line) => {
@@ -789,7 +787,7 @@ async function statusCard(view: ReturnType<typeof requestAt>, routes: FixtureRou
   return screen.findByRole("region", { name: "Harmony Network Request" });
 }
 
-const REASONS: readonly FailureReason[] = ["session_budget", "daily_budget", "demo_budget", "paused", "model_error", "refused"];
+const REASONS: readonly FailureReason[] = ["demo_budget", "paused", "model_error", "refused"];
 
 it.each(REASONS)("says why the system stopped a thread (%s) in place of its summary", async (reason) => {
   const card = await statusCard(requestAt(initialState("sent", { stopReason: reason })));
@@ -813,10 +811,10 @@ it("shows the summary our side wrote after the other side refused, and why it st
 });
 
 it("reads a budget stop by the budget's state now", async () => {
-  const card = await statusCard(requestAt(initialState("sent", { stopReason: "daily_budget" })), {
-    "GET /api/budget": budgets.dailyExhausted,
+  const card = await statusCard(requestAt(initialState("sent", { stopReason: "demo_budget" })), {
+    "GET /api/budget": budgets.demoExhausted,
   });
-  expect(await within(card).findByText(stoppedLine("daily_budget", "daily_exhausted"))).toBeTruthy();
+  expect(await within(card).findByText(stoppedLine("demo_budget", "demo_exhausted"))).toBeTruthy();
 });
 
 it("shows a closed thread's summary when nothing stopped it", async () => {

@@ -28,9 +28,6 @@ class World(CreatedAt, Base):
     status: Mapped[WorldStatus] = mapped_column(server_default=text("'live'"))
     # The build that created the world; a visit under another build forks (§11.1).
     build_sha: Mapped[str]
-    # Shared by every world forked from the same session, so Reset never refills a
-    # budget (`budgets.key = 'lineage:<id>'`).
-    budget_lineage: Mapped[UUID]
     # World clock: anchor + (now - created_at) + ff_offset_s (§11.1).
     ff_offset_s: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     # Demo controls' Skip approvals (§11.4): nobody in the world is asked to approve.

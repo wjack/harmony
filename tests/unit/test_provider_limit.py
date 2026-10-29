@@ -2,14 +2,14 @@
 leaves the process.
 
 A 402 `billing_error`, or the workspace usage-limit message, is a non-retryable
-`BudgetExhausted(kind="provider")` that blocks hosted calls locally until resumed;
+`BudgetExhausted(kind="provider")` that blocks live calls locally until resumed;
 other API errors keep their usual mapping.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import anthropic
 import httpx2
@@ -17,19 +17,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from harmony.db.models import Budget, LiveControls, World
+from harmony.db.models import LiveControls
 from harmony.llm import CallKey, ModelRequest, ModelResult
 from harmony.llm.anthropic_model import AnthropicModel
 from harmony.llm.budget import BudgetGuard
-from harmony.llm.budget_pg import (
-    LIVE_SWITCH_KEY,
-    HostedBudgets,
-    HostedCaps,
-    hosted_budget_keys,
-    set_live,
-)
 from harmony.llm.checkpoint import metered_call
 from harmony.llm.errors import BadRequest, BudgetExhausted, ModelCallError
+from harmony.llm.live_switch import LIVE_SWITCH_KEY, LiveSwitch, set_live
 from harmony.llm.pricing import OPUS_5_5
 from harmony.llm.requests import build_request
 from harmony.temporal.policies import MODEL_NON_RETRYABLE
@@ -67,25 +61,9 @@ class FakeAPI:
         )
 
 
-async def _hosted_world(sm: Sessionmaker) -> tuple[UUID, tuple[str, ...]]:
-    world_id = uuid4()
-    async with sm() as session, session.begin():
-        session.add(
-            World(
-                id=world_id,
-                scenario="llm-unit",
-                mode="live",
-                build_sha="test",
-                budget_lineage=uuid4(),
-            )
-        )
-    keys = await hosted_budget_keys(sm, HostedCaps(lineage_usd=Decimal(10)), world_id=world_id)
-    return world_id, keys
-
-
-def _request(world_id: UUID) -> ModelRequest:
+def _request() -> ModelRequest:
     key = CallKey(
-        world_id=world_id,
+        world_id=uuid4(),
         scenario="llm-unit",
         org="northlake",
         role="internal",
@@ -105,23 +83,21 @@ def _request(world_id: UUID) -> ModelRequest:
     )
 
 
-async def _call(
-    api: FakeAPI, guard: BudgetGuard, world_id: UUID, keys: tuple[str, ...]
-) -> ModelResult:
+async def _call(api: FakeAPI, guard: BudgetGuard) -> ModelResult:
     async def keep(result: ModelResult, cost: Decimal) -> ModelResult:
         return result
 
-    return await metered_call(api.model(guard), guard, _request(world_id), keep, budget_keys=keys)
+    return await metered_call(api.model(guard), guard, _request(), keep)
 
 
 def _guard(sm: Sessionmaker) -> BudgetGuard:
-    """The hosted worker's guard: Postgres caps only."""
+    """The hosted worker's guard: the live switch, and no ledger."""
     return BudgetGuard(
         ledger=None,
         cap_usd=Decimal(200),
         thresholds=(Decimal(200),),
         env="prod",
-        hosted=HostedBudgets(sm),
+        switch=LiveSwitch(sm),
     )
 
 
@@ -140,35 +116,30 @@ async def _blocked_until(sm: Sessionmaker) -> object:
     ],
     ids=["billing-error", "usage-limit"],
 )
-async def test_the_provider_limit_blocks_hosted_calls_until_resumed(
+async def test_the_provider_limit_blocks_live_calls_until_resumed(
     db_sessionmaker: Sessionmaker, status: int, error_type: str, message: str
 ) -> None:
     sm = db_sessionmaker
-    world_id, keys = await _hosted_world(sm)
     guard = _guard(sm)
     api = FakeAPI(status, error_type, message)
 
     with pytest.raises(BudgetExhausted) as refused:
-        await _call(api, guard, world_id, keys)
+        await _call(api, guard)
     assert refused.value.kind == "provider"
     assert type(refused.value).__name__ in MODEL_NON_RETRYABLE
     assert api.requests == 1
     assert await _blocked_until(sm) is not None
-    # Nothing was billed, so the reservation was released.
-    async with sm() as session:
-        lineage = await session.get_one(Budget, keys[0])
-    assert (lineage.spent_usd, lineage.reserved_usd) == (Decimal(0), Decimal(0))
 
     # Refused locally, before any request.
     with pytest.raises(BudgetExhausted) as blocked:
-        await _call(api, guard, world_id, keys)
+        await _call(api, guard)
     assert blocked.value.kind == "provider"
     assert api.requests == 1
 
     resumed = await set_live(sm, enabled=True)
     assert resumed.provider_blocked_until is None
     with pytest.raises(BudgetExhausted):
-        await _call(api, guard, world_id, keys)
+        await _call(api, guard)
     assert api.requests == 2
 
 
@@ -194,17 +165,16 @@ async def test_other_api_errors_keep_their_mapping(
     error: type[ModelCallError],
 ) -> None:
     sm = db_sessionmaker
-    world_id, keys = await _hosted_world(sm)
     guard = _guard(sm)
     api = FakeAPI(status, error_type, message)
 
     with pytest.raises(ModelCallError) as failed:
-        await _call(api, guard, world_id, keys)
+        await _call(api, guard)
     assert type(failed.value) is error
     assert (type(failed.value).__name__ in MODEL_NON_RETRYABLE) == (error is BadRequest)
     assert await _blocked_until(sm) is None
 
     # Not blocked: the next call reaches the API.
     with pytest.raises(error):
-        await _call(api, guard, world_id, keys)
+        await _call(api, guard)
     assert api.requests == 2

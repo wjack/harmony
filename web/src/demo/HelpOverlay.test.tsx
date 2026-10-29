@@ -7,8 +7,8 @@ import { renderLive } from "../test/shellHarness";
 import { demoStore } from "./store";
 
 /**
- * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The live
- * budget has no box, as when it isn't shown.
+ * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The
+ * live-models pill has no box, as when it isn't shown.
  */
 const BOXES: Record<string, [x: number, y: number, width: number, height: number]> = {
   "demo-controls": [62, 7, 121, 24],

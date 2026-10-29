@@ -1,6 +1,6 @@
 """The passcode gate's in-process limits (LIVE_DEMO_PLAN 3.2, 3.3): unlock attempts
-per client key and per wider network, the global pacing of wrong passcodes, and world
-creation.
+per client key and per wider network, the global pacing of wrong passcodes, and Resets
+per session.
 
 They hold state for one web process (Render runs one instance) and are created per
 app with its `Gate` (`api/gate.py`).
@@ -14,10 +14,9 @@ import asyncio
 import logging
 import math
 import time
-from collections import Counter, OrderedDict, deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID
 
@@ -254,50 +253,25 @@ class WorldLimits:
     """World creation while the gate is on (3.3), implementing
     `worlds.service.CreationLimits`.
 
-    New sessions mint fresh budget lineages: `per_client` per known client key and
-    `daily` overall per UTC day. Resets and wiped-world re-creates keep the lineage
-    and are counted per session (`recreates` an hour), never per client key, so a
-    shared key can't throttle anyone else's Resets.
+    New sessions are not limited. Resets and wiped-world re-creates are counted per
+    session (`recreates` an hour), never per client key, so a shared address can't
+    throttle anyone else's Resets.
     """
 
     def __init__(
         self,
         *,
-        per_client: int = 5,
-        daily: int = 200,
         recreates: int = 20,
         recreate_window_s: float = 60 * 60,
         max_tracked: int = MAX_TRACKED,
-        now: Callable[[], datetime] = lambda: datetime.now(UTC),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._per_client = per_client
-        self._daily = daily
         self._recreates = recreates
         self._recreate_window_s = recreate_window_s
         self._max_tracked = max_tracked
-        self._now = now
         self._clock = clock
-        self._day = now().date()
-        self._today = 0
-        self._by_client: Counter[str] = Counter()
         # Least recently re-created first, so stale sessions are dropped from the front.
         self._by_session: OrderedDict[UUID, deque[float]] = OrderedDict()
-
-    def new_session(self, client_key_hash: str | None) -> None:
-        now = self._now()
-        if now.date() != self._day:
-            self._day, self._today = now.date(), 0
-            self._by_client.clear()
-        over_client = client_key_hash is not None and (
-            self._by_client[client_key_hash] >= self._per_client
-        )
-        if self._today >= self._daily or over_client:
-            midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), UTC)
-            raise TooManyWorlds(max(1, math.ceil((midnight - now).total_seconds())))
-        self._today += 1
-        if client_key_hash is not None:
-            self._by_client[client_key_hash] += 1
 
     def recreate(self, session_id: UUID) -> None:
         now = self._clock()

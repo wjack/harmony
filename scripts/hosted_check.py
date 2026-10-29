@@ -39,9 +39,8 @@ Modes, one per run:
     --reset-retires   Reset must hand the old world to a retire workflow on Temporal,
                       whose worker marks it retired (the workflow then waits out the
                       row TTL before deleting the rows)
-    --refused-turn    with live models paused, a chat turn as Alex fails as `paused`
-                      and the global spend doesn't move. Only where hosted caps apply
-                      (the hosted app, or a local live stack with HOSTED_CAPS_IN_DEV=1):
+    --refused-turn    with live models paused, a chat turn as Alex fails as `paused`.
+                      Only with live models (the hosted app, or a local live stack):
                       scripted turns never read the live switch, so on compose-smoke it
                       stops at once, saying so
     --rotation        the previous cookie jar (--previous-jar) and passcode get 401;
@@ -53,8 +52,7 @@ Cookies stay in memory. `--save-jar FILE` writes the visitor's cookies to FILE (
 after the drill. FILE must be outside the repository, where `git add` can't pick up a
 working gate cookie. Prints PASS or FAIL per check and exits 1 on any failure.
 
-The gate limits each client network: 5 unlocks per 15 minutes, counting successes, and
-5 new sessions per UTC day (every mode but --rotation and --client-key starts one). A
+The gate limits each client network to 5 unlocks per 15 minutes, counting successes. A
 check refused with 429 says so, with the server's Retry-After.
 """
 
@@ -325,10 +323,10 @@ async def check_walk(client: httpx.AsyncClient, report: Report) -> None:
         why = locked(await stranger.send(method, path), api=True)
         report.check(f"no cookie: {method} {path} is locked", why is None, why or "")
     wrong_admin = await stranger.send(
-        "GET", "/api/admin/spend", headers={ADMIN_HEADER: secrets.token_urlsafe(24)}
+        "GET", "/api/admin/live", headers={ADMIN_HEADER: secrets.token_urlsafe(24)}
     )
     why = locked(wrong_admin, api=True)
-    report.check("a wrong admin secret: GET /api/admin/spend is locked", why is None, why or "")
+    report.check("a wrong admin secret: GET /api/admin/live is locked", why is None, why or "")
     for method in ("GET", "HEAD"):
         for path in LOCKED_PAGES:
             why = locked(await stranger.send(method, path), api=False)
@@ -536,21 +534,21 @@ def retired_by_worker(view: Mapping[str, Any]) -> bool:
     )
 
 
-async def spend(visitor: Visitor, admin: Mapping[str, str]) -> dict[str, Any]:
-    response = await visitor.send("GET", "/api/admin/spend", headers=admin)
+async def live_switch(visitor: Visitor, admin: Mapping[str, str]) -> dict[str, Any]:
+    response = await visitor.send("GET", "/api/admin/live", headers=admin)
     if response.status_code != 200:
-        raise Stop(f"GET /api/admin/spend returned {response.status_code}")
+        raise Stop(f"GET /api/admin/live returned {response.status_code}")
     return response.json()
 
 
 async def refused_turn(client: httpx.AsyncClient, report: Report, args: argparse.Namespace) -> None:
     admin = {ADMIN_HEADER: env_secret("HARMONY_ADMIN_SECRET")}
     visitor = Visitor(client)
-    before = await spend(visitor, admin)
+    switch = await live_switch(visitor, admin)
     # The only guard between this check and a paid turn: never post unless paused.
     if not report.check(
         "live models are paused",
-        before["live"]["paused"] is True,
+        switch["paused"] is True,
         "run scripts/hosted_admin.sh pause first",
     ):
         raise Stop
@@ -558,12 +556,12 @@ async def refused_turn(client: httpx.AsyncClient, report: Report, args: argparse
     budget = await visitor.send("GET", "/api/budget")
     live = budget.json().get("live") if budget.status_code == 200 else None
     if not report.check(
-        "hosted caps apply here", live is True, f"GET /api/budget: {status_of(budget)}, live={live}"
+        "live models run here", live is True, f"GET /api/budget: {status_of(budget)}, live={live}"
     ):
         report.note(
-            "scripted turns and calls without hosted caps never read the live switch, so "
-            "the pause isn't enforced on this stack; run --refused-turn on the hosted app, "
-            "or locally with MODEL_MODE=live and HOSTED_CAPS_IN_DEV=1"
+            "scripted turns never read the live switch, so the pause isn't enforced on "
+            "this stack; run --refused-turn on the hosted app, or locally with "
+            "MODEL_MODE=live"
         )
         raise Stop
     posted = await visitor.send(
@@ -579,9 +577,6 @@ async def refused_turn(client: httpx.AsyncClient, report: Report, args: argparse
         detail = await visitor.send("GET", f"/api/conversations/{conversation}")
         failure = detail.json().get("turn_failure") if detail.status_code == 200 else None
     report.check("the turn fails as `paused`", failure == "paused", f"turn_failure={failure}")
-    after = await spend(visitor, admin)
-    spent = [(view["live"].get("global") or {}).get("spent_usd") for view in (before, after)]
-    report.check("global spend is unchanged", spent[0] == spent[1], f"{spent[0]} -> {spent[1]}")
 
 
 async def rotation(client: httpx.AsyncClient, report: Report, args: argparse.Namespace) -> None:

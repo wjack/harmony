@@ -7,21 +7,17 @@ Each test builds a fresh gated app (`gated_app`), so no limit carries over.
 
 from __future__ import annotations
 
-import hmac
 import json
 import re
-from hashlib import sha256
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from harmony.api.gate_page import PAGE
 from harmony.config import Settings
-from harmony.db.models import VisitorSession
 from tests.integration._visitors import (
     ADMIN_SECRET,
     build_app,
@@ -117,7 +113,7 @@ async def test_without_the_cookie_every_route_is_refused(app: FastAPI) -> None:
 
 async def test_admin_routes_pass_with_the_admin_secret_alone(app: FastAPI) -> None:
     admin = [(m, p) for m, p in _walk(app) if p.startswith("/api/admin/") and m != "HEAD"]
-    assert {p for _, p in admin} >= {"/api/admin/spend", "/api/admin/wipe"}
+    assert {p for _, p in admin} >= {"/api/admin/live", "/api/admin/wipe"}
     async with visitor(app) as v:
         for method, path in admin:
             wrong = await v.client.request(method, path, headers={"X-Admin-Secret": "wrong"})
@@ -172,21 +168,13 @@ async def test_the_network_world_is_not_started(
         assert again.json()["code"] == "not_found"
 
 
-async def test_new_sessions_are_limited_per_client_key(app: FastAPI) -> None:
-    for _ in range(5):
+async def test_new_sessions_are_not_limited(app: FastAPI) -> None:
+    # More than the old five a day from one client key: testers on one network, or one
+    # tester's private windows, all get in.
+    for _ in range(7):
         async with visitor(app, headers=_client_from(CLIENT)) as v:
             await v.unlock()
             await v.start()
-    async with visitor(app, headers=_client_from(CLIENT)) as sixth:
-        await sixth.unlock()
-        refused = await sixth.request("POST", "/session/start", expect=429)
-        assert refused.json()["code"] == "too_many_attempts"
-        assert 0 < int(refused.headers["retry-after"]) <= 24 * 3600
-        assert "harmony_session" not in refused.cookies
-    for headers in (_client_from("198.51.100.8"), _client_from("10.0.0.1"), None):
-        async with visitor(app, headers=headers) as other:
-            await other.unlock()
-            await other.start()
 
 
 async def test_resets_are_limited_per_session(app: FastAPI) -> None:
@@ -218,34 +206,6 @@ async def test_resets_are_unlimited_without_the_gate(
         await v.start()
         for _ in range(21):
             await v.json("POST", "/worlds/reset")
-
-
-async def _client_key_hash(sm: Sessionmaker, session_id: str) -> str | None:
-    async with sm() as session:
-        return await session.scalar(
-            select(VisitorSession.client_key_hash).where(VisitorSession.id == UUID(session_id))
-        )
-
-
-@pytest.mark.parametrize("gated", [True, False])
-async def test_a_new_session_records_its_client_key_hash(
-    app_settings: Settings, db_engine: AsyncEngine, db_sessionmaker: Sessionmaker, gated: bool
-) -> None:
-    app = (gated_app if gated else build_app)(
-        app_settings, db_engine, client_ip_header="x-forwarded-for"
-    )
-    secret = app_settings.session_secret_value().encode()
-    expected = hmac.new(secret, CLIENT.encode(), sha256).hexdigest()[:32]
-    for headers, stored in (
-        (_client_from(CLIENT), expected),
-        (_client_from("10.0.0.1"), None),
-        (None, None),
-    ):
-        async with visitor(app, headers=headers) as v:
-            if gated:
-                await v.unlock()
-            started = await v.start()
-        assert await _client_key_hash(db_sessionmaker, started["session_id"]) == stored, headers
 
 
 # --- Bodies -----------------------------------------------------------------------------

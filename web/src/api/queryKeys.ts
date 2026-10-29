@@ -21,7 +21,7 @@ export const queryKeys = {
   harmonySettings: (orgSlug: string) => ["harmony-settings", orgSlug] as const,
   /** `GET /api/demo/story`: the suggested message and recipients. */
   story: ["demo-story"] as const,
-  /** `GET /api/budget`: the visitor's live-model budget. */
+  /** `GET /api/budget`: whether live models are on, and what stops them now. */
   budget: ["budget"] as const,
   /** `GET /api/demo/waiting`: the accounts with an open item, for the demo bar. */
   demoWaiting: ["demo-waiting"] as const,

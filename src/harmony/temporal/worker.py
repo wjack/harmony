@@ -18,9 +18,7 @@ Register new workflows and activities in the `*_workflows` / `*_activities` func
 below. Activities are bound methods of classes that receive their dependencies, so
 tests build the same objects with their own database and client.
 
-At start the worker makes sure the hosted spend rows exist (`ensure_hosted_rows`), and
-with the hosted caps on it settles reservations a dead process left open
-(`settle_stale_reservations`), at start and every `SETTLE_STALE_EVERY`.
+At start the worker makes sure the live switch row exists (`ensure_live_switch`).
 
 SIGTERM (Render) and SIGINT (Ctrl-C, watchfiles reloads) start a graceful shutdown:
 pollers stop, running activities get `graceful_shutdown` to finish before they are
@@ -34,11 +32,10 @@ import logging
 import os
 import signal
 import socket
-from collections.abc import AsyncGenerator, Callable, Sequence
-from contextlib import asynccontextmanager, suppress
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Final, Protocol
+from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
@@ -50,7 +47,7 @@ from harmony.events.bus import StreamPublisher
 from harmony.events.stream import PgStreamPublisher
 from harmony.llm import ModelClient
 from harmony.llm.budget import SpendGuard, spend_guard
-from harmony.llm.budget_pg import HostedBudgets, HostedCaps, ensure_hosted_rows
+from harmony.llm.live_switch import ensure_live_switch
 from harmony.llm.scripted import ScriptedModel
 from harmony.temporal.activities.agents import AgentActivities
 from harmony.temporal.activities.hello import HelloActivities
@@ -67,11 +64,6 @@ from harmony.temporal.workflows.thread import ThreadWorkflow
 logger = logging.getLogger(__name__)
 
 GRACEFUL_SHUTDOWN: Final = timedelta(seconds=90)
-# A reservation still open after this was left by a process that died mid-call. It must
-# outlast the model activity's timeout (`policies.MODEL_START_TO_CLOSE`), so a live call
-# is never settled under it (3.6).
-SETTLE_STALE_AFTER: Final = timedelta(minutes=15)
-SETTLE_STALE_EVERY: Final = timedelta(minutes=10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +149,7 @@ def model_runtime(
         # Imported only here: the Anthropic SDK is the one heavy import in the worker.
         from harmony.llm.anthropic_model import AnthropicModel
 
-        # A provider spend-limit refusal blocks later hosted calls locally (3.4).
+        # A provider spend-limit refusal blocks later live calls locally (3.4).
         client = AnthropicModel.from_settings(settings, on_provider_limit=guard.block_provider)
     return ModelRuntime(client, guard, PgStreamPublisher.from_settings(settings))
 
@@ -213,8 +205,6 @@ def agent_activities(deps: WorkerDeps) -> AgentActivities | None:
         deps.model.publisher,
         model_override=deps.settings.model_override,
         client=deps.client,
-        # Hosted live calls are also capped per session lineage (§14).
-        hosted_caps=HostedCaps.from_settings(deps.settings),
     )
 
 
@@ -311,60 +301,6 @@ def stop_on_signals(stop: asyncio.Event) -> None:
         loop.add_signal_handler(sig, request_stop, sig)
 
 
-class StaleSettler(Protocol):
-    async def settle_stale(self, older_than: timedelta) -> int: ...
-
-
-async def settle_stale_reservations(
-    budgets: StaleSettler,
-    *,
-    every: timedelta = SETTLE_STALE_EVERY,
-    older_than: timedelta = SETTLE_STALE_AFTER,
-) -> None:
-    """Settle reservations a dead process left open, now and then every `every`, until
-    cancelled. A failed sweep is logged and tried again on the next."""
-    while True:
-        try:
-            settled = await budgets.settle_stale(older_than)
-        except Exception:
-            logger.exception("settling stale budget reservations failed")
-        else:
-            if settled:
-                logger.warning("settled %d stale budget reservations at their estimate", settled)
-        await asyncio.sleep(every.total_seconds())
-
-
-@asynccontextmanager
-async def stale_reservation_sweep(
-    settings: Settings, sessionmaker: async_sessionmaker[AsyncSession]
-) -> AsyncGenerator[None]:
-    """`settle_stale_reservations` for the block's duration when the hosted caps are on;
-    without them nothing reserves against Postgres, so nothing runs."""
-    if HostedCaps.from_settings(settings) is None:
-        yield
-        return
-    sweep = asyncio.create_task(settle_stale_reservations(HostedBudgets(sessionmaker)))
-    try:
-        yield
-    finally:
-        sweep.cancel()
-        with suppress(asyncio.CancelledError):
-            await sweep
-
-
-@asynccontextmanager
-async def hosted_spend(
-    settings: Settings, sessionmaker: async_sessionmaker[AsyncSession]
-) -> AsyncGenerator[None]:
-    """What every worker sets up for hosted spend before it serves, `harmony worker` and
-    `harmony run`'s own alike: the live switch and the configured global and daily caps
-    (`ensure_hosted_rows`; without the `global` row every hosted call refuses), then the
-    stale-reservation sweep for the block's duration."""
-    await ensure_hosted_rows(sessionmaker, settings)
-    async with stale_reservation_sweep(settings, sessionmaker):
-        yield
-
-
 async def run_worker(
     settings: Settings, *, graceful_shutdown: timedelta = GRACEFUL_SHUTDOWN
 ) -> None:
@@ -385,21 +321,21 @@ async def run_worker(
         # Before connecting: a live worker without its ledger must not start at all.
         runtime = model_runtime(settings, sessionmaker)
         try:
-            async with hosted_spend(settings, sessionmaker):
-                client = await connect_client(settings, identity=identity)
-                deps = WorkerDeps(settings, client, sessionmaker, runtime)
-                workers = build_workers(deps, config)
-                logger.info(
-                    "polling task queues %s (model mode %s; model slots %d at %g/s, chat slots %d)",
-                    ", ".join(worker.task_queue for worker in workers),
-                    settings.model_mode,
-                    config.model_max_concurrent_activities,
-                    config.model_activities_per_second,
-                    config.chat_max_concurrent_activities,
-                )
-                stop = asyncio.Event()
-                stop_on_signals(stop)
-                await serve(workers, stop)
+            await ensure_live_switch(sessionmaker)
+            client = await connect_client(settings, identity=identity)
+            deps = WorkerDeps(settings, client, sessionmaker, runtime)
+            workers = build_workers(deps, config)
+            logger.info(
+                "polling task queues %s (model mode %s; model slots %d at %g/s, chat slots %d)",
+                ", ".join(worker.task_queue for worker in workers),
+                settings.model_mode,
+                config.model_max_concurrent_activities,
+                config.model_activities_per_second,
+                config.chat_max_concurrent_activities,
+            )
+            stop = asyncio.Event()
+            stop_on_signals(stop)
+            await serve(workers, stop)
         finally:
             await runtime.publisher.aclose()
     finally:

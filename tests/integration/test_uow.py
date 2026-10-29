@@ -400,9 +400,7 @@ async def test_a_session_cannot_act_as_a_member_of_another_world(
         _member(other_world, member_id, org_id),
         events=0,
     )
-    visitor = VisitorSession(
-        id=uuid4(), desk_world_id=world_id, desk_member_id=member_id, budget_lineage=uuid4()
-    )
+    visitor = VisitorSession(id=uuid4(), desk_world_id=world_id, desk_member_id=member_id)
 
     async def save() -> None:
         async with db_sessionmaker() as session, session.begin():
@@ -416,9 +414,7 @@ async def test_deleting_a_retired_worlds_rows_keeps_the_tombstone(
     db_sessionmaker: Sessionmaker, world_id: UUID
 ) -> None:
     org_id, member_id, session_id = uuid4(), uuid4(), uuid4()
-    visitor = VisitorSession(
-        id=session_id, desk_world_id=world_id, desk_member_id=member_id, budget_lineage=uuid4()
-    )
+    visitor = VisitorSession(id=session_id, desk_world_id=world_id, desk_member_id=member_id)
     await _commit(
         db_sessionmaker,
         world_id,

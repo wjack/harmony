@@ -37,9 +37,10 @@ export interface ComposerProps extends SendModeProps {
 /**
  * Claude's composer: a white, 20px-radius card with the textarea on top and a row with
  * `+`, the model label and the send button (a voice icon while empty). Enter sends,
- * Shift+Enter starts a new line. While a spend cap stops live turns, a strip on top
- * says which (unless a waiting card carries it), and nothing can be sent until the
- * budget reads `ok` again (LIVE_DEMO_PLAN 3.5); the draft stays.
+ * Shift+Enter starts a new line. While live turns are stopped (a pause, or the demo's
+ * spent budget), a strip on top says which (unless a waiting card carries it), and
+ * nothing can be sent until the budget reads `ok` again (LIVE_DEMO_PLAN 3.5); the draft
+ * stays.
  */
 export function Composer({
   value,

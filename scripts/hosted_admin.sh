@@ -2,7 +2,7 @@
 # Operator commands for the hosted demo (LIVE_DEMO_PLAN 3.4, 3.6). They need the admin
 # secret only: no passcode, no unlock, no cookie jar.
 #
-#   scripts/hosted_admin.sh status       # GET /api/admin/spend
+#   scripts/hosted_admin.sh status       # GET /api/admin/live
 #   scripts/hosted_admin.sh pause        # live models off at once, then confirmed
 #   scripts/hosted_admin.sh resume       # live models back on (clears a provider block)
 #   scripts/hosted_admin.sh wipe --yes   # retire every world (POST /api/admin/wipe)
@@ -80,7 +80,7 @@ print(eval(sys.argv[2], {"d": d}))
 ' "$work/body" "$1"
 }
 
-# set_live ENABLED PAUSED: switch, then confirm the switch through the spend view.
+# set_live ENABLED PAUSED: switch, then read the switch back.
 set_live() {
   local expected=$2
   expect 200 "$(call POST /admin/live "{\"enabled\": $1}")" "POST /api/admin/live"
@@ -92,16 +92,16 @@ set_live() {
     echo "hosted_admin.sh: a provider block is still set" >&2
     exit 1
   fi
-  expect 200 "$(call GET /admin/spend)" "GET /api/admin/spend"
-  [[ $(json "d['live']['paused']") == "$expected" ]] || {
-    echo "hosted_admin.sh: /api/admin/spend still reports paused=$(json "d['live']['paused']")" >&2
+  expect 200 "$(call GET /admin/live)" "GET /api/admin/live"
+  [[ $(json "d['paused']") == "$expected" ]] || {
+    echo "hosted_admin.sh: /api/admin/live still reports paused=$(json "d['paused']")" >&2
     exit 1
   }
 }
 
 case $command in
   status)
-    expect 200 "$(call GET /admin/spend)" "GET /api/admin/spend"
+    expect 200 "$(call GET /admin/live)" "GET /api/admin/live"
     python3 -I -m json.tool "$work/body"
     ;;
   pause)

@@ -93,8 +93,8 @@ export interface paths {
         put?: never;
         /**
          * Reset World
-         * @description Fork a fresh world from the same scenario, keeping the acting member's slug and
-         *     the session's budget lineage; the old world is retired behind it. Bumps the epoch.
+         * @description Fork a fresh world from the same scenario, keeping the acting member's slug; the
+         *     old world is retired behind it. Bumps the epoch.
          */
         post: operations["reset_world_api_worlds_reset_post"];
         delete?: never;
@@ -714,23 +714,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/spend": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Spend */
-        get: operations["get_spend_api_admin_spend_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/live": {
         parameters: {
             query?: never;
@@ -738,7 +721,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get Live */
+        get: operations["get_live_api_admin_live_get"];
         put?: never;
         /** Set Live */
         post: operations["set_live_api_admin_live_post"];
@@ -839,17 +823,6 @@ export interface components {
             /** Draft Text */
             draft_text?: string | null;
         };
-        /** AdminSpendView */
-        AdminSpendView: {
-            live: components["schemas"]["LiveState"];
-            today: components["schemas"]["BudgetTotals"] | null;
-            /** Lineages Today */
-            lineages_today: number;
-            /** Top Lineages */
-            top_lineages: components["schemas"]["KeySpend"][];
-            /** Top Clients */
-            top_clients: components["schemas"]["KeySpend"][];
-        };
         /** AdminWorldView */
         AdminWorldView: {
             /**
@@ -922,15 +895,6 @@ export interface components {
             /** Turn Id */
             turn_id: string | null;
         };
-        /** BudgetTotals */
-        BudgetTotals: {
-            /** Cap Usd */
-            cap_usd: number;
-            /** Spent Usd */
-            spent_usd: number;
-            /** Reserved Usd */
-            reserved_usd: number;
-        };
         /** BudgetView */
         BudgetView: {
             /** Live */
@@ -939,10 +903,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "ok" | "session_exhausted" | "daily_exhausted" | "demo_exhausted" | "paused";
-            session?: components["schemas"]["SessionBudget"] | null;
-            /** Resets At */
-            resets_at?: string | null;
+            state: "ok" | "demo_exhausted" | "paused";
         };
         /** CardRecipient */
         CardRecipient: {
@@ -1103,7 +1064,7 @@ export interface components {
             /** Looking */
             looking: boolean;
             /** Turn Failure */
-            turn_failure: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            turn_failure: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             refusal?: components["schemas"]["ChatRefusal"] | null;
             send_mode: components["schemas"]["SendMode"];
             /** Version */
@@ -1556,7 +1517,7 @@ export interface components {
              */
             thread_state: "active" | "awaiting_principal" | "closed" | "expired";
             /** Stop Reason */
-            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            stop_reason?: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             /** Side To Move */
             side_to_move: ("requester" | "responder") | null;
             escalation: components["schemas"]["InboxEscalation"] | null;
@@ -1654,29 +1615,14 @@ export interface components {
             adaptive: boolean;
         };
         /**
-         * KeySpend
-         * @description One budget row: a `lineage:` or `client:` key.
-         */
-        KeySpend: {
-            /** Cap Usd */
-            cap_usd: number;
-            /** Spent Usd */
-            spent_usd: number;
-            /** Reserved Usd */
-            reserved_usd: number;
-            /** Key */
-            key: string;
-        };
-        /**
          * LiveState
-         * @description The live switch, as `POST /api/admin/live` leaves it.
+         * @description The live switch.
          */
         LiveState: {
             /** Paused */
             paused: boolean;
             /** Provider Blocked Until */
             provider_blocked_until: string | null;
-            global: components["schemas"]["BudgetTotals"] | null;
         };
         /** LiveToggle */
         LiveToggle: {
@@ -1796,7 +1742,7 @@ export interface components {
              */
             state: "active" | "awaiting_principal" | "closed" | "expired";
             /** Stop Reason */
-            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            stop_reason?: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             /** End Reason */
             end_reason: ("closed" | "quiet" | "unsent" | "turn_limit" | "deadline" | "stopped") | null;
             /** Closed By */
@@ -2053,7 +1999,7 @@ export interface components {
             /** Closed By */
             closed_by?: ("requester" | "responder") | null;
             /** Stop Reason */
-            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            stop_reason?: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             /** Last Activity At */
             last_activity_at: string | null;
         };
@@ -2319,7 +2265,7 @@ export interface components {
             /** Closed By */
             closed_by: ("requester" | "responder") | null;
             /** Stop Reason */
-            stop_reason: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            stop_reason: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             /**
              * At
              * Format: date-time
@@ -2370,20 +2316,6 @@ export interface components {
             org_default: boolean;
             /** Effective */
             effective: boolean;
-        };
-        /**
-         * SessionBudget
-         * @description The session's lineage cap ("Live · $7.40 left").
-         */
-        SessionBudget: {
-            /** Cap Usd */
-            cap_usd: number;
-            /** Spent Usd */
-            spent_usd: number;
-            /** Reserved Usd */
-            reserved_usd: number;
-            /** Remaining Usd */
-            remaining_usd: number;
         };
         /**
          * SessionView
@@ -2524,7 +2456,7 @@ export interface components {
             /** Draft Outcome */
             draft_outcome: ("rewritten" | "settled" | "failed") | null;
             /** Failure Reason */
-            failure_reason: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused" | "added_details" | "invalid" | "thread_closed" | "unchanged" | "reopen_failed") | null;
+            failure_reason: ("demo_budget" | "paused" | "model_error" | "refused" | "added_details" | "invalid" | "thread_closed" | "unchanged" | "reopen_failed") | null;
             /** Version */
             version: number;
         };
@@ -2614,7 +2546,7 @@ export interface components {
              */
             state: "active" | "awaiting_principal" | "closed" | "expired";
             /** Stop Reason */
-            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            stop_reason?: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             /**
              * Side
              * @enum {string}
@@ -2725,7 +2657,7 @@ export interface components {
              */
             state: "active" | "awaiting_principal" | "closed" | "expired";
             /** Stop Reason */
-            stop_reason?: ("session_budget" | "daily_budget" | "demo_budget" | "paused" | "model_error" | "refused") | null;
+            stop_reason?: ("demo_budget" | "paused" | "model_error" | "refused") | null;
             /**
              * Side
              * @enum {string}
@@ -5718,7 +5650,7 @@ export interface operations {
             };
         };
     };
-    get_spend_api_admin_spend_get: {
+    get_live_api_admin_live_get: {
         parameters: {
             query?: never;
             header?: {
@@ -5735,7 +5667,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AdminSpendView"];
+                    "application/json": components["schemas"]["LiveState"];
                 };
             };
             /** @description Unauthorized */
