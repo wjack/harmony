@@ -22,10 +22,13 @@ export function Intro() {
       title="Meet Harmony"
       description={
         <>
-          Every organization on the network has its own Claude. When one needs something, Claude finds out who can
-          help, and their two Claude representatives look to collaborate.
+          Every organization on the network has a Claude representing it.
           <span className="mt-3 block">
-            You act as people at these organizations, and Claude asks you when something needs a person.
+            When a user at one organization needs something, their Claude finds out who could help, and their Claudes
+            collaborate, escalating for human input when needed.
+          </span>
+          <span className="mt-3 block">
+            You can use this demo to act as people at different organizations on the Harmony Network.
           </span>
         </>
       }

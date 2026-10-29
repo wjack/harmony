@@ -47,7 +47,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("says what each key control does from the demo bar's ?, and closes on Escape or a click", async () => {
+it("says what each key control does from the demo bar's ?, and closes on Escape or Got it", async () => {
   const { dispatcher } = await renderLive(sessionAs(members.alex));
   const help = screen.getByRole("button", { name: "What's on screen" });
 
@@ -84,9 +84,12 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
   // Opened from the "?" itself, nothing points the "?" out.
   expect(screen.queryByText("See this guide any time")).toBeNull();
 
-  // Anywhere on it closes it too, the scrim included.
+  // A click elsewhere on it, the scrim included, leaves it open; Got it closes it.
   fireEvent.click(help);
-  fireEvent.click(await screen.findByRole("dialog", { name: "What's on screen" }));
+  const reopened = await screen.findByRole("dialog", { name: "What's on screen" });
+  fireEvent.click(reopened);
+  expect(screen.getByRole("dialog", { name: "What's on screen" })).toBeTruthy();
+  fireEvent.click(within(reopened).getByRole("button", { name: "Got it" }));
   await waitFor(() => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
