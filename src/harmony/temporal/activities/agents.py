@@ -71,6 +71,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
+from temporalio.client import Client
 
 from harmony.agents import consult as answerer
 from harmony.agents import context, keys, release
@@ -114,7 +115,7 @@ from harmony.db.models import (
 )
 from harmony.db.models.choices import Side, SteerGuidanceOutcome
 from harmony.db.uow import UnitOfWork, unit_of_work
-from harmony.domain import agent_turns, clock, consults, conversations, escalations, steers
+from harmony.domain import agent_turns, answers, clock, consults, conversations, escalations, steers
 from harmony.domain import threads as thread_domain
 from harmony.domain.conversations import NO_MEMBER_MESSAGE
 from harmony.domain.settings import mode_toward, skips_approvals
@@ -129,6 +130,7 @@ from harmony.llm.requests import Tier, resolve_model
 from harmony.llm.wire import JsonObject
 from harmony.temporal.activities.network import domain_errors
 from harmony.temporal.activities.send_mode import send_mode_notice
+from harmony.temporal.answers import ChatAnswers
 from harmony.temporal.failures import budget_refused
 from harmony.temporal.policies import ensure_world_live
 from harmony.temporal.workflows.payloads import MemberMessage, NetworkUpdate
@@ -319,7 +321,8 @@ ConsultDecision = Annotated[ConsultReleased | ConsultEscalated, Field(discrimina
 
 class AgentActivities:
     """Model activities (queue `harmony-model`). Built once per worker process; each
-    call reads its scenario from the world row."""
+    call reads its scenario from the world row. The Temporal `client` lets Claude in a
+    chat answer a question from it (`answer_question`); without one, it can't."""
 
     def __init__(
         self,
@@ -329,11 +332,13 @@ class AgentActivities:
         publisher: StreamPublisher,
         *,
         model_override: str | None,
+        client: Client | None = None,
         hosted_caps: HostedCaps | None = None,
         heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
         typing_every_s: float = TYPING_HEARTBEAT_S,
     ) -> None:
         self._sessionmaker = sessionmaker
+        self._answers = ChatAnswers(client, sessionmaker) if client is not None else None
         self._model = model
         self._guard = guard
         self._publisher = publisher
@@ -407,8 +412,15 @@ class AgentActivities:
                 )
                 card_sent = await _card_sent(session, turn)
                 updates = await _unstored_updates(session, turn)
+                questions = (
+                    await _unnoted_questions(session, turn)
+                    if _new_turn(turn) and turn.messages
+                    else []
+                )
             notices = (
-                internal_notices(turn, today, updates=updates, send_mode=send_mode)
+                internal_notices(
+                    turn, today, updates=updates, send_mode=send_mode, questions=questions
+                )
                 if look is None
                 else None
             )
@@ -438,6 +450,7 @@ class AgentActivities:
                     member_spoke=bool(turn.messages),
                 ),
                 screen,
+                self._answers,
             )
             ctx = TurnContext(
                 world_id=turn.world_id,
@@ -1053,6 +1066,7 @@ def _elapsed_ms(started: float) -> int:
 
 # How every note of a request's end starts, to find the notes a chat holds.
 _NETWORK_NOTE_PREFIX: Final = "Harmony: every conversation on request "
+_QUESTION_NOTE_PREFIX: Final = "Harmony: a question waits on "
 
 
 def internal_opening(turn: InternalTurnInput) -> list[JsonObject]:
@@ -1070,17 +1084,69 @@ def internal_notices(
     *,
     updates: Sequence[NetworkUpdate],
     send_mode: str | None = None,
+    questions: Sequence[str] = (),
 ) -> str | None:
     """Code-written system notes: the world date on the chat's first call, the chat's
-    new send mode (`send_mode_notice`, new turns only), and what changed on its
-    requests (`updates`, those of the turn's the chat doesn't hold yet)."""
+    new send mode (`send_mode_notice`, new turns only), what changed on its requests
+    (`updates`, those of the turn's the chat doesn't hold yet), and the questions
+    waiting on the member that it hasn't been told of (`question_note`)."""
     notes: list[str] = []
     if turn.turn == 1 and _new_turn(turn):
         notes.append(context.world_date_notice(today))
     if send_mode is not None:
         notes.append(send_mode)
     notes += [network_note(update) for update in updates]
+    notes += questions
     return "\n\n".join(notes) or None
+
+
+async def _unnoted_questions(session: AsyncSession, turn: InternalTurnInput) -> list[str]:
+    """The notes for the questions waiting on the member as cards in this chat that no
+    earlier note told it of (`question_note`), so that a message answering one is passed
+    on as its answer. Only names and IDs: the question itself, which a counterparty's
+    words shaped, reaches Claude as `get_request_status` content (§2.1)."""
+    waiting = await answers.waiting_on(
+        session,
+        world_id=turn.world_id,
+        conversation_id=turn.conversation_id,
+        member_id=turn.owner_member_id,
+    )
+    if not waiting:
+        return []
+    stored = list(
+        await session.scalars(
+            select(ChatMessage.content_text).where(
+                ChatMessage.world_id == turn.world_id,
+                ChatMessage.conversation_id == turn.conversation_id,
+                ChatMessage.role == "system",
+                ChatMessage.content_text.contains(_QUESTION_NOTE_PREFIX, autoescape=True),
+            )
+        )
+    )
+    member = await repo.get_required(session, Member, turn.world_id, turn.owner_member_id)
+    orgs = {
+        org.id: org.name
+        for org in await repo.list_in_world(
+            session, Org, turn.world_id, Org.id.in_([q.thread.responder_org_id for q in waiting])
+        )
+    }
+    return [
+        question_note(
+            question.item.id, member=member.name, org=orgs[question.thread.responder_org_id]
+        )
+        for question in waiting
+        if not any(str(question.item.id) in (text or "") for text in stored)
+    ]
+
+
+def question_note(question_id: UUID, *, member: str, org: str) -> str:
+    """The note that a question from our representative waits on the member as a card."""
+    return (
+        f"{_QUESTION_NOTE_PREFIX}{member} as a card in this chat: your representative's "
+        f"in its conversation with {org} (question {question_id}; get_request_status shows "
+        f"it). Don't ask it again in your own words. If {member}'s message answers it, send "
+        "their words with answer_question."
+    )
 
 
 async def _unstored_updates(session: AsyncSession, turn: InternalTurnInput) -> list[NetworkUpdate]:

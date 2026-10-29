@@ -3,13 +3,14 @@ still unanswered one's card; a member's answer goes to the card's ticked askers 
 reused drafts (checked in every mode, released by `auto`, or held with why), never to a
 later asker, and the chat shows the card as one question. The resolve route sends the
 answer to its askers only, and refuses what it must. Claude in the chat may pass part
-of an answer to the request's other conversations, once the member says yes. Scripted
+of an answer to the request's other conversations, once the member says yes, and gives
+the member's own words as a waiting question's answer. Scripted
 model calls on a seeded harmony-demo world."""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 from uuid import UUID, uuid4
 
@@ -26,6 +27,7 @@ from harmony.agents.consult import escalation_id_for
 from harmony.agents.models import EscalationResolution, InlineQuestionItem, Route, RouteAssignee
 from harmony.agents.runtime import ToolCall
 from harmony.agents.tools.internal import (
+    ANSWER_QUESTION,
     SHARE_WITH_REPRESENTATIVES,
     InternalToolExecutor,
     InternalToolScope,
@@ -38,11 +40,13 @@ from harmony.db.models import Consult, Conversation, Escalation, RepNotice
 from harmony.db.uow import unit_of_work
 from harmony.domain import consults, conversations, escalations, routing
 from harmony.domain import threads as threads_domain
+from harmony.domain.answers import AnswerRefused, CardAnswer
 from harmony.events.bus import StreamMessage
 from harmony.llm import ModelRole
 from harmony.llm.budget import FreeSpend
 from harmony.llm.scripted import CassetteEntry, CassetteKey, CassetteMatch, ScriptedModel
 from harmony.llm.wire import canonical_json
+from harmony.temporal import answers as temporal_answers
 from harmony.temporal.activities.agents import (
     AgentActivities,
     AnswerConsultInput,
@@ -51,7 +55,13 @@ from harmony.temporal.activities.agents import (
     ConsultReleased,
 )
 from harmony.temporal.activities.network import ApplyResolutionInput, NetworkActivities
-from harmony.temporal.workflows.payloads import AnswerUsed, EscalationResolved, NetworkNews
+from harmony.temporal.answers import ChatAnswers
+from harmony.temporal.workflows.payloads import (
+    AnswerUsed,
+    EscalationResolved,
+    NetworkNews,
+    UseAnswer,
+)
 from tests.integration._e4_world import (
     ALEX,
     CALDER,
@@ -434,15 +444,18 @@ async def test_an_answer_goes_to_its_askers_only(
         services: Any, actor: Any, escalation: Escalation, name: str, arg: Any, result: Any
     ) -> Any:
         updates.append((name, escalation.id))
-        if name == "use_answer":
-            return AnswerUsed(escalation_id=escalation.id, draft_rev=2)
         return EscalationResolved(escalation_id=escalation.id, action="approve")
+
+    async def use(handle: Any, name: str, arg: UseAnswer, result: Any) -> AnswerUsed:
+        updates.append((name, arg.escalation_id))
+        return AnswerUsed(escalation_id=arg.escalation_id, draft_rev=2)
 
     async def nudge(client: Any, sessionmaker: Any, *, world_id: UUID, news: NetworkNews) -> None:
         nudged.append(news)
 
     monkeypatch.setattr(escalations_route, "_update", update)
-    monkeypatch.setattr(escalations_route, "nudge_request_chat", nudge)
+    monkeypatch.setattr(temporal_answers, "run_update", use)
+    monkeypatch.setattr(temporal_answers, "nudge_request_chat", nudge)
     app: FastAPI = create_app(
         app_settings.model_copy(update={"admin_secret": SecretStr(ADMIN_SECRET)}),
         engine=db_engine,
@@ -550,3 +563,144 @@ async def test_shared_words_reach_only_the_conversations_approved(
             (threads[RIDGELINE], *shared(words, ridgeline)),
         ]
     )
+
+
+# --- Answering from the chat -------------------------------------------------------------
+
+
+class Given:
+    """`QuestionAnswers` that keeps what it was given, as if the thread took it."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[EscalationResolution, UUID, CardAnswer | None, list[UUID]]] = []
+
+    async def give(
+        self,
+        world_id: UUID,
+        resolution: EscalationResolution,
+        *,
+        thread_id: UUID,
+        answer: CardAnswer | None,
+        also: Sequence[Escalation],
+    ) -> None:
+        self.calls.append((resolution, thread_id, answer, [item.id for item in also]))
+
+
+async def test_claude_answers_a_waiting_question_with_the_members_words(
+    db_sessionmaker: Sessionmaker,
+) -> None:
+    sm = db_sessionmaker
+    world_id = await seeded_world(sm)
+    outreach = await approved_outreach(sm, world_id, NORTHLAKE, CALDER, RIDGELINE)
+    orgs = (NORTHLAKE, CALDER, RIDGELINE)
+    threads = {org: await open_thread(sm, outreach, org) for org in orgs}
+    powders = "May I tell them what the powders are?"
+    card, shown = await _routed(sm, world_id, threads[NORTHLAKE], "alex", powders)
+    _, calder = await _routed(sm, world_id, threads[CALDER], "alex", powders, same_as=card)
+    _, mayas = await _routed(sm, world_id, threads[RIDGELINE], "maya", "Can they ship Monday?")
+    given = Given()
+    scope: dict[str, Any] = {
+        "world_id": world_id,
+        "conversation_id": outreach.conversation_id,
+        "org_id": HENDERSON,
+        "member_id": ALEX,
+        "turn_id": uuid4(),
+        "turn": 2,
+        "cassette_thread": keys.chat_key("alex", 1),
+        "member_spoke": True,
+    }
+
+    def executor(answers: Any = given, **changed: Any) -> InternalToolExecutor:
+        return InternalToolExecutor(
+            sm, InternalToolScope(**scope | changed), cast(Any, None), answers
+        )
+
+    async def call(tools: InternalToolExecutor, name: str, **arguments: Any) -> Any:
+        tool_call = ToolCall(id=f"toolu_{uuid4().hex[:8]}", name=name, input=arguments)
+        return await tools.execute(tool_call, step_idx=0)
+
+    # The request's status shows each conversation's question waiting on Alex, with its
+    # ID; not one routed to someone else.
+    status = json.loads((await call(executor(), "get_request_status")).result)
+    waiting = {row["org"]["id"]: row.get("open_question") for row in status["recipients"]}
+    assert waiting[str(NORTHLAKE)] == {
+        "id": str(shown),
+        "question": powders,
+        "answer_with": ANSWER_QUESTION,
+    }
+    assert waiting[str(CALDER)]["id"] == str(calder)
+    assert waiting[str(RIDGELINE)] is None
+
+    words = "Yes: sodium layered oxides, no compositions."
+    refused = [
+        # Not in an update look, nor with words the member didn't say this turn.
+        await call(executor(look=True), ANSWER_QUESTION, question_id=str(shown), answer=words),
+        await call(
+            executor(member_spoke=False), ANSWER_QUESTION, question_id=str(shown), answer=words
+        ),
+        # Only a question waiting on this member in this chat.
+        await call(executor(), ANSWER_QUESTION, question_id=str(mayas), answer=words),
+        await call(executor(), ANSWER_QUESTION, question_id="q1", answer=words),
+        # Never another organization's name.
+        await call(
+            executor(),
+            ANSWER_QUESTION,
+            question_id=str(shown),
+            answer="Same as Ridgeline: sodium layered oxides.",
+        ),
+        # Nowhere to give it.
+        await call(executor(None), ANSWER_QUESTION, question_id=str(shown), answer=words),
+    ]
+    assert all(result.is_error for result in refused)
+    assert "said in this turn" in refused[1].result
+    assert "Ridgeline Fabrication" in refused[4].result
+    assert "answer on the card" in refused[5].result
+    assert given.calls == []
+
+    # Sharing with a paused conversation says it waits on its question.
+    shared = await call(
+        executor(),
+        SHARE_WITH_REPRESENTATIVES,
+        request_id=str(outreach.request_id),
+        organizations=["northlake"],
+        text="We want delivery by November 6.",
+    )
+    assert f"paused on Alex Chen's answer to question {shown}" in shared.result
+
+    # Answered, as the card would: Alex's words to the conversation that asked, and the
+    # card's other asker still waiting.
+    done = await call(executor(), ANSWER_QUESTION, question_id=str(shown), answer=words)
+    assert not done.is_error
+    [(resolution, thread_id, answer, also)] = given.calls
+    assert (resolution.escalation_id, resolution.action, resolution.text) == (
+        shown,
+        "approve",
+        words,
+    )
+    assert (resolution.member_id, resolution.org_id, thread_id) == (
+        ALEX,
+        HENDERSON,
+        threads[NORTHLAKE],
+    )
+    assert also == [calder]
+    assert answer is not None
+    assert answer.goes_to == [NORTHLAKE, CALDER]
+    assert "Northlake Characterization Core" in done.result
+
+
+async def test_an_answer_from_the_chat_needs_its_conversation_waiting(
+    db_sessionmaker: Sessionmaker, temporal_env: WorkflowEnvironment
+) -> None:
+    sm = db_sessionmaker
+    world_id = await seeded_world(sm)
+    outreach = await approved_outreach(sm, world_id, NORTHLAKE)
+    thread_id = await open_thread(sm, outreach, NORTHLAKE)
+    _, shown = await _routed(sm, world_id, thread_id, "alex", "May I say what they are?")
+    resolution = EscalationResolution(
+        escalation_id=shown, action="approve", text="Yes.", member_id=ALEX, org_id=HENDERSON
+    )
+    # No workflow waits on it, so it isn't open any more.
+    with pytest.raises(AnswerRefused, match="isn't waiting any more"):
+        await ChatAnswers(temporal_env.client, sm).give(
+            world_id, resolution, thread_id=thread_id, answer=None, also=[]
+        )

@@ -34,10 +34,19 @@
   sharing rules. Nothing reaches a counterparty directly. Refused unless the member
   wrote this turn, and for text that names an organization on the request (other than
   the one conversation's own, when only one is named): no conversation hears of another.
+  A conversation paused on a question for the member reads it only once that's answered,
+  and the result says so.
+- `answer_question(question_id, answer)`: answers a question our representative routed
+  to the member (a card in the chat; `get_request_status` lists each conversation's with
+  its ID) with the member's words from this turn, as the card's Send answer does
+  (`domain.answers`): the conversation that asked, and the card's other askers still
+  waiting, get it, and the chat hears it was answered. Delivered by `QuestionAnswers`
+  (`temporal.answers.ChatAnswers`), which runs the thread's Update. Refused unless the
+  member wrote this turn, and for words that name another organization on the request.
 
-An update look (`InternalToolScope.look`) can't search, send or share:
-`search_network`, `send_network_request` and `share_with_representatives` return an
-error, and the tool list stays the same, so the prompt cache holds.
+An update look (`InternalToolScope.look`) can't search, send, share or answer:
+`search_network`, `send_network_request`, `share_with_representatives` and
+`answer_question` return an error, and the tool list stays the same, so the prompt cache holds.
 
 Owner: R-agents (the tool names, schemas and input models are the contract's).
 """
@@ -49,7 +58,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Annotated, Final, NamedTuple
+from typing import Annotated, Final, NamedTuple, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
@@ -62,6 +71,7 @@ from harmony.agents.models import (
     MAX_ACTIVE_THREADS,
     Ask,
     Brief,
+    EscalationResolution,
     OutreachCardPayload,
     OutreachRecipient,
     ScreenedCounts,
@@ -74,6 +84,7 @@ from harmony.db.models import (
     Card,
     ChatMessage,
     Document,
+    Escalation,
     KnowledgeItem,
     Member,
     NetworkRequest,
@@ -84,7 +95,7 @@ from harmony.db.models import (
 )
 from harmony.db.models.choices import Fit
 from harmony.db.uow import unit_of_work
-from harmony.domain import cards, conversations, records, requests, threads
+from harmony.domain import answers, cards, consults, conversations, records, requests, threads
 from harmony.domain.threads import TERMINAL_STATES
 from harmony.ids import side_effect_id
 from harmony.llm.wire import objects
@@ -95,6 +106,7 @@ SEARCH_NETWORK: Final = "search_network"
 SEND_NETWORK_REQUEST: Final = "send_network_request"
 GET_REQUEST_STATUS: Final = "get_request_status"
 SHARE_WITH_REPRESENTATIVES: Final = "share_with_representatives"
+ANSWER_QUESTION: Final = "answer_question"
 
 SEARCH_ORG_KNOWLEDGE_TOOL: Final[ToolDefinition] = {
     "name": SEARCH_ORG_KNOWLEDGE,
@@ -304,6 +316,38 @@ SHARE_WITH_REPRESENTATIVES_TOOL: Final[ToolDefinition] = {
     },
 }
 
+# A member's answer to one question, as long as the card's answer box takes.
+ANSWER_MAX_CHARS: Final = 20_000
+
+ANSWER_QUESTION_TOOL: Final[ToolDefinition] = {
+    "name": ANSWER_QUESTION,
+    "description": (
+        "Answer a question your representative asked the member, which waits on them as a "
+        "card in this chat (get_request_status lists each conversation's with its ID), "
+        "with what the member said this turn, exactly as if they had typed it on the card. "
+        "Use it whenever the member's message answers an open question, even partly or in "
+        "passing, instead of asking it again. The answer goes to your representative in "
+        "the conversation that asked, and in any other on the request still waiting on "
+        "the same question, never further; the conversation carries on from there. It "
+        "mustn't name another organization on the request."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "question_id": {"type": "string", "description": "The question's ID."},
+            "answer": {
+                "type": "string",
+                "description": (
+                    "The member's answer in their own words, as they wrote it. Leave out "
+                    "only what was meant for you; add nothing they didn't say."
+                ),
+            },
+        },
+        "required": ["question_id", "answer"],
+        "additionalProperties": False,
+    },
+}
+
 INTERNAL_TOOLS: Final[tuple[ToolDefinition, ...]] = (
     SEARCH_ORG_KNOWLEDGE_TOOL,
     READ_DOCUMENT_TOOL,
@@ -311,6 +355,7 @@ INTERNAL_TOOLS: Final[tuple[ToolDefinition, ...]] = (
     SEND_NETWORK_REQUEST_TOOL,
     GET_REQUEST_STATUS_TOOL,
     SHARE_WITH_REPRESENTATIVES_TOOL,
+    ANSWER_QUESTION_TOOL,
 )
 # The consult answerer is internal Claude answering for its org: it reads the org's
 # records with these, and nothing else (§4.1).
@@ -371,6 +416,13 @@ class ShareWithRepresentativesInput(_Input):
     ]
 
 
+class AnswerQuestionInput(_Input):
+    question_id: str
+    answer: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=ANSWER_MAX_CHARS)
+    ]
+
+
 INTERNAL_INPUTS: Final[dict[str, type[_Input]]] = {
     SEARCH_ORG_KNOWLEDGE: SearchOrgKnowledgeInput,
     READ_DOCUMENT: ReadDocumentInput,
@@ -378,6 +430,7 @@ INTERNAL_INPUTS: Final[dict[str, type[_Input]]] = {
     SEND_NETWORK_REQUEST: SendNetworkRequestInput,
     GET_REQUEST_STATUS: GetRequestStatusInput,
     SHARE_WITH_REPRESENTATIVES: ShareWithRepresentativesInput,
+    ANSWER_QUESTION: AnswerQuestionInput,
 }
 
 
@@ -439,7 +492,7 @@ NOT_IN_LOOK: Final = (
     "tell them, and they can ask you to."
 )
 _READ_ONLY_IN_LOOK: Final = frozenset(
-    (SEARCH_NETWORK, SEND_NETWORK_REQUEST, SHARE_WITH_REPRESENTATIVES)
+    (SEARCH_NETWORK, SEND_NETWORK_REQUEST, SHARE_WITH_REPRESENTATIVES, ANSWER_QUESTION)
 )
 # `share_with_representatives`: refused in a turn the member didn't start, and its result.
 SHARE_NEEDS_MEMBER: Final = (
@@ -449,6 +502,29 @@ SHARE_NEEDS_MEMBER: Final = (
 SHARED: Final = (
     "Shared {member}'s words with your representative in the {conversations} with {orgs}. "
     "Each reads them at its next turn and passes on only what it may share there."
+)
+# A conversation paused on the member's question reads a shared note only once it's answered.
+SHARED_WHILE_WAITING: Final = (
+    "The conversation with {org} is paused on {member}'s answer to question {question}, "
+    "so it reads this only once that's answered. If what {member} said answers it, send "
+    "their words with answer_question too."
+)
+# `answer_question`: refused in a turn the member didn't start, and its results.
+ANSWER_NEEDS_MEMBER: Final = (
+    "Nothing was sent. Answer a question only with what {member} said in this turn."
+)
+NO_SUCH_QUESTION: Final = (
+    "No question {ref!r} waits on {member} in this chat. get_request_status lists each "
+    "conversation's open question with its ID."
+)
+ANSWERS_UNAVAILABLE: Final = (
+    "Nothing was sent: answering from the chat isn't available here. Ask {member} to "
+    "answer on the card."
+)
+ANSWERED: Final = (
+    "Sent {member}'s answer to your representative in the {conversations} with {orgs}, as "
+    "if they had answered on the card. It carries on from there, and you'll hear here when "
+    "there's news."
 )
 
 
@@ -469,6 +545,22 @@ class InternalToolScope(_Input):
     wrote_at: datetime | None = None
     # The member wrote this turn: only then may Claude pass something on.
     member_spoke: bool = False
+
+
+class QuestionAnswers(Protocol):
+    """Delivers a member's answer from the chat (`temporal.answers.ChatAnswers`): resolves
+    the item on its thread and passes it on. Raises `answers.AnswerRefused` when the
+    thread won't take it."""
+
+    async def give(
+        self,
+        world_id: UUID,
+        resolution: EscalationResolution,
+        *,
+        thread_id: UUID,
+        answer: answers.CardAnswer | None,
+        also: Sequence[Escalation],
+    ) -> None: ...
 
 
 class _Refused(Exception):
@@ -565,17 +657,20 @@ class RecordReader:
 
 class InternalToolExecutor:
     """`runtime.ToolExecutor` for an internal-Claude turn. Reads use their own session;
-    a card is written in its own unit of work."""
+    a card is written in its own unit of work. Without `chat_answers`, `answer_question`
+    is refused."""
 
     def __init__(
         self,
         sessionmaker: async_sessionmaker[AsyncSession],
         scope: InternalToolScope,
         discovery: DiscoveryStrategy,
+        chat_answers: QuestionAnswers | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._scope = scope
         self._discovery = discovery
+        self._answers = chat_answers
         self._records = RecordReader(sessionmaker, world_id=scope.world_id, org_id=scope.org_id)
 
     async def execute(self, call: ToolCall, *, step_idx: int) -> ToolExecution:
@@ -600,6 +695,8 @@ class InternalToolExecutor:
                     return await self._request_status(ref)
                 case ShareWithRepresentativesInput():
                     return await self._share(args)
+                case AnswerQuestionInput():
+                    return await self._answer(args)
                 case _:
                     return _error("That tool isn't available.")
         except _Refused as refused:
@@ -708,6 +805,15 @@ class InternalToolExecutor:
             recent = await _recent_messages(
                 session, scope.world_id, shown, after=scope.wrote_at if scope.look else None
             )
+            waiting = {
+                question.thread.id: question
+                for question in await answers.waiting_on(
+                    session,
+                    world_id=scope.world_id,
+                    conversation_id=scope.conversation_id,
+                    member_id=scope.member_id,
+                )
+            }
         result = view.model_dump(mode="json")
         for row in objects(result.get("recipients")):
             # The card's one-line cut is too short to report from (section 5, bug 17).
@@ -715,6 +821,14 @@ class InternalToolExecutor:
             thread_id = row.get("thread_id")
             if isinstance(thread_id, str) and UUID(thread_id) in recent:
                 row["latest_messages"] = list(recent[UUID(thread_id)])
+            # What the conversation waits on the member for, on a card in this chat.
+            if isinstance(thread_id, str) and UUID(thread_id) in waiting:
+                question = waiting[UUID(thread_id)]
+                row["open_question"] = {
+                    "id": str(question.item.id),
+                    "question": question.question,
+                    "answer_with": ANSWER_QUESTION,
+                }
         return ToolExecution(result=json.dumps(result, ensure_ascii=False))
 
     async def _share(self, args: ShareWithRepresentativesInput) -> ToolExecution:
@@ -789,9 +903,126 @@ class InternalToolExecutor:
                     once=True,
                 )
             await uow.commit()
+            waiting = {
+                question.thread.id: question
+                for question in await answers.waiting_on(
+                    session,
+                    world_id=scope.world_id,
+                    conversation_id=scope.conversation_id,
+                    member_id=scope.member_id,
+                )
+            }
         names = [orgs[thread.responder_org_id].name for thread in targets]
+        paused = [
+            SHARED_WHILE_WAITING.format(
+                org=orgs[thread.responder_org_id].name,
+                member=member.name,
+                question=waiting[thread.id].item.id,
+            )
+            for thread in targets
+            if thread.id in waiting
+        ]
+        shared = SHARED.format(
+            member=member.name,
+            conversations="conversation" if len(names) == 1 else "conversations",
+            orgs=_listed(names),
+        )
+        return ToolExecution(result=" ".join([shared, *paused]))
+
+    async def _answer(self, args: AnswerQuestionInput) -> ToolExecution:
+        scope = self._scope
+        async with self._sessionmaker() as session:
+            member = await repo.get_required(session, Member, scope.world_id, scope.member_id)
+            if not scope.member_spoke:
+                raise _Refused(ANSWER_NEEDS_MEMBER.format(member=member.name))
+            waiting = {
+                question.item.id: question
+                for question in await answers.waiting_on(
+                    session,
+                    world_id=scope.world_id,
+                    conversation_id=scope.conversation_id,
+                    member_id=scope.member_id,
+                )
+            }
+            item_id = _uuid(args.question_id)
+            question = waiting.get(item_id) if item_id is not None else None
+            if question is None:
+                if item_id is not None and await _answered(session, scope, item_id, args.answer):
+                    # A retried call whose answer went.
+                    return await self._answered(session, item_id)
+                raise _Refused(NO_SUCH_QUESTION.format(ref=args.question_id, member=member.name))
+            item = question.item
+            assert item.consult_id is not None
+            consult = await consults.get(
+                session, world_id=scope.world_id, consult_id=item.consult_id
+            )
+            # The card's other askers still waiting on the member get it too, as the
+            # card's answer box sends it with every one ticked.
+            also = [
+                other
+                for other in await consults.card_askers(
+                    session, scope.world_id, consults.card_of(consult), scope.member_id
+                )
+                if other.id != item.id
+            ]
+            try:
+                card = await answers.card_answer(
+                    session,
+                    item,
+                    member_id=scope.member_id,
+                    org_id=scope.org_id,
+                    action="approve",
+                    text=args.answer,
+                    also_for=[other.id for other in also],
+                )
+            except answers.AnswerRefused as refused:
+                raise _Refused(f"Nothing was sent: {refused}") from None
+            if self._answers is None:
+                raise _Refused(ANSWERS_UNAVAILABLE.format(member=member.name))
+            try:
+                await self._answers.give(
+                    scope.world_id,
+                    EscalationResolution(
+                        escalation_id=item.id,
+                        action="approve",
+                        text=args.answer,
+                        member_id=scope.member_id,
+                        org_id=scope.org_id,
+                    ),
+                    thread_id=question.thread.id,
+                    answer=card,
+                    also=also,
+                )
+            except answers.AnswerRefused as refused:
+                raise _Refused(f"Nothing was sent: {refused}") from None
+            return await self._answered(session, item.id)
+
+    async def _answered(self, session: AsyncSession, item_id: UUID) -> ToolExecution:
+        """The result for the answer to the item `item_id`: the organizations it went to,
+        as its card records them, else the asker's."""
+        member = await repo.get_required(
+            session, Member, self._scope.world_id, self._scope.member_id
+        )
+        item = await repo.get_required(session, Escalation, self._scope.world_id, item_id)
+        assert item.consult_id is not None
+        assert item.thread_id is not None
+        consult = await consults.get(
+            session, world_id=self._scope.world_id, consult_id=item.consult_id
+        )
+        card = await consults.get(
+            session, world_id=self._scope.world_id, consult_id=consults.card_of(consult)
+        )
+        thread = await repo.get_required(session, Thread, self._scope.world_id, item.thread_id)
+        org_ids = [UUID(org_id) for org_id in card.goes_to_org_ids] or [thread.responder_org_id]
+        orgs = {
+            org.id: org.name
+            for org in await repo.list_in_world(
+                session, Org, self._scope.world_id, Org.id.in_(org_ids)
+            )
+        }
+        names = [orgs[org_id] for org_id in org_ids if org_id in orgs]
         return ToolExecution(
-            result=SHARED.format(
+            result=ANSWERED.format(
                 member=member.name,
                 conversations="conversation" if len(names) == 1 else "conversations",
                 orgs=_listed(names),
@@ -863,6 +1094,16 @@ def _excerpt(body: str, terms: set[str]) -> str:
     start = max(0, min(hits) - EXCERPT_CHARS // 4) if hits else 0
     text = " ".join(body[start : start + EXCERPT_CHARS].split())
     return ("…" if start else "") + text + ("…" if start + EXCERPT_CHARS < len(body) else "")
+
+
+async def _answered(
+    session: AsyncSession, scope: InternalToolScope, item_id: UUID, text: str
+) -> bool:
+    """Whether the member already answered the item with these words: a retried call."""
+    item = await repo.get(session, Escalation, scope.world_id, item_id)
+    if item is None or item.resolved_by_member_id != scope.member_id or item.resolution is None:
+        return False
+    return str(item.resolution.get("text") or "").strip() == text.strip()
 
 
 def _uuid(ref: str) -> UUID | None:
@@ -1195,7 +1436,9 @@ async def _screened(
 __all__ = [
     "AFTER_SEND",
     "ALREADY_IN_TOUCH",
+    "ANSWERED",
     "ANSWERER_TOOLS",
+    "ANSWER_QUESTION",
     "ASK_EDITED",
     "AUTO_SENDS_PER_TURN",
     "AUTO_SEND_FITS",
@@ -1218,10 +1461,12 @@ __all__ = [
     "SEARCH_ORG_KNOWLEDGE",
     "SEND_NETWORK_REQUEST",
     "TITLE_MAX_CHARS",
+    "AnswerQuestionInput",
     "CardChanges",
     "GetRequestStatusInput",
     "InternalToolExecutor",
     "InternalToolScope",
+    "QuestionAnswers",
     "ReadDocumentInput",
     "RecipientInput",
     "RecordReader",

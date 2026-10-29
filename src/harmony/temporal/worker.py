@@ -212,6 +212,7 @@ def agent_activities(deps: WorkerDeps) -> AgentActivities | None:
         deps.model.guard,
         deps.model.publisher,
         model_override=deps.settings.model_override,
+        client=deps.client,
         # Hosted live calls are also capped per session lineage (§14).
         hosted_caps=HostedCaps.from_settings(deps.settings),
     )

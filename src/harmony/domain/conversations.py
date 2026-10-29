@@ -117,6 +117,7 @@ _TOOL_LABELS: Final[Mapping[str, tuple[str, str | None]]] = {
     "search_network": ("Searched the Harmony network", "need"),
     "get_request_status": ("Checked on the request", None),
     "share_with_representatives": ("Shared with your representatives", "text"),
+    "answer_question": ("Answered your representative's question", "answer"),
 }
 # A chat's row while its tool runs (no result stored yet).
 _RUNNING_LABELS: Final[Mapping[str, str]] = {
@@ -125,6 +126,7 @@ _RUNNING_LABELS: Final[Mapping[str, str]] = {
     "search_network": "Searching the Harmony network…",
     "get_request_status": "Checking on the request",
     "share_with_representatives": "Sharing with your representatives",
+    "answer_question": "Answering your representative's question",
 }
 
 
