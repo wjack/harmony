@@ -12,17 +12,11 @@ the acting member and their org (validators can't read the database). Only membe
 the escalation's org who can see its thread may act (404 otherwise). A second resolver
 gets 409 `escalation_not_open` with `resolved_by`.
 
-One answer, many askers (the chat's card). On a question its own side's representative
-asked about a request (requester side), an approval may also go to the card's other
-open items routed to the member (`also_for`: each gets a rev drafted from the answer,
-through the `use_answer` Update, once this one is resolved). The answer goes only to the
-askers: the item answered and those in `also_for`. When the chat's owner answers in their
-own words, the card stores their organizations (`consults.add_goes_to`, for "Where your
-answer went"), and the chat is told (`network_news`, `answered`), so its Claude can ask
-whether part of the answer may go to the request's other conversations. The answer
-mustn't name another organization on the request: 422 `invalid` when it does, as for
-`also_for` on anything but the chat owner's approval, in their own words, of an item
-routed to them, or with an item that isn't theirs on the same card.
+One answer, many askers (the chat's card): on a question its own side's representative
+asked about a request, an approval may also go to the card's other open items routed to
+the member (`also_for`), and the chat's owner's answer in their own words is recorded on
+the card and told to the chat (`domain.answers`, `temporal.answers.pass_on`). What it
+refuses there is 422 `invalid`.
 
 An escalation is open only while its thread's workflow waits on it (a thread that ends
 cancels its open escalations), so an Update that finds no running workflow is 409
@@ -33,8 +27,6 @@ Owner: E4.
 
 from __future__ import annotations
 
-import logging
-from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -44,7 +36,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.service import RPCError
 
-from harmony.agents import context
 from harmony.agents.models import EscalationAction, EscalationResolution
 from harmony.api.deps import AppServices, ServicesDep
 from harmony.api.routes.problems import (
@@ -61,22 +52,19 @@ from harmony.api.routes.problems import (
 from harmony.auth import access
 from harmony.auth.session import Actor, ActorDep
 from harmony.db import repo
-from harmony.db.models import Escalation, Member, NetworkRequest, Org, Thread
-from harmony.db.uow import unit_of_work
-from harmony.domain import consults, refusals, requests
-from harmony.temporal.activities.network import nudge_request_chat, run_update
+from harmony.db.models import Escalation, Member, Thread
+from harmony.domain import answers, refusals
+from harmony.temporal.activities.network import run_update
+from harmony.temporal.answers import pass_on
 from harmony.temporal.workflows.payloads import (
     AnswerUsed,
     EscalationResolved,
-    NetworkNews,
     Reassigned,
     Reassignment,
     RetryAnswer,
-    UseAnswer,
     thread_workflow_id,
 )
 
-log = logging.getLogger(__name__)
 router = APIRouter(tags=["escalations"])
 
 
@@ -105,16 +93,6 @@ class RetryEscalation(BaseModel):
     question: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
-@dataclass(frozen=True, slots=True)
-class _CardAnswer:
-    """The chat owner's answer, in their own words, to their side's question on a
-    request: its card, and the organizations of the askers it goes to."""
-
-    card: UUID
-    request_id: UUID
-    goes_to: list[UUID]
-
-
 _ERRORS = (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT)
 
 
@@ -128,7 +106,18 @@ async def resolve_escalation(
 ) -> EscalationResolved:
     async with services.sessionmaker() as db:
         escalation = await _open_escalation(db, actor, escalation_id)
-        answer = await _card_answer(db, actor, escalation, body)
+        try:
+            answer = await answers.card_answer(
+                db,
+                escalation,
+                member_id=actor.member_id,
+                org_id=actor.org_id,
+                action=body.action,
+                text=body.text,
+                also_for=body.also_for,
+            )
+        except answers.AnswerRefused as refused:
+            raise invalid(str(refused)) from None
         also = [await _open_escalation(db, actor, item_id) for item_id in body.also_for]
     resolution = EscalationResolution(
         escalation_id=escalation.id,
@@ -141,29 +130,14 @@ async def resolve_escalation(
     resolved = await _update(
         services, actor, escalation, "resolve_escalation", resolution, EscalationResolved
     )
-    # Stored once the answer is given, so a refused one never changes the card.
-    if answer is not None:
-        async with unit_of_work(services.sessionmaker, actor.world_id) as uow:
-            await consults.add_goes_to(uow, answer.card, answer.goes_to)
-            await uow.commit()
-    for item in also:
-        use = UseAnswer(escalation_id=item.id, from_escalation_id=escalation.id)
-        try:
-            await _update(services, actor, item, "use_answer", use, AnswerUsed)
-        except ApiProblemError as refused:
-            # It stays open for a person, and the card shows it so.
-            log.info("escalation %s didn't take the answer: %s", item.id, refused.problem.detail)
-    if answer is not None:
-        # Best effort: the answer is given either way.
-        try:
-            await nudge_request_chat(
-                temporal_of(services),
-                services.sessionmaker,
-                world_id=actor.world_id,
-                news=NetworkNews(request_id=answer.request_id, answered=True),
-            )
-        except Exception:
-            log.warning("couldn't tell the chat of request %s", answer.request_id, exc_info=True)
+    await pass_on(
+        temporal_of(services),
+        services.sessionmaker,
+        world_id=actor.world_id,
+        answered=escalation.id,
+        answer=answer,
+        also=also,
+    )
     return resolved
 
 
@@ -234,61 +208,6 @@ async def _open_escalation(db: AsyncSession, actor: Actor, escalation_id: UUID) 
     if escalation.status != "open":
         raise await _not_open(db, escalation)
     return escalation
-
-
-async def _card_answer(
-    db: AsyncSession, actor: Actor, escalation: Escalation, body: ResolveEscalation
-) -> _CardAnswer | None:
-    """The chat owner's answer to a requester-side question, once `also_for` and the
-    answer's names are checked (module docstring); None for any other resolution."""
-    asked = escalation.kind == "consult" and escalation.side == "requester"
-    if not asked or escalation.consult_id is None or escalation.thread_id is None:
-        if body.also_for:
-            raise invalid("only your side's own questions on a request share an answer")
-        return None
-    text = (body.text or "").strip()
-    own_words = body.action == "approve" and bool(text)
-    if body.also_for and not own_words:
-        raise invalid("only an answer in your own words goes to other conversations")
-    thread = await repo.get_required(db, Thread, actor.world_id, escalation.thread_id)
-    request = await repo.get_required(db, NetworkRequest, actor.world_id, thread.request_id)
-    owner = actor.member_id == request.created_by_member_id
-    mine = str(actor.member_id) in escalation.assignees
-    if body.also_for and not (owner and mine):
-        raise invalid("only the chat's owner shares an answer, from a question routed to them")
-    consult = await consults.get(db, world_id=actor.world_id, consult_id=escalation.consult_id)
-    card = consults.card_of(consult)
-    goes_to = [thread.responder_org_id]
-    if body.also_for:
-        askers = {
-            item.id: item
-            for item in await consults.card_askers(db, actor.world_id, card, actor.member_id)
-        }
-        strays = [item_id for item_id in body.also_for if item_id not in askers]
-        if escalation.id in body.also_for or strays:
-            raise invalid("also_for takes only your own open items on this card")
-        for item_id in body.also_for:
-            other_id = askers[item_id].thread_id
-            assert other_id is not None
-            other = await repo.get_required(db, Thread, actor.world_id, other_id)
-            goes_to.append(other.responder_org_id)
-    recipients = [row.org_id for row in requests.recipients_of(request)]
-    if own_words:
-        orgs = {org.id: org.name for org in await repo.list_in_world(db, Org, actor.world_id)}
-        # Short names count ("Northlake"), unless the shown asker's or ours starts the same.
-        kept = (orgs[thread.responder_org_id], orgs[actor.org_id])
-        others = [orgs[org_id] for org_id in recipients if org_id != thread.responder_org_id]
-        named = [name for name in others if context.names(text, name, keep=kept)]
-        if named:
-            # The asker shown gets the words as written (DESIGN §2, D2).
-            leave = "Leave the name out." if len(named) == 1 else "Leave the names out."
-            raise invalid(
-                f"Your answer names {' and '.join(named)}, and "
-                f"{orgs[thread.responder_org_id]} gets your words as written. {leave}"
-            )
-    if not (owner and own_words):
-        return None
-    return _CardAnswer(card=card, request_id=request.id, goes_to=goes_to)
 
 
 async def _not_open(db: AsyncSession, escalation: Escalation) -> ApiProblemError:
