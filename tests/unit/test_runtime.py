@@ -712,7 +712,7 @@ async def test_a_thinking_only_answer_to_an_opening_that_asks_nothing_ends_the_t
         world_id=WORLD,
         turn=1,
         turn_id=turn_id(1),
-        opening=opening("No new message from Henderson Lab since your last turn."),
+        opening=opening("No new message from Henderson Frame Lab since your last turn."),
     ).model_copy(update={"quiet_opening": True})
 
     outcome = await run_turn(ctx, Executor(), model, transcript=store)
@@ -730,7 +730,7 @@ async def test_an_empty_first_response_to_an_opening_that_asks_nothing_ends_the_
         world_id=WORLD,
         turn=1,
         turn_id=turn_id(1),
-        opening=opening("No new message from Henderson Lab since your last turn."),
+        opening=opening("No new message from Henderson Frame Lab since your last turn."),
         notices=NOTICE,
     ).model_copy(update={"quiet_opening": True})
 

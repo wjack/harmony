@@ -54,15 +54,15 @@ export const networkOrgs: readonly { org: OrgRef; kind: string; featured: boolea
   { org: castOrgs.calder, kind: "computation", featured: true },
   { org: castOrgs.vantage, kind: "procurement", featured: true },
   { org: org(1, "bayside", "Bayside Analytical"), kind: "characterization", featured: false },
-  { org: org(2, "summit", "Summit Glovebox Services"), kind: "logistics", featured: false },
+  { org: org(2, "summit", "Summit Heat Treating"), kind: "processing", featured: false },
   { org: org(3, "ostrander", "Ostrander Materials Lab"), kind: "characterization", featured: false },
-  { org: org(4, "pinecrest", "Pinecrest Precursors"), kind: "synthesis", featured: false },
-  { org: org(5, "harbor", "Harbor Pilot Line"), kind: "fabrication", featured: false },
-  { org: org(6, "meridian", "Meridian Thermal"), kind: "characterization", featured: false },
-  { org: org(7, "ridgeway", "Ridgeway Foundation for Energy Materials"), kind: "funder", featured: false },
+  { org: org(4, "pinecrest", "Pinecrest Alloys"), kind: "supplier", featured: false },
+  { org: org(5, "harbor", "Harbor Print Works"), kind: "fabrication", featured: false },
+  { org: org(6, "meridian", "Meridian Metrology"), kind: "characterization", featured: false },
+  { org: org(7, "ridgeway", "Ridgeway Foundation for Sustainable Mobility"), kind: "funder", featured: false },
   { org: org(8, "lumen", "Lumen Data Commons"), kind: "data", featured: false },
   { org: org(9, "granite", "Granite Precision Machining"), kind: "fabrication", featured: false },
-  { org: org(10, "tidewater", "Tidewater Electrochem"), kind: "testing", featured: false },
+  { org: org(10, "tidewater", "Tidewater Fatigue Lab"), kind: "testing", featured: false },
 ];
 
 /** The story's suggested recipients, flagged for viewers who see every recipient. */
@@ -72,7 +72,7 @@ export const REQUEST_ID = id("5", 1);
 const OLDER_REQUEST_ID = id("5", 2);
 export const THREAD_NORTHLAKE = id("6", 1);
 export const THREAD_RIDGELINE = id("6", 2);
-/** The chat Alex sent the request from: Ridgeline's seal question waits there. */
+/** The chat Alex sent the request from: Ridgeline's tube question waits there. */
 export const REQUEST_CONVERSATION_ID = conversations[0]?.id ?? id("2", 1);
 
 const request: NetworkRequestRef = {
@@ -85,7 +85,7 @@ const request: NetworkRequestRef = {
 
 const olderRequest: NetworkRequestRef = {
   id: OLDER_REQUEST_ID,
-  title: "Coin-cell cycling capacity for November",
+  title: "Fatigue testing capacity for November",
   requester: castOrgs.henderson,
   status: "closed",
   created_at: minutesAgo(60 * 26),
@@ -259,7 +259,7 @@ const STAGES = {
     threads: [storyThread(castOrgs.northlake, "active", 1, 1, LINES.northlakeOpening)],
   }),
 
-  /** Ridgeline asks which seal material; Henderson's representative asks Alex. */
+  /** Ridgeline asks which tube; Henderson's representative asks Alex. */
   question: deskStage({
     recipients: {
       northlake: { participant: "replied", fit: "strong" },
@@ -341,26 +341,26 @@ export const networkStopped = deskNetwork("stopped");
 const NETWORK_WORLD_ID = "0b1d7a3e-5c2f-4e8a-9a51-000000000002";
 
 const BIG_RUN_ORGS: readonly [string, string, string][] = [
-  ["anvil", "Anvil Ceramics Lab", "synthesis"],
+  ["anvil", "Anvil Alloy Supply", "supplier"],
   ["aurora", "Aurora Beamline", "characterization"],
   ["basalt", "Basalt Compute Co-op", "computation"],
-  ["cobalt-free", "Cobalt-Free Materials", "synthesis"],
-  ["delta", "Delta Pilot Plant", "fabrication"],
+  ["cobalt-free", "Cobalt-Free Alloys", "supplier"],
+  ["delta", "Delta Additive Works", "fabrication"],
   ["ember", "Ember Thermal Analysis", "characterization"],
-  ["fjord", "Fjord Electrochem", "testing"],
+  ["fjord", "Fjord Fatigue Testing", "testing"],
   ["glacier", "Glacier Data Trust", "data"],
   ["helix", "Helix Simulation Group", "computation"],
   ["iron-bay", "Iron Bay Foundry", "fabrication"],
-  ["juniper", "Juniper Cell Test", "testing"],
-  ["kestrel", "Kestrel XRD Services", "characterization"],
-  ["loam", "Loam Precursors", "synthesis"],
+  ["juniper", "Juniper Frame Test", "testing"],
+  ["kestrel", "Kestrel CT Services", "characterization"],
+  ["loam", "Loam Wire and Bar", "supplier"],
   ["mesa", "Mesa Microscopy", "characterization"],
   ["nimbus", "Nimbus Cost Modeling", "computation"],
   ["onyx", "Onyx Coatings", "fabrication"],
-  ["prairie", "Prairie Energy Fund", "funder"],
+  ["prairie", "Prairie Mobility Fund", "funder"],
   ["quartz", "Quartz Spectroscopy", "characterization"],
-  ["redwood", "Redwood Pouch Cells", "fabrication"],
-  ["sable", "Sable Sodium Salts", "synthesis"],
+  ["redwood", "Redwood Frame Builders", "fabrication"],
+  ["sable", "Sable Titanium Supply", "supplier"],
 ];
 
 const bigRunOrgs = [
@@ -414,7 +414,7 @@ const STATE_FOR: Record<Contacted, NetworkEdge["state"]> = {
 
 // What the lens reads as each thread's newest line, by where the thread stands.
 const BIG_LINES: Record<Contacted, string> = {
-  messaged: "Henderson Lab is looking for partners to design and validate a low-cost Na-ion cathode.",
+  messaged: "Henderson Frame Lab is looking for partners to design and validate a lighter titanium lattice bike frame.",
   replied: "We can take part. Here's what we'd run, and roughly when.",
   needs_human: "Let me check that with our team before I commit to a date.",
   closed: "Confirmed. We'll start on our part next week.",
@@ -422,7 +422,7 @@ const BIG_LINES: Record<Contacted, string> = {
 
 const bigRunRequest: NetworkRequestRef = {
   id: id("5", 3),
-  title: "Design and validate a low-cost Na-ion cathode from Earth-abundant elements",
+  title: "Design and validate a lighter bike frame from 3D-printed titanium lattices",
   requester: castOrgs.henderson,
   status: "active",
   created_at: minutesAgo(38),

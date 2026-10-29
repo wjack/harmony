@@ -16,7 +16,7 @@ const HEIGHT = 860;
 const GUTTER = 16;
 const RAIL = 48;
 const SIDEBAR = 272;
-const SEALS = "SEM on argon-stored seals";
+const BRACKETS = "CT on two welded brackets";
 
 test.describe.configure({ timeout: 3 * 60_000 });
 
@@ -151,8 +151,8 @@ test("the request view keeps its gutter and pill, and Details opens below the de
   await switchToNetworkMember(page, "Alex Chen", "Raj Patel");
 
   await page.goto("/requests");
-  await page.getByRole("main").getByRole("link").filter({ hasText: SEALS }).first().click();
-  await expect(page.getByRole("heading", { level: 1, name: SEALS })).toBeVisible();
+  await page.getByRole("main").getByRole("link").filter({ hasText: BRACKETS }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: BRACKETS })).toBeVisible();
 
   for (const width of WIDTHS) {
     await test.step(`the request view at ${width} px`, async () => {

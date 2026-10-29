@@ -84,6 +84,7 @@ class StoryPlayer:
         worker: asyncio.Future[None] | None = None,
         failures: Mapping[str, str] | None = None,
         send_without_review: bool = False,
+        skip_approvals: bool = False,
         on_poll: PollHook | None = None,
         edits: Sequence[PlannedEdit] = (),
         clock: Callable[[], float] = time.monotonic,
@@ -92,8 +93,9 @@ class StoryPlayer:
         """`story` is played as written; `beats.recast` plays it as someone else.
         `failures`: workflow ID → a model call in it that failed for good, as the
         in-process worker reports them (`worker.ActivityLog`). `send_without_review`
-        starts the chat with that override, as the composer would. `edits` are posted
-        as their threads reach them."""
+        starts the chat with that override, as the composer would; `skip_approvals`
+        turns Demo controls' Skip approvals on for the world before the story starts.
+        `edits` are posted as their threads reach them."""
         self._api = api
         self._scenario = scenario
         self._story = story
@@ -106,6 +108,7 @@ class StoryPlayer:
         # The worker's live map, empty when the run starts: never swapped for a copy.
         self._failures: Mapping[str, str] = failures if failures is not None else {}
         self._send_without_review = send_without_review
+        self._skip_approvals = skip_approvals
         self._on_poll = on_poll
         # Not posted yet.
         self._edits = list(edits)
@@ -132,6 +135,9 @@ class StoryPlayer:
         self.world_id = session.world_id
         run = StoryRun(world_id=session.world_id, expected=expected_beats(self._story))
         self._log(f"world {session.world_id} ({self._scenario.name}, a {session.world.mode} world)")
+        if self._skip_approvals:
+            await self._api.set_skip_approvals(True)
+            self._log("Skip approvals is on: nobody in the world is asked")
         try:
             await self._open(run, session)
             await self._loop(run)

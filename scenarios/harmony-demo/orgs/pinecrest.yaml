@@ -1,30 +1,29 @@
-# Pinecrest Precursors, background (docs/SCENARIO.md): not a fit for the story.
+# Pinecrest Alloys, background (docs/SCENARIO.md): not a fit for the story.
 slug: pinecrest
-name: Pinecrest Precursors
-kind: synthesis
+name: Pinecrest Alloys
+kind: supplier
 
 members:
   - slug: aisha
     name: Aisha Raman
     title: Sales lead
     role: admin
-    profile: Handles quotes, orders and custom syntheses.
+    profile: Handles quotes, orders and custom alloys.
 
 settings:
   public_summary: >-
-    Pinecrest Precursors supplies battery-grade sodium salts and transition-metal
-    precursors (Mn, Fe, Ni) in research and pilot quantities from the Pacific
-    Northwest, with certificates of analysis, usually in 1–2 weeks. We don't do
-    characterization.
+    Pinecrest Alloys supplies titanium and aluminum alloy wire and bar for 3D printing
+    and machining in research and pilot quantities from the Pacific Northwest, with
+    mill certificates, usually in 1–2 weeks. We don't test parts.
   instructions: >-
-    You represent Pinecrest Precursors. Consult for catalog prices, lead times and
-    custom batches.
+    You represent Pinecrest Alloys. Consult for catalog prices, lead times and custom
+    alloys.
 
 policy:
   autonomy: skip
   sharing_description: >-
-    Catalog prices, lead times for stock items and certificates of analysis. Not:
-    supplier lead-time problems or other customers.
+    Catalog prices, lead times for stock items and mill certificates. Not: supplier
+    lead-time problems or other customers.
   routing_prompt: Everything goes to Aisha.
   default_assignee: aisha
 
@@ -32,14 +31,14 @@ knowledge:
   - slug: about
     title: About Pinecrest
     kind: profile
-    body: Sodium salts and transition-metal precursors for battery research.
+    body: Titanium and aluminum alloy wire and bar for printing and machining.
   - slug: price-list
     title: Catalog prices
     kind: price-list
     body: >-
-      Na2CO3, battery grade, $40 per kg. MnSO4 $35 per kg. NiSO4 $90 per kg. Custom
-      precursor batches from $1,200.
+      Ti-6Al-4V wire, 1.2 mm, $180 per kg. Ti-6Al-4V bar $95 per kg. AlSi10Mg wire $40
+      per kg. Custom alloy melts from $1,200.
   - slug: supply-note
     title: Supply note
     kind: note
-    body: Nickel sulfate lead times are slipping to three weeks; quote two weeks only for stock.
+    body: Titanium wire lead times are slipping to three weeks; quote two weeks only for stock.

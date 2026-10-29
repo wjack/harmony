@@ -168,7 +168,7 @@ async def test_the_inbox_sorts_threads_into_its_sections(
         assert item["counterparty"]["slug"] == "henderson"
         # The brief is Henderson's: before its representative has written, the request
         # is only Henderson's.
-        assert item["title"] == "Request from Henderson Lab"
+        assert item["title"] == "Request from Henderson Frame Lab"
         assert item["escalation"]["id"] == str(escalation_id)
         assert item["escalation"]["kind"] == "consult"
         assert item["escalation"]["question"] == "Can you run 14 powders before Nov 6?"
@@ -245,7 +245,7 @@ async def test_a_responder_names_the_request_by_what_crossed_never_the_brief(
                 kind="message",
                 # Representatives introduce themselves; the title is what follows.
                 body=(
-                    "Hello, this is Claude for Henderson Lab. Could you run powder XRD on"
+                    "Hello, this is Claude for Henderson Frame Lab. Could you run powder XRD on"
                     " 14 air-sensitive samples?\nDetails follow."
                 ),
                 provenance="agent",
@@ -565,7 +565,7 @@ async def _responder_call(
         notices = await context.flush_notices(
             uow, thread_id=thread_id, side="responder", turn_id=turn_id
         )
-        opening = rep_opening(owed, [], counterparty_name="Henderson Lab")
+        opening = rep_opening(owed, [], counterparty_name="Henderson Frame Lab")
         sent = [WireMessage.of("user", list[JsonValue](opening))]
         if notices is not None:
             sent.append(WireMessage.of("system", [text_block(notices)]))
@@ -608,7 +608,7 @@ async def test_what_the_representative_saw_lists_the_notices_it_was_sent(
         assert notice["text"] == settings_domain.sharing_notice(
             [context.quoted("sharing", sharing, for_=context.SHARING_FOR_ANY)],
             side="responder",
-            counterparty_name="Henderson Lab",
+            counterparty_name="Henderson Frame Lab",
         )
 
 
@@ -1046,7 +1046,7 @@ async def test_members_read_and_admins_change_harmony_settings(
             None,
             1,
         )
-        assert trusted["sharing_description"].startswith("Our dome-holder dimensions")
+        assert trusted["sharing_description"].startswith("Our Xradia Versa mount dimensions")
         version = settings["policy_version"]
         problem = await v.json(
             "PUT",
@@ -1486,7 +1486,7 @@ async def test_the_story_suggests_the_message_to_its_sender(app: FastAPI) -> Non
         ]
         assert story["steps"][0]["act_as"]["slug"] == "alex"
         network = story["network"]
-        assert network["summary"].startswith("Battery materials research")
+        assert network["summary"].startswith("Lighter bike frames")
         # Every org, whoever is acting: it's the demo's picture of the network.
         kinds = {row["org"]["slug"]: row["kind"] for row in network["orgs"]}
         assert len(kinds) == 15
@@ -2022,7 +2022,9 @@ async def test_a_responder_never_sees_the_requests_own_title(
         ]
         for body in bodies:
             assert "$2,000" not in str(body)
-        assert [item["title"] for item in inbox["needs_you"]] == ["Request from Henderson Lab"]
+        assert [item["title"] for item in inbox["needs_you"]] == [
+            "Request from Henderson Frame Lab"
+        ]
 
         await v.act_as("alex")
         listed = {row["id"]: row["title"] for row in await v.json("GET", "/threads")}
@@ -2040,15 +2042,15 @@ def test_a_threads_title_wins_and_the_fallbacks_stay() -> None:
         requester_org_id=HENDERSON, title=None, brief="Powder XRD by Nov 6.\nUp to $2,000."
     )
     thread = Thread(title=None)
-    name = "Henderson Lab"
+    name = "Henderson Frame Lab"
 
     def title(org_id: UUID, opening: str | None = None) -> str:
         return threads.thread_title(thread, request, org_id, requester=name, opening=opening)
 
     assert title(HENDERSON) == "Powder XRD by Nov 6."
-    assert title(NORTHLAKE) == "Request from Henderson Lab"
+    assert title(NORTHLAKE) == "Request from Henderson Frame Lab"
     assert title(NORTHLAKE, "Could you run XRD?") == "Could you run XRD?"
     request.title = TITLE
-    assert (title(HENDERSON), title(NORTHLAKE)) == (TITLE, "Request from Henderson Lab")
+    assert (title(HENDERSON), title(NORTHLAKE)) == (TITLE, "Request from Henderson Frame Lab")
     thread.title = NORTHLAKE_TITLE
     assert (title(HENDERSON), title(NORTHLAKE, "Hi")) == (NORTHLAKE_TITLE, NORTHLAKE_TITLE)

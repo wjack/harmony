@@ -104,7 +104,7 @@ from tests.unit._turns import Checkpointed, say, use
 
 MODEL: Final = "claude-opus-5-5"
 ORG_SLUG: Final = "northlake"
-HENDERSON_NAME: Final = "Henderson Lab"
+HENDERSON_NAME: Final = "Henderson Frame Lab"
 CASSETTE_THREAD: Final = "henderson.northlake"
 # A record's body in the firewall property: unique to it, and unchanged by JSON.
 MARKER: Final = re.compile(r"RECORD\[[0-9a-f]{32}\]")
@@ -236,8 +236,8 @@ async def test_the_responder_prompt_holds_its_parts_and_no_record(
         ("instructions", "Instructions"),
     ]
     assert parts[0].text.startswith(
-        "Henderson Lab (a research organization on Harmony, a verified member of Northlake "
-        'University), represented by its own agent, "Claude for Henderson Lab".'
+        "Henderson Frame Lab (a research organization on Harmony, a verified member of Northlake "
+        'University), represented by its own agent, "Claude for Henderson Frame Lab".'
     )
     assert [part.text for part in parts[1:]] == [
         current.public_summary.strip(),
@@ -694,7 +694,7 @@ async def test_internal_claude_knows_the_org_and_the_member(
         built = await context.build_internal_context(
             session, world_id=world, conversation_id=conversation_id
         )
-    assert built.system.startswith("You are Claude, the AI assistant at Henderson Lab.")
+    assert built.system.startswith("You are Claude, the AI assistant at Henderson Frame Lab.")
     assert "You're talking with Alex Chen, PhD student." in built.system
     assert built.tools == [dict(tool) for tool in INTERNAL_TOOLS]
     assert (built.org_id, built.member_id) == (HENDERSON, ALEX)

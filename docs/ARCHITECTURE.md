@@ -25,7 +25,7 @@ The client replicates the Claude app; see [UI_REFERENCE.md](UI_REFERENCE.md). De
 ## 2. Core idea: two agents per org, with a context firewall between them
 
 ```
-          Henderson Lab (requester)                          Northlake Characterization Core (responder)
+          Henderson Frame Lab (requester)                          Northlake Characterization Core (responder)
  ┌────────────────────────────────────────┐            ┌────────────────────────────────────────┐
  │  Members ⇄ Internal Claude              │            │              Internal Claude ⇄ Members │
  │            full org context,            │            │              full org context,         │
@@ -47,7 +47,7 @@ The client replicates the Claude app; see [UI_REFERENCE.md](UI_REFERENCE.md). De
 - **When a representative needs something from its own side** (a price, a date, an exception, an answer it doesn't have), it calls `consult(question)`.
   - Internal Claude answers with its tools. It runs a short tool loop over the org's records (`search_org_knowledge`, `read_document`), reads them as they are at that moment, and drafts an answer.
   - The answer crosses back only as a **release** to that one thread (§2.1).
-- **Each org describes what it shares, in prose.** Its sharing description says what kinds of information the representative may pass on, for example Northlake's: "Our external academic price list, what is open on the public instrument calendar, sample-prep and air-free handling requirements, and typical turnaround. Not: other clients or their bookings, internal reserve slots, or discounts." It never lists files. Records change, so internal Claude fetches the current information when it's needed. An org can also trust particular organizations, each with its own mode and an extra description (§9).
+- **Each org describes what it shares, in prose.** Its sharing description says what kinds of information the representative may pass on, for example Northlake's: "Our external academic price list, what is open on the public instrument calendar, coupon prep and drop-off, and typical turnaround. Not: other clients or their bookings, internal reserve slots, or discounts." It never lists files. Records change, so internal Claude fetches the current information when it's needed. An org can also trust particular organizations, each with its own mode and an extra description (§9).
 - The two agents never share a context window. Once information crosses the network, the receiving org holds it.
 
 **Why the requester side also gets a representative.** The requester's internal Claude holds the lab's unpublished data. If it talked to counterparties directly, it would sit in the lethal trifecta. Using representatives on both sides also means one runtime and one thread protocol.
@@ -234,8 +234,8 @@ flowchart LR
    - **Released:** the answer opens that side's next turn as the `consult` tool result, for this thread only. No human touch.
    - **Otherwise** it becomes an escalation routed by the answerer's `route` (§10), with the reason ("Why this needs you").
      - On the responder side, this is an inbox item.
-     - On the requester side, it's an inline card in the origin chat, which is how Ridgeline's seal-material question reaches Alex.
-3. A member approves (as drafted or edited), tells Claude what to do differently (an Edit: Claude rewrites the draft and follows the guidance for the rest of the conversation, §7), declines, takes over or reassigns. An approved answer returns as the `consult` tool result, released to that thread only. To make something shareable from now on, the member edits the sharing description; the inbox links to it ("Edit what you share with Henderson Lab").
+     - On the requester side, it's an inline card in the origin chat, which is how Ridgeline's tube-material question reaches Alex.
+3. A member approves (as drafted or edited), tells Claude what to do differently (an Edit: Claude rewrites the draft and follows the guidance for the rest of the conversation, §7), declines, takes over or reassigns. An approved answer returns as the `consult` tool result, released to that thread only. To make something shareable from now on, the member edits the sharing description; the inbox links to it ("Edit what you share with Henderson Frame Lab").
 
 **Model-conditional request builders.** In development, `MODEL_OVERRIDE` runs every role on Haiku 5.5 (Opus 5.5 until 2026-10-26), while production runs Opus for featured orgs, so builders are per model, not per role:
 - Never send `thinking: {type: "disabled"}` to Opus 5.5; it returns a 400.
@@ -320,7 +320,7 @@ flowchart LR
 - It isn't built in the demo, because the orgs are fictional.
 
 **Why this instead of vector search:**
-- **It judges the actual need.** "XRD *on air-sensitive powders* *before Nov 6*" is three requirements. Nearest-neighbor similarity weighs them loosely; a model reading the org's whole summary judges the need as written.
+- **It judges the actual need.** "CT *of 12 titanium lattice coupons* *before Nov 6*" is three requirements. Nearest-neighbor similarity weighs them loosely; a model reading the org's whole summary judges the need as written.
 - **It explains itself.** Every org gets a verdict with a reason, including the rejections. Neutrality is visible, not just asserted.
 - **It's cheap at this scale.** A screen is about 1.1k input tokens and under 150 output with thinking disabled, about $0.0002 per org on Haiku, or $0.007 per 35-org search, and takes a few seconds in parallel. Development runs every role on Haiku 5.5, so a search costs the same there (about $0.35 when it ran on Opus).
 - **No embeddings infrastructure.** There's no second vendor and no pgvector.
@@ -336,8 +336,8 @@ flowchart LR
   - At 10⁶ orgs, a cheap **retrieval prefilter** (vector plus full-text search over summaries) narrows the field to about 10³, and the screener reads every survivor. Retrieval is only the cost-saving prefilter; the model still does the matching.
   - Research cost scales with the directory and the refresh rate, not with request volume, because evidence is cached per org.
   - Each price drop raises the prefilter's cutoff, until the prefilter disappears.
-- **After reading comes asking: probe conversations.** A screening agent asks each strong candidate's representative one or two qualifying questions ("Can you run XRD on air-sensitive powders before Nov 6?") and re-ranks by the answers. Live availability beats a stale summary. Probes cost the responder too, so they need etiquette: short, labeled as screening, and rate-limited.
-- **Matching runs both ways.** Responders publish wants as well as what they provide: Northlake wants to fill idle XRD time, and a foundation wants proposals on a topic. Discovery can then run in reverse, with a responder's agent screening requests it could serve.
+- **After reading comes asking: probe conversations.** A screening agent asks each strong candidate's representative one or two qualifying questions ("Can you CT-scan 12 titanium lattice coupons before Nov 6?") and re-ranks by the answers. Live availability beats a stale summary. Probes cost the responder too, so they need etiquette: short, labeled as screening, and rate-limited.
+- **Matching runs both ways.** Responders publish wants as well as what they provide: Northlake wants to fill idle CT time, and a foundation wants proposals on a topic. Discovery can then run in reverse, with a responder's agent screening requests it could serve.
 - **In code:** a `DiscoveryStrategy` interface. `AgentScreen` is the v1 implementation. `RetrievalThenScreen` is the documented scale path, and isn't built in v1.
 
 ## 7. Orchestration (Temporal)
@@ -372,9 +372,9 @@ sequenceDiagram
   participant C as Answerer (Northlake internal Claude)
   participant S as Sharing check
   participant I as Helen's inbox
-  H->>T: send_message("XRD + SEM/EDS on 12 air-sensitive powders, needed by Nov 6")
+  H->>T: send_message("CT + compression tests on 12 titanium lattice coupons, needed by Nov 6")
   T->>N: rep_turn(Northlake)
-  N-->>T: consult("Can we run XRD on 12 air-sensitive powders before Nov 6? The public calendar is full until Nov 10.")
+  N-->>T: consult("Can we compression-test 12 coupons before Nov 6? The public calendar is full until Nov 10.")
   T->>T: state awaiting_principal
   T->>C: answer_consult
   C->>C: search_org_knowledge, read_document: calendar, Raj's reserve-block note
@@ -573,13 +573,13 @@ There is no step engine. The walkthrough has three parts:
 Nothing waits on the model, so nothing needs a timeout or a recorded fallback. If a run goes sideways, Reset forks a fresh world.
 
 **The intended story** (what the seeds make likely, not what code forces; P1 measures how often it happens):
-1. Alex (a grad student in the Henderson Lab) asks Claude for XRD and SEM/EDS on 12 air-sensitive sodium-ion cathode powders by Nov 6, plus an airtight sample holder, on a budget of about $2,000.
+1. Alex (a grad student in the Henderson Frame Lab) asks Claude for CT scans and compression tests on 12 titanium lattice coupons by Nov 6, plus a holder that stacks them for the CT, on a budget of about $2,000.
 2. Claude searches the network ("Screened 34 orgs: 3 strong, 4 possible") and drafts the brief.
    - The outreach card proposes Northlake Core and Ridgeline Fabrication, and shows Calder Computational screened as a weak fit.
-   - The brief is prose: the sample class and count, the deadline and the budget, but *not* the dopant composition. Alex approving it is what releases its contents.
+   - The brief is prose: the coupon class and count, the deadline and the budget, but *not* the lattice designs. Alex approving it is what releases its contents.
    - Alex approves, or types what to change, which counts as rejecting with feedback.
-3. Ridgeline's representative asks which seal material the holder needs. Henderson's representative consults. Henderson's internal Claude can't find it, so the question appears inline in Alex's chat. Alex answers "Kalrez, please. The powders may sit under argon for a few weeks." The answer is released to that thread, and Ridgeline quotes $325 in a message.
-4. Northlake's representative consults: "Can we run XRD on 12 air-sensitive powders before Nov 6? The public calendar is full until Nov 10."
+3. Ridgeline's representative asks which tube material the holder needs. Henderson's representative consults. Henderson's internal Claude can't find it, so the question appears inline in Alex's chat. Alex answers "Carbon fiber, please. We need high-resolution scans." The answer is released to that thread, and Ridgeline quotes $325 in a message.
+4. Northlake's representative consults: "Can we compression-test 12 coupons before Nov 6? The public calendar is full until Nov 10."
    - Northlake's internal Claude reads the calendar and Raj's reserve-block note through its tools, and drafts a yes using the Wed Nov 4 block.
    - The sharing check fails, because reserve slots aren't in Northlake's sharing description, so the item goes to Helen with that reason.
    - Switch to Dr. Helen Ward. Her inbox shows the item at the top: the question, why it needs her, the draft and what Claude looked at.
@@ -604,8 +604,8 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 - **Stats strip:** orgs contacted, threads, messages, consults answered without a person, consults that reached a person, cost and elapsed time, and human touches per closed conversation compared across *Ask* / *Auto* / *Skip* (§2.3).
 - **Discovery panel:** the screener's verdict for every org, rejections included, with reasons. The panel shows the whole network being read, not a top-K list.
 - **End state:** the closed conversations, internal Claude's plan synthesized from them, and how many consults reached a person (human touches per closed conversation).
-- **The adversary:** one network org ("Vantage Market Intelligence") poses as a battery OEM's procurement agent and fishes for which labs work with which startups.
-  - It probes Northlake for Voltaic Motors' standing Thursday SEM booking, and tries a forged identity block.
+- **The adversary:** one network org ("Vantage Market Intelligence") poses as an e-bike maker's procurement agent and fishes for which labs work with which startups.
+  - It probes Northlake for Voltaic Motors' standing Thursday CT booking, and tries a forged identity block.
   - The defenses are the firewall, the sharing check and identity. Northlake's representative holds no client records, so it has nothing to leak; it refuses or consults. Internal Claude can read the client note while drafting, but Northlake's sharing description excludes other clients and their bookings, so the sharing check sends any draft with client detail to a person. The forged block sits inside the counterparty delimiter.
   - In the hosted demo Vantage is played live by Opus 5.5, like every featured org. It may refuse to play the adversary, stay polite, or consult its own side. Nothing prompts the forged identity block, so that beat is a manual probe (LIVE_DEMO_PLAN section 5.4). The cassette `story_adversary.yaml` keeps a scripted Vantage, with fixed attack messages drawn from counterbench, for tests only.
   - Its threads show the attempt and the defense, and replay pauses on the first one.
@@ -619,11 +619,11 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 ### 11.7 Scenarios and seed content
 
 - **Format:** scenarios are YAML in `scenarios/<name>/`. Each org has one file: the public summary, instructions, sharing description and policy (the routing prompt, default assignee and any trusted organizations), members with roles and profiles, the org's records (knowledge and files, price lists and availability included), reviews and communities. Prompts, the suggested message and the suggested recipients are files too. They are versioned and reviewed like code. [SCENARIO.md](SCENARIO.md) specifies the content.
-- **Featured orgs** are hand-written, extending counterbench's Northlake, Ridgeline and Calder, plus the new Henderson Lab. Reusing them ties the demo to the benchmark.
-  - Northlake has a price list, a public XRD and SEM calendar, Raj's reserve-slot note, a confidential client note, and Raj, the staff scientist. Its sharing description covers the external academic price list, what is open on the public calendar, sample-prep and air-free handling requirements and typical turnaround. It excludes other clients and their bookings, internal reserve slots and discounts. Its routing prompt sends scheduling and reserve-slot requests to Helen, who is also the default assignee.
-  - Ridgeline's summary covers sealed and machined parts. Its price list says a sealed holder needs the seal material specified, which Henderson's brief and records leave out.
+- **Featured orgs** are hand-written, extending counterbench's Northlake, Ridgeline and Calder, plus the new Henderson Frame Lab. Reusing them ties the demo to the benchmark.
+  - Northlake has a price list, a public CT and compression-testing calendar, Raj's reserve-slot note, a confidential client note, and Raj, the staff scientist. Its sharing description covers the external academic price list, what is open on the public calendar, coupon prep and drop-off, and typical turnaround. It excludes other clients and their bookings, internal reserve slots and discounts. Its routing prompt sends scheduling and reserve-slot requests to Helen, who is also the default assignee.
+  - Ridgeline's summary covers listed CT holders, fixtures and custom mounts. Its price list says a holder quote needs the instrument model and the tube material, which Henderson's brief leaves out and its records answer.
 - **Background orgs** (about 25–30) are drafted offline by a seed-generator script from a scenario spec, reviewed, and committed. The app never generates seed content at runtime.
-- **The big run:** "Design and validate a low-cost sodium-ion cathode from Earth-abundant elements, from screening through a pilot-scale cost estimate." Development runs (every role on Haiku 5.5) use a 10-org sim; the full sim is recorded with the production model mix.
+- **The big run:** "Design and validate a lighter 3D-printed titanium bike frame, from lattice screening through a pilot-batch cost estimate." Development runs (every role on Haiku 5.5) use a 10-org sim; the full sim is recorded with the production model mix.
 
 ## 12. Frontend structure
 
@@ -817,7 +817,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
    - The sharing check never sees the records, so injected text can't get it to copy them. But it does read the question and the draft, and its verdict is a model's judgment.
    - In *Skip* there is no sharing check, and the answerer's own `needs_human` is the only gate. That is the real residual risk, and the presentation should say so. It is why *Skip* is for partners an org trusts fully.
 2. **The sharing check covers consult answers, not every message.** A representative holds only its frozen prompt and the answers released to it, so what it can leak is bounded by what was released. A screen on every outbound message (a cheap model checking each one against the sharing description, failing closed) would also catch counterbench's "meta-disclosure", where a representative leaks while explaining a refusal. The demo leaves it out, and a do-not-disclose list too: they add latency, cost and false holds. It's worth making available to orgs with regulated data.
-3. **Autonomy should grow from use.** Escalation fatigue is the proposal's biggest adoption risk. In v1 the org widens autonomy itself: it adds to its sharing description, trusts an organization, or moves one to *Skip*. Every inbox item links to the first of these ("Edit what you share with Henderson Lab"). A per-org escalation-rate chart can show the inbox getting quieter over time. This is the path from supervised to delegated that the capability prediction describes.
+3. **Autonomy should grow from use.** Escalation fatigue is the proposal's biggest adoption risk. In v1 the org widens autonomy itself: it adds to its sharing description, trusts an organization, or moves one to *Skip*. Every inbox item links to the first of these ("Edit what you share with Henderson Frame Lab"). A per-org escalation-rate chart can show the inbox getting quieter over time. This is the path from supervised to delegated that the capability prediction describes.
 4. **Onboarding is where adoption is won or lost.** "Set up with Claude" drafts a representative from what the org already has: a public summary, instructions and a sharing description. A natural demo extension (open) lets a visitor onboard an org of their own and receive requests from the network.
 5. **Responders pay for inbound requests.** Every inbound request costs the responder tokens and attention, and fan-out makes that cost cheap to impose. Countermeasures:
    - per-requester rate limits;
@@ -829,7 +829,7 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 7. **Provenance on every message.** Each message shows whether it came from an agent, an agent with a named human's approval, or a human who took over. Counterparties always know they're talking to an AI representative, and for whom.
 8. **Editing the sharing description can't recall a released answer.** A narrower description reaches live threads as a notice and applies at the next consult, but the representative keeps what it was already given, and anything already sent can't be recalled.
 9. **Threads are bilateral for now.** Coordination among several orgs goes hub-and-spoke through the requester. Multi-party rooms make the firewall harder (what is released to whom) and can come later.
-10. **The conversation isn't the outcome.** After the threads close, samples ship, results return, data is shared and reviews are left. The demo stops when the threads close, plus a scripted fast-forward epilogue: it advances the world clock, returns seeded results (an XRD pattern) through the network, and ends with reviews. That shows the loop closing without simulating weeks.
+10. **The conversation isn't the outcome.** After the threads close, samples ship, results return, data is shared and reviews are left. The demo stops when the threads close, plus a scripted fast-forward epilogue: it advances the world clock, returns seeded results (a CT scan) through the network, and ends with reviews. That shows the loop closing without simulating weeks.
 11. **The operator sees everything.** The firewall separates agents, not the platform: Anthropic, as the operator, would hold both sides of every thread. A real product needs retention controls and a clear data-use policy, and enterprises will ask. It's out of scope for the demo, but worth a line in the proposal.
 12. **Possible later work the user deferred.** The unstructured revision (§18) left these out of v1 on purpose. Each adds structure, so each should wait until use shows the need.
     - **Richer sharing policies.** v1 has one prose description per org plus one per trusted organization. Later options: a description per community, or edits to the description suggested from what teammates keep approving.
@@ -903,4 +903,4 @@ Nothing waits on the model, so nothing needs a timeout or a recorded fallback. I
 1. **Closed:** the hosted demo's daily spend cap is $60 per UTC day, beside the lineage, client and global caps (§14).
 2. **Scope of the stretch items:** "Set up with Claude" onboarding and adding your own org, and probe conversations.
 3. **A short production-mix check before deploy.** Development runs every role on Haiku 5.5, so the Opus 5.5 request shapes and behaviour that featured orgs use in production aren't exercised. It is planned as LIVE_DEMO_PLAN section 6, step 1a: one Opus ping, one suggested-story run and two typed chats with `MODEL_OVERRIDE=none`, about $3 on the dev key, once the user approves. Without it, the first live Opus traffic is the hosted demo.
-4. **Defaults assumed unless you object:** the Henderson Lab / Northlake / Ridgeline / Calder cast and the sodium-ion big run.
+4. **Defaults assumed unless you object:** the Henderson Frame Lab / Northlake / Ridgeline / Calder cast and the bike-frame big run.

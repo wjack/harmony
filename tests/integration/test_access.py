@@ -109,7 +109,7 @@ async def test_the_inbox_shows_each_side_its_own_view_of_a_thread(app: FastAPI) 
     async with visitor(app) as v:
         await v.start()
         [summary] = (await v.inbox()).values()
-        assert summary["title"] == "Powder XRD on 6 precursors"
+        assert summary["title"] == "CT on 6 test coupons"
         assert (summary["state"], summary["side"], summary["access_reason"]) == (
             "closed",
             "requester",
@@ -129,7 +129,7 @@ async def test_the_inbox_shows_each_side_its_own_view_of_a_thread(app: FastAPI) 
     assert alex_view["side"] == "requester"
     assert helen_view["side"] == "responder"
     threads = load_scenario("harmony-demo").threads
-    seeded = next(t for t in threads if t.slug == "henderson-northlake-precursor-xrd")
+    seeded = next(t for t in threads if t.slug == "henderson-northlake-test-ct")
     assert [m["seq"] for m in alex_view["messages"]] == [1, 2, 3]
     assert [m["kind"] for m in alex_view["messages"]] == [m.kind for m in seeded.messages]
     assert alex_view["messages"] == helen_view["messages"]
@@ -358,7 +358,7 @@ async def test_a_seeded_title_names_the_thread_on_both_sides(app: FastAPI, tmp_p
     shutil.copytree(REPO_ROOT / "scenarios" / "harmony-demo", scenarios / "harmony-demo")
     path = scenarios / "harmony-demo" / "threads.yaml"
     data = yaml.safe_load(path.read_text())
-    (seeded,) = [t for t in data["threads"] if t["slug"] == "henderson-northlake-precursor-xrd"]
+    (seeded,) = [t for t in data["threads"] if t["slug"] == "henderson-northlake-test-ct"]
     seeded["request"]["title"] = title
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 

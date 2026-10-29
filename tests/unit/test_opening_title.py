@@ -11,7 +11,7 @@ from harmony.domain.threads import opening_title
     ("body", "title"),
     [
         (
-            "Hello, this is Claude for Henderson Lab at Northlake University. We need powder"
+            "Hello, this is Claude for Henderson Frame Lab at Northlake University. We need powder"
             " XRD and SEM/EDS on 12 layered-oxide powders.",
             "We need powder XRD and SEM/EDS on 12 layered-oxide powders.",
         ),
@@ -21,7 +21,10 @@ from harmony.domain.threads import opening_title
         ),
         ("Could you run XRD on 14 powders?\nDetails follow.", "Could you run XRD on 14 powders?"),
         # Nothing but a greeting: the first line is still better than no title.
-        ("Hello, this is Claude for Henderson Lab.", "Hello, this is Claude for Henderson Lab."),
+        (
+            "Hello, this is Claude for Henderson Frame Lab.",
+            "Hello, this is Claude for Henderson Frame Lab.",
+        ),
     ],
 )
 def test_the_title_skips_the_representatives_introduction(body: str, title: str) -> None:
@@ -29,7 +32,7 @@ def test_the_title_skips_the_representatives_introduction(body: str, title: str)
 
 
 def test_two_requests_from_one_org_read_differently() -> None:
-    hello = "Hello, this is Claude for Henderson Lab. "
+    hello = "Hello, this is Claude for Henderson Frame Lab. "
     first = opening_title(hello + "We need powder XRD on 6 layered-oxide powders.")
     second = opening_title(hello + "We need an airtight holder for a Bruker D8 dome mount.")
     assert first != second
@@ -37,6 +40,6 @@ def test_two_requests_from_one_org_read_differently() -> None:
 
 
 def test_a_long_opening_is_cut_to_one_line() -> None:
-    title = opening_title("Hello, this is Claude for Henderson Lab. " + "XRD " * 40)
+    title = opening_title("Hello, this is Claude for Henderson Frame Lab. " + "XRD " * 40)
     assert len(title) == 80
     assert title.endswith("…")

@@ -84,7 +84,7 @@ it("names a request's two sides and who can open it, with a switch per side", as
   expect(await screen.findByRole("heading", { name: "Helen can't open this request" })).toBeTruthy();
   expect(
     screen.getByText(
-      "It's between Henderson Lab and Ridgeline Fabrication. Alex Chen and Prof. Maya Henderson at Henderson Lab, and Dana Okafor at Ridgeline Fabrication, can open it.",
+      "It's between Henderson Frame Lab and Ridgeline Fabrication. Alex Chen and Prof. Maya Henderson at Henderson, and Dana Okafor at Ridgeline Fabrication, can open it.",
     ),
   ).toBeTruthy();
   expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([

@@ -2,11 +2,13 @@
  * The suggested story in a browser (REVISION_UNSTRUCTURED.md §10) on ScriptedModel,
  * against the real API, worker, Postgres and Temporal (scripts/e2e_ui.sh).
  *
- * Alex sends the suggested message, approves the outreach for Northlake and Ridgeline
- * on its card at the end of the chat, and answers Ridgeline's seal question inline. Helen opens Northlake's flagged answer
- * from the sidebar's Needs you and approves it. Alex says yes to both, both
- * conversations close and Claude sums up. Then the network view, what Northlake's
- * representative saw, and Customize → Harmony's sharing.
+ * Alex sends the suggested message and approves the outreach for Northlake and Ridgeline
+ * on its card at the end of the chat. The orgs' records answer each counterparty's
+ * questions, so Ridgeline's conversation closes with nobody asked. Northlake's quote is
+ * over the $1,000 Henderson Frame Lab's representative may commit alone, so it reaches Alex
+ * inline; he answers, both conversations close and Claude sums up. Then the network
+ * view, what Northlake's representative saw, Vantage's probe waiting on Helen, and
+ * Customize → Harmony's sharing.
  *
  * The cassettes are keyed by turn, not by what is typed, so the test follows the
  * story's path: Calder is left out, as the walkthrough says. Every browser context is
@@ -25,8 +27,11 @@ const TURNS = { timeout: 90_000 };
 const NORTHLAKE = "Northlake Characterization Core";
 const RIDGELINE = "Ridgeline Fabrication";
 const CALDER = "Calder Computational";
+const VANTAGE = "Vantage Market Intelligence";
 /** The request's title as Northlake's representative wrote it (the scripted cassette's). */
-const NORTHLAKE_TITLE = "XRD and SEM/EDS quote";
+const NORTHLAKE_TITLE = "CT and compression quote";
+/** The seeded Vantage request's title on Northlake's side (threads.yaml). */
+const VANTAGE_TITLE = "Rush CT slot enquiry";
 
 test.describe.configure({ timeout: 6 * 60_000 });
 
@@ -209,7 +214,7 @@ test("the suggested story, from Alex's message to both conversations closed", as
     const approve = page.getByRole("button", { name: "Approve and send" });
     const card = page.getByRole("region", { name: /^Harmony Network Request / }).filter({ has: approve });
     await expect(card).toBeVisible(TURNS);
-    await expect(card.getByRole("textbox", { name: "Brief" })).toHaveValue(/Henderson Lab/);
+    await expect(card.getByRole("textbox", { name: "Brief" })).toHaveValue(/Henderson Frame Lab/);
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) await expect(card).toContainText(org);
     await expect(card.getByRole("listitem").filter({ hasText: CALDER })).toContainText("Not a fit");
     await expect(card.getByRole("checkbox", { name: CALDER })).not.toBeChecked();
@@ -230,22 +235,25 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await expect.poll(async () => sentences(await claudeTexts(page).last().innerText()), TURNS).toBe(1);
   });
 
-  await test.step("Ridgeline's question reaches Alex inline, and he answers", async () => {
-    await expect(statusRow(page, RIDGELINE)).toContainText("Needs your answer", TURNS);
-    await answerInline(page, RIDGELINE, "Kalrez, please. The powders may sit under argon for a few weeks.");
-    await expect(page.getByText(/quotes \$325/)).toBeVisible(TURNS);
+  await test.step("Henderson Frame Lab's records answer Ridgeline, and it closes with nobody asked", async () => {
+    await expect(statusRow(page, RIDGELINE)).toContainText("Closed", TURNS);
+    await expect(statusRow(page, RIDGELINE)).toContainText("$325");
+    await expect(page.getByRole("textbox", { name: `Your answer about ${RIDGELINE}` })).toHaveCount(0);
   });
 
-  await test.step("the demo bar says Northlake needs a human, once however many items wait on Helen", async () => {
-    await expect(page.getByRole("button", { name: /Northlake needs a human/ })).toBeVisible(TURNS);
+  await test.step("Northlake's quote is over the $1,000 line, so its review reaches Alex inline", async () => {
+    await expect(statusRow(page, NORTHLAKE)).toContainText("Needs your answer", TURNS);
+    await expect(page.getByRole("textbox", { name: `Your answer about ${NORTHLAKE}` })).toBeVisible();
+    await expect(page.getByText(/Which should I book\?/).first()).toBeVisible();
   });
 
-  await test.step("the network view rings the suggested recipients and shows who waits on a person, on either side", async () => {
+  await test.step("the network view rings the suggested recipients and shows who waits on a person", async () => {
     await openNetworkView(page);
     for (const org of [NORTHLAKE, RIDGELINE, CALDER]) {
       await expect(networkNode(page, org).locator("[data-suggested]")).toHaveCount(1);
     }
     await expect(networkNode(page, NORTHLAKE)).toContainText("Needs human", TURNS);
+    await expect(networkNode(page, RIDGELINE)).toContainText("Closed");
     await expect(networkNode(page, CALDER)).toContainText("Screened");
     expect(await nameFits(page, NORTHLAKE)).toBe(true);
     await expect(page.locator("[data-edge-label]").first()).toBeVisible();
@@ -267,41 +275,13 @@ test("the suggested story, from Alex's message to both conversations closed", as
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  await test.step("as Helen, Northlake's answer reads in full with what Claude looked at, and she approves it", async () => {
-    await switchAccount(page, "Alex Chen", "Dr. Helen Ward");
-    const needsYou = sidebar(page).getByRole("region", { name: "Needs you" });
-    await needsYou.getByRole("link").filter({ hasText: NORTHLAKE_TITLE }).first().click();
-
-    const card = page.getByRole("region", { name: "Needs your decision" });
-    await expect(card.getByRole("heading", { level: 2 })).toBeVisible(TURNS);
-    // Details beside the transcript at the default laptop width, every value in full.
-    const details = await openDetails(page);
-    await expect(details).toContainText("Dr. Helen Ward");
-    await expect(details).toContainText("Henderson Lab");
-    expect(await clippedValues(details)).toEqual([]);
-    await expect(page.getByText(/internal reserve slots/).first()).toBeVisible();
-    const lookedAt = page.getByRole("region", { name: "What Claude looked at" });
-    await expect(lookedAt).toContainText("Public calendar");
-    await expect(lookedAt).toContainText("Raj's note, reserve XRD block");
-
-    // The decision reads in full at the end of the thread: the whole question and draft.
-    expect(await cutShortText(card)).toEqual([]);
-    await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
-
-    const approve = card.getByRole("button", { name: "Approve and send" });
-    await approve.click();
-    await expect(approve).toBeHidden(TURNS);
-  });
-
-  await test.step("back as Alex, he says yes to both and both conversations close", async () => {
-    await switchAccount(page, "Dr. Helen Ward", "Alex Chen");
-    await openChat(page, "Find a lab that can run XRD");
-    await answerInline(page, NORTHLAKE, "Yes, go ahead with Northlake.");
-    await answerInline(page, RIDGELINE, "Yes, go ahead with Ridgeline.");
+  await test.step("back in the chat, Alex answers the review and both conversations close", async () => {
+    await openChat(page, "Find a lab that can CT-scan");
+    await answerInline(page, NORTHLAKE, "Yes, take priority.");
 
     await expect(statusRow(page, NORTHLAKE)).toContainText("Closed", TURNS);
-    await expect(statusRow(page, RIDGELINE)).toContainText("Closed", TURNS);
-    await expect(page.getByText(/\$1,735/).first()).toBeVisible(TURNS);
+    await expect(statusRow(page, RIDGELINE)).toContainText("Closed");
+    await expect(page.getByText(/\$1,759/).first()).toBeVisible(TURNS);
     await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
   });
 
@@ -343,8 +323,32 @@ test("the suggested story, from Alex's message to both conversations closed", as
     const saw = page.getByRole("dialog", { name: "What our representative saw" });
     await expect(saw.getByRole("region", { name: "Released answers" })).toContainText("Wed Nov 4");
     await expect(saw).not.toContainText("Raj's note");
-    await expect(saw).not.toContainText("priority work");
+    await expect(saw).not.toContainText("Voltaic");
     await saw.getByRole("button", { name: "Close" }).click();
+  });
+
+  await test.step("as Helen, Vantage's probe waits on her, and its decision reads in full", async () => {
+    // Acting as Helen started Vantage's request; its second answer names a client's booking.
+    const needsYou = sidebar(page).getByRole("region", { name: "Needs you" });
+    const probe = needsYou.getByRole("link").filter({ hasText: VANTAGE_TITLE }).first();
+    await expect(probe).toBeVisible(TURNS);
+    await probe.click();
+
+    const card = page.getByRole("region", { name: "Needs your decision" });
+    await expect(card).toContainText(`Claude needs your answer before replying to ${VANTAGE}`, TURNS);
+    await expect(card.getByRole("heading", { level: 2 })).toBeVisible();
+    // Details beside the transcript at the default laptop width, every value in full.
+    const details = await openDetails(page);
+    await expect(details).toContainText("Dr. Helen Ward");
+    await expect(details).toContainText(VANTAGE);
+    expect(await clippedValues(details)).toEqual([]);
+    await expect(page.getByText(/other clients and their bookings/).first()).toBeVisible();
+    const lookedAt = page.getByRole("region", { name: "What Claude looked at" });
+    await expect(lookedAt).toContainText("Client: Voltaic Motors");
+
+    // The decision reads in full at the end of the thread: the whole question and draft.
+    expect(await cutShortText(card)).toEqual([]);
+    await expect(page.getByRole("button", { name: "View more" })).toHaveCount(0);
   });
 
   await test.step("Customize → Harmony has only the spec's sections, and sharing edits persist", async () => {
@@ -361,17 +365,17 @@ test("the suggested story, from Alex's message to both conversations closed", as
 
     await settings.getByRole("button", { name: /^Sharing/ }).click();
     const everyone = page.getByRole("textbox", { name: "Shared with everyone" });
-    const addition = " Open SEM slots on weekdays.";
+    const addition = " Open CT slots on weekdays.";
     const description = `${await everyone.inputValue()}${addition}`;
     await everyone.fill(description);
 
     await page.getByRole("button", { name: "Add organization" }).click();
-    await page.getByRole("menuitem", { name: "Henderson Lab" }).click();
-    const mode = page.getByRole("button", { name: /^Mode for Henderson Lab/ });
+    await page.getByRole("menuitem", { name: "Henderson Frame Lab" }).click();
+    const mode = page.getByRole("button", { name: /^Mode for Henderson Frame Lab/ });
     const henderson = page.getByRole("listitem").filter({ has: mode });
     await mode.click();
     await page.getByRole("menuitemradio", { name: /^Skip/ }).click();
-    const extra = "Reserve XRD blocks when the public calendar is full.";
+    const extra = "Priority compression blocks as the public calendar shows them.";
     await henderson.getByRole("textbox", { name: "Also share with them" }).fill(extra);
     await page.getByRole("button", { name: "Save changes" }).click();
     // The org's fields and the trusted organization are separate writes; the toast

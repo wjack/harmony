@@ -147,7 +147,7 @@ class ConsultView(_View):
 
 class RouteAssigneeView(_View):
     slug: str
-    # Why it is theirs, addressed to them ("you run XRD and SEM").
+    # Why it is theirs, addressed to them ("you run the CT").
     why: str
 
 

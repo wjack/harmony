@@ -129,12 +129,12 @@ it("replays the edits on another admin's newer version after a 409", async () =>
 it("trusts the organization a request link names, with what to also share", async () => {
   const gate = renderSettings(`section=sharing&org=${orgs.henderson.id}`);
   gate.open();
-  fireEvent.click(await screen.findByRole("button", { name: "Add Henderson Lab" }));
-  // Rows are by name: Henderson Lab comes first.
+  fireEvent.click(await screen.findByRole("button", { name: "Add Henderson Frame Lab" }));
+  // Rows are by name: Henderson Frame Lab comes first.
   const [also] = screen.getAllByRole("textbox", { name: "Also share with them" });
-  if (also === undefined) throw new Error("no row for Henderson Lab");
+  if (also === undefined) throw new Error("no row for Henderson Frame Lab");
   fireEvent.change(also, { target: { value: "Internal reserve slots." } });
-  expect(screen.getByRole("button", { name: "Mode for Henderson Lab: Same as default" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Mode for Henderson Frame Lab: Same as default" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
   // Once saved, the row carries who changed it: Helen, today.
@@ -161,15 +161,15 @@ it("shows a viewer the pane read-only: the admins' note pinned above it, and no 
 
   expect(shared).toHaveProperty("disabled", true);
   expect(screen.getByRole("button", { name: /^Mode for Vantage Market Intelligence/ })).toHaveProperty("disabled", true);
-  // The link named Henderson Lab, but a viewer can't add them.
-  expect(screen.queryByText(/To share more with Henderson Lab/)).toBeNull();
+  // The link named Henderson Frame Lab, but a viewer can't add them.
+  expect(screen.queryByText(/To share more with Henderson Frame Lab/)).toBeNull();
   expect(screen.queryByRole("button", { name: /^Add / })).toBeNull();
 });
 
 it("shows a trusted row's every mode in full, labels lined up", async () => {
   renderSettings(`section=sharing&org=${orgs.henderson.id}`).open();
-  fireEvent.click(await screen.findByRole("button", { name: "Add Henderson Lab" }));
-  fireEvent.keyDown(screen.getByRole("button", { name: "Mode for Henderson Lab: Same as default" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("button", { name: "Add Henderson Frame Lab" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Mode for Henderson Frame Lab: Same as default" }), { key: "Enter" });
   const menu = await screen.findByRole("menu");
   // Wide enough for two-line descriptions, and no cap but the viewport's.
   expect(menu.style.width).toBe("400px");
@@ -186,17 +186,17 @@ it("edits a member's profile on the Team pane and saves it with the settings", a
   const gate = renderSettings("section=team");
   gate.open();
   const box = await screen.findByRole("textbox", { name: "Raj Patel's profile" });
-  fireEvent.change(box, { target: { value: "XRD and SEM queues; owns the reserve block." } });
+  fireEvent.change(box, { target: { value: "CT and compression queues; owns the reserve block." } });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
   await waitFor(() => {
     expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   });
-  expect(box).toHaveProperty("value", "XRD and SEM queues; owns the reserve block.");
+  expect(box).toHaveProperty("value", "CT and compression queues; owns the reserve block.");
   expect(gate.writes).toEqual([
     {
       route: SETTINGS,
-      body: { policy_version: 7, member_profiles: { [members.raj.id]: "XRD and SEM queues; owns the reserve block." } },
+      body: { policy_version: 7, member_profiles: { [members.raj.id]: "CT and compression queues; owns the reserve block." } },
     },
   ]);
 });

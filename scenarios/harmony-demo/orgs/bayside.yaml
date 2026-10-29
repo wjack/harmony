@@ -1,5 +1,5 @@
-# Bayside Analytical, background (docs/SCENARIO.md): a possible fit for the
-# characterization search, without air-free handling.
+# Bayside Analytical, background (docs/SCENARIO.md): a possible fit for the testing
+# search, without CT.
 slug: bayside
 name: Bayside Analytical
 kind: characterization
@@ -13,19 +13,18 @@ members:
 
 settings:
   public_summary: >-
-    Bayside Analytical is a commercial analytical lab in the Bay Area for industry and
-    academic clients: XPS, ICP-MS and powder XRD, usually in 5 business days. Samples
-    are prepared and measured in air; we have no glovebox, no air-free transfer and no
-    SEM.
+    Bayside Analytical is a commercial testing lab in the Bay Area for industry and
+    academic clients: tensile, compression and hardness testing, usually in 5 business
+    days. We have no CT and no SEM.
   instructions: >-
-    You represent Bayside Analytical. Be clear that we handle samples in air only.
-    Consult for prices, scheduling and rush work.
+    You represent Bayside Analytical. Be clear that we do mechanical testing only, with
+    no CT. Consult for prices, scheduling and rush work.
 
 policy:
   autonomy: skip
   sharing_description: >-
-    Our price list, turnaround and sample requirements. Not: instrument maintenance or
-    other clients.
+    Our price list, turnaround and what parts we can test. Not: instrument maintenance
+    or other clients.
   routing_prompt: Everything goes to Grace.
   default_assignee: grace
 
@@ -33,14 +32,14 @@ knowledge:
   - slug: about
     title: About Bayside
     kind: profile
-    body: Commercial XPS, ICP-MS and powder XRD; samples handled in air.
+    body: Commercial tensile, compression and hardness testing; no CT.
   - slug: price-list
     title: Price list
     kind: price-list
     body: >-
-      XPS $180 per sample. ICP-MS $95 per sample. Powder XRD $60 per sample. Standard
-      report included; 5 business days. No air-free handling.
-  - slug: xrd-maintenance
-    title: XRD maintenance
+      Tensile test $70 per specimen. Compression test $55 per part. Hardness $25 per
+      part. Standard report included; 5 business days.
+  - slug: frame-maintenance
+    title: Load frame maintenance
     kind: note
-    body: The XRD tube is due for replacement mid-November; book XRD jobs before Nov 13.
+    body: The 100 kN frame is due for calibration mid-November; book compression jobs before Nov 13.

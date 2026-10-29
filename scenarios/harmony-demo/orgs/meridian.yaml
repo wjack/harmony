@@ -1,6 +1,6 @@
-# Meridian Thermal, background (docs/SCENARIO.md): not a fit for the story.
+# Meridian Metrology, background (docs/SCENARIO.md): not a fit for the story.
 slug: meridian
-name: Meridian Thermal
+name: Meridian Metrology
 kind: characterization
 
 members:
@@ -8,15 +8,15 @@ members:
     name: Elena Petrova
     title: Lab director
     role: admin
-    profile: Runs the thermal analysis lab; quotes and scheduling.
+    profile: Runs the metrology lab; quotes and scheduling.
 
 settings:
   public_summary: >-
-    Meridian Thermal does thermal analysis for materials developers in the Southwest:
-    TGA, DSC and simultaneous TGA-DSC, including runs under inert gas, usually within a
-    week. We don't do diffraction or microscopy.
+    Meridian Metrology does dimensional inspection for product developers in the
+    Southwest: coordinate measuring and optical 3D scanning of part surfaces, usually
+    within a week. We don't do CT or mechanical testing.
   instructions: >-
-    You represent Meridian Thermal. Consult for prices, method advice and anything
+    You represent Meridian Metrology. Consult for prices, method advice and anything
     unusual.
 
 policy:
@@ -30,12 +30,12 @@ knowledge:
   - slug: about
     title: About Meridian
     kind: profile
-    body: TGA and DSC thermal analysis for materials developers.
+    body: Coordinate measuring and optical 3D scanning for product developers.
   - slug: price-list
     title: Price list
     kind: price-list
-    body: TGA $70 per run. DSC $80 per run. TGA-DSC $120 per run. Inert gas included.
+    body: CMM inspection $90 per part. Optical 3D scan $70 per part. Report included.
   - slug: instrument-note
     title: Instrument note
     kind: note
-    body: The DSC autosampler is unreliable; we load runs by hand until the service visit.
+    body: The CMM's probe changer is unreliable; we swap probes by hand until the service visit.

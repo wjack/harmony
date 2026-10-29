@@ -239,7 +239,7 @@ async def test_cassette_keys_count_only_unseeded_threads_per_pair(
     first = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
     second = await open_thread(db_sessionmaker, outreach, NORTHLAKE)
     calder = await open_thread(db_sessionmaker, outreach, CALDER)
-    seeded = sid("thread", "henderson-northlake-precursor-xrd")
+    seeded = sid("thread", "henderson-northlake-test-ct")
     async with db_sessionmaker() as session:
         keys = [
             await threads.cassette_key(
@@ -251,7 +251,7 @@ async def test_cassette_keys_count_only_unseeded_threads_per_pair(
         thread_key("henderson", "northlake", 1),
         thread_key("henderson", "northlake", 2),
         thread_key("henderson", "calder", 1),
-        thread_key("", "", seeded_slug="henderson-northlake-precursor-xrd"),
+        thread_key("", "", seeded_slug="henderson-northlake-test-ct"),
     ]
 
 

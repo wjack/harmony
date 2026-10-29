@@ -127,12 +127,12 @@ describe("reopenFailure", () => {
 describe("blockLine", () => {
   it("says why Reopen isn't available, and nothing for seeded history", () => {
     const us = "Northlake";
-    const them = "Henderson Lab";
+    const them = "Henderson Frame Lab";
     expect(blockLine("history", us, them)).toBeNull();
-    expect(blockLine("refused", us, them)).toBe("Henderson Lab's Claude declined to continue, so only Henderson Lab can reopen it.");
+    expect(blockLine("refused", us, them)).toBe("Henderson Frame Lab's Claude declined to continue, so only Henderson Frame Lab can reopen it.");
     expect(blockLine("limit", us, them)).toBe("This conversation was reopened twice, so it can't be reopened again.");
     expect(blockLine("they_closed", us, them)).toBe(
-      "Henderson Lab closed it after Northlake reopened it, so only Henderson Lab can reopen it.",
+      "Henderson Frame Lab closed it after Northlake reopened it, so only Henderson Frame Lab can reopen it.",
     );
   });
 });
@@ -166,11 +166,11 @@ describe("editError", () => {
 });
 
 describe("reopenError", () => {
-  const names = { us: "Northlake Characterization Core", them: "Henderson Lab" };
+  const names = { us: "Northlake Characterization Core", them: "Henderson Frame Lab" };
 
   it("moves the text to Edit when the conversation is open already", () => {
-    expect(reopenError(new Error(), problem({ code: "thread_open", reopened_by: { org: { id: "o", slug: "h", name: "Henderson Lab" }, member: null } }), helen.id, names)).toEqual({
-      text: "Henderson Lab reopened it first. Your text is in Edit, ready to send.",
+    expect(reopenError(new Error(), problem({ code: "thread_open", reopened_by: { org: { id: "o", slug: "h", name: "Henderson Frame Lab" }, member: null } }), helen.id, names)).toEqual({
+      text: "Henderson Frame Lab reopened it first. Your text is in Edit, ready to send.",
       toEdit: true,
     });
     const ours = { org: { id: "n", slug: "n", name: names.us }, member: helen };

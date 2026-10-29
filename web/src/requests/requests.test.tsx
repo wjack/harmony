@@ -220,19 +220,19 @@ describe("the list", () => {
     const heading = await screen.findByRole("heading", { level: 1, name: "Requests" });
     expect(heading.className).toContain("font-serif");
     const needs = await screen.findByRole("region", { name: /^Needs you/ });
-    const henderson = within(needs).getByRole("link", { name: /XRD and SEM\/EDS quote/ });
+    const henderson = within(needs).getByRole("link", { name: /CT and compression quote/ });
     expect(henderson.getAttribute("href")).toBe(`/requests/${THREAD.henderson}`);
-    expect(henderson.textContent).toMatch(/Henderson Lab · Needs your answer · /);
+    expect(henderson.textContent).toMatch(/Henderson Frame Lab · Needs your answer · /);
     // Helen hasn't opened it in this browser: the link's name says so, not just a dot.
-    expect(within(needs).getByRole("link", { name: /^XRD and SEM\/EDS quote.*, unread$/ })).toBe(henderson);
+    expect(within(needs).getByRole("link", { name: /^CT and compression quote.*, unread$/ })).toBe(henderson);
     expect(within(needs).queryByLabelText("Unread")).toBeNull();
     expect(screen.getByRole("region", { name: /^Done/ })).toBeTruthy();
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search requests" }), { target: { value: "peek" } });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search requests" }), { target: { value: "tubes" } });
     expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
     const found = screen.getAllByRole("link");
     expect(found).toHaveLength(1);
-    expect(found[0]?.textContent).toContain("SEM on machined PEEK holder surfaces");
+    expect(found[0]?.textContent).toContain("CT on machined holder tubes");
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search requests" }), { target: { value: "" } });
     const show = screen.getByRole("radiogroup", { name: "Show" });
@@ -252,14 +252,14 @@ describe("the list", () => {
   it("marks an unread request in the sidebar with one dot, at the row's end, until it's opened", async () => {
     const { router } = renderRequests(THREAD.pacific, { sidebar: true });
     const sidebar = await screen.findByRole("navigation", { name: "Sidebar" });
-    const unread = await within(sidebar).findByRole("link", { name: "XRD and SEM/EDS quote, with Henderson Lab, unread" });
+    const unread = await within(sidebar).findByRole("link", { name: "CT and compression quote, with Henderson Frame Lab, unread" });
     const dots = () => unread.querySelectorAll("[class*='rounded-full']");
     expect(dots()).toHaveLength(1);
     expect(unread.lastElementChild).toBe(dots()[0]);
 
     await act(() => router.navigate(`/requests/${THREAD.henderson}`));
     await card();
-    const read = await within(sidebar).findByRole("link", { name: "XRD and SEM/EDS quote, with Henderson Lab" });
+    const read = await within(sidebar).findByRole("link", { name: "CT and compression quote, with Henderson Frame Lab" });
     expect(read.querySelectorAll("[class*='rounded-full']")).toHaveLength(0);
   });
 });
@@ -267,10 +267,10 @@ describe("the list", () => {
 describe("the view", () => {
   it("heads the request with its title, the counterparty, a pill that keeps its width, and Details", async () => {
     renderRequests(THREAD.henderson);
-    const title = await screen.findByRole("heading", { level: 1, name: "XRD and SEM/EDS quote" });
+    const title = await screen.findByRole("heading", { level: 1, name: "CT and compression quote" });
     // The title truncates first; the pill never gives way.
     expect(title.className).toMatch(/\btruncate\b/);
-    expect(screen.getByText("with Henderson Lab")).toBeTruthy();
+    expect(screen.getByText("with Henderson Frame Lab")).toBeTruthy();
     const pill = screen.getByText("Needs your answer");
     expect(pill.className).toMatch(/\bshrink-0\b/);
     expect(pill.className).not.toMatch(/\bmin-w-0\b/);
@@ -279,7 +279,7 @@ describe("the view", () => {
 
   it('lets a status that names the counterparty stand for "with" them', async () => {
     renderRequests(THREAD.pacific, { world: waitingOnThem(requestsWorld(), THREAD.pacific) });
-    await screen.findByRole("heading", { level: 1, name: "SEM cross-sections of coated foils" });
+    await screen.findByRole("heading", { level: 1, name: "Scouting CT of printed nodes" });
     expect(screen.getByText(`Waiting on ${orgs.pacific.name}`)).toBeTruthy();
     expect(screen.queryByText(`with ${orgs.pacific.name}`)).toBeNull();
   });
@@ -297,7 +297,7 @@ describe("the view", () => {
     expect(guidance.textContent).toContain("None yet. Use Edit to tell Claude what to do differently.");
     expect(within(details).getByRole("heading", { name: "Properties" })).toBeTruthy();
     expect(within(details).getByRole("heading", { name: "Activity" })).toBeTruthy();
-    expect(within(details).getByText("Henderson Lab")).toBeTruthy();
+    expect(within(details).getByText("Henderson Frame Lab")).toBeTruthy();
     cleanup();
 
     // Each viewer's choice is remembered.
@@ -356,7 +356,7 @@ describe("the view", () => {
     const drawer = await screen.findByRole("dialog", { name: "What our representative saw" });
     const prompt = await within(drawer).findByRole("region", { name: "Its prompt" });
     expect(prompt.textContent).toContain("What it may pass on");
-    expect(drawer.textContent).not.toContain("9 to 1 works");
+    expect(drawer.textContent).not.toContain("1 to 5 works");
   });
 
   it("says whose a request is when the viewer can't open it, and when it's from an earlier demo", async () => {
@@ -397,7 +397,7 @@ describe("the view", () => {
     const list = await conversation();
     const comment = within(list).getByRole("article", { name: "Comment from Raj Patel" });
     expect(comment.textContent).toMatch(/^Raj Patel · comment · /);
-    expect(comment.textContent).toContain("9 to 1 works");
+    expect(comment.textContent).toContain("1 to 5 works");
     expect(comment.className).toContain("border-caution");
   });
 });
@@ -427,10 +427,10 @@ describe("whose move it is", () => {
     expect(within(list).getByText(waiting)).toBeTruthy();
 
     act(() => {
-      sources.latest.send(delta(orgs.northlake.id, "Checking the SEM calendar"));
+      sources.latest.send(delta(orgs.northlake.id, "Checking the CT calendar"));
     });
     const ours = await within(list).findByRole("article", { name: "Claude for Northlake Characterization Core is writing" });
-    const text = within(ours).getByText("Checking the SEM calendar");
+    const text = within(ours).getByText("Checking the CT calendar");
     expect(text.className).toContain("font-serif");
     expect(text.className).not.toMatch(/\b(bg-|border|rounded)/);
     // Never both: the waiting row would contradict the row being written.
@@ -487,7 +487,7 @@ describe("whose move it is", () => {
     const decision = await card();
     expect(within(await conversation()).getByText("Waiting on Dr. Helen Ward")).toBeTruthy();
     // Raj may still act on it; the card says whose it is.
-    expect(within(decision).getByText("Claude needs Helen's answer before replying to Henderson Lab")).toBeTruthy();
+    expect(within(decision).getByText("Claude needs Helen's answer before replying to Henderson Frame Lab")).toBeTruthy();
     cleanup();
 
     renderRequests(THREAD.henderson);
@@ -500,10 +500,10 @@ describe("the decision card", () => {
   it("reads after the transcript: whose it is, the question, why it waits, the whole draft, and two buttons", async () => {
     renderRequests(THREAD.henderson);
     const decision = await card();
-    expect(within(decision).getByText("Claude needs your answer before replying to Henderson Lab")).toBeTruthy();
+    expect(within(decision).getByText("Claude needs your answer before replying to Henderson Frame Lab")).toBeTruthy();
     expect(within(decision).getByRole("heading", { level: 2 }).textContent).toBe(HENDERSON_SHORT_QUESTION);
     expect(
-      within(decision).getByText(/Northlake shares what's open on the public calendar, not internal reserve slots\.$/),
+      within(decision).getByText(/Northlake shares what's open on the public calendar, not other clients or their bookings\.$/),
     ).toBeTruthy();
     expect(button(decision, "Reassign")).toBeTruthy();
 
@@ -512,11 +512,11 @@ describe("the decision card", () => {
     const lookedAt = within(decision).getByRole("region", { name: "What Claude looked at" });
     const line = within(lookedAt).getByRole("button", { name: /^Looked at: / });
     expect(line.textContent).toBe(
-      "Looked at: XRD availability before Nov 6 · Public calendar · XRD reserve-slot schedule · External academic price list",
+      "Looked at: Compression availability before Nov 6 · Public calendar · Raj's note, Nov 4 compression block · Price list, external academic",
     );
     fireEvent.click(line);
     expect(within(lookedAt).getAllByRole("listitem")).toHaveLength(4);
-    const link = within(decision).getByRole("link", { name: "Edit what you share with Henderson Lab" });
+    const link = within(decision).getByRole("link", { name: "Edit what you share with Henderson Frame Lab" });
     expect(link.getAttribute("href")).toBe(sharingPath(orgs.henderson.id));
 
     // Only Decline and Approve and send, in a foot that sticks while the card is taller than the view.
@@ -524,7 +524,7 @@ describe("the decision card", () => {
     expect(decision.lastElementChild).toBe(actions);
     expect(actions.className).toMatch(/\bsticky\b/);
     expect(within(actions).getAllByRole("button").map((item) => item.textContent)).toEqual(["Decline", "Approve and send"]);
-    expect(actions.textContent).toContain("Claude replies to Henderson Lab with this answer · ⌘↵");
+    expect(actions.textContent).toContain("Claude replies to Henderson Frame Lab with this answer · ⌘↵");
     expect(decision.className).not.toMatch(/overflow-y-auto|max-h-/);
 
     const list = await conversation();
@@ -544,7 +544,7 @@ describe("the decision card", () => {
   it("lets a non-admin see, not edit, what our side shares", async () => {
     renderRequests(THREAD.henderson, { as: nonAdmin(members.helen) });
     const decision = await card();
-    expect(within(decision).getByRole("link", { name: "See what you share with Henderson Lab" })).toBeTruthy();
+    expect(within(decision).getByRole("link", { name: "See what you share with Henderson Frame Lab" })).toBeTruthy();
     expect(within(decision).queryByRole("link", { name: /^Edit what you share/ })).toBeNull();
   });
 
@@ -578,7 +578,7 @@ describe("the decision card", () => {
     const decision = await card();
     fireEvent.change(draft(decision), { target: { value: "Yes, Wednesday." } });
     expect(within(decision).getByText("· edited by you")).toBeTruthy();
-    expect(foot(decision).textContent).toContain("Claude replies to Henderson Lab with your edited answer");
+    expect(foot(decision).textContent).toContain("Claude replies to Henderson Frame Lab with your edited answer");
     fireEvent.click(button(decision, "Undo my edits"));
     expect(draft(decision).value).toBe(HENDERSON_ANSWER);
     expect(within(decision).queryByText("· edited by you")).toBeNull();
@@ -758,7 +758,7 @@ describe("the decision card", () => {
     const decision = await card();
     fireEvent.click(button(decision, "Decline"));
     const step = within(decision).getByRole("region", { name: "Decline to answer" });
-    expect(step.textContent).toContain("Claude tells Henderson Lab you can't answer, and may pass on your reason.");
+    expect(step.textContent).toContain("Claude tells Henderson Frame Lab you can't answer, and may pass on your reason.");
     expect(button(step, "Decline").disabled).toBe(true);
     fireEvent.click(button(step, "Cancel"));
     expect(button(foot(decision), "Approve and send")).toBeTruthy();
@@ -795,7 +795,7 @@ describe("the decision card", () => {
         { route: `POST /api/escalations/${ESCALATION.henderson}/reassign`, body: { member_id: members.raj.id } },
       ]);
     });
-    expect(await within(decision).findByText("Claude needs Raj's answer before replying to Henderson Lab")).toBeTruthy();
+    expect(await within(decision).findByText("Claude needs Raj's answer before replying to Henderson Frame Lab")).toBeTruthy();
     expect(within(await conversation()).getByText("Waiting on Raj Patel")).toBeTruthy();
   });
 
@@ -945,10 +945,10 @@ describe("the box", () => {
   it("sends the member's own wording of the draft for Claude to rewrite from", async () => {
     const { writes } = renderRequests(THREAD.henderson);
     const decision = await card();
-    fireEvent.change(draft(decision), { target: { value: "Yes, Wednesday, from 9 to 1." } });
+    fireEvent.change(draft(decision), { target: { value: "Yes, Wednesday, from 1 to 5." } });
     await tellClaude(EDIT_INSTRUCTION);
     await waitFor(() => {
-      expect(writes.map((write) => (write.body as { draft_text?: unknown }).draft_text)).toEqual(["Yes, Wednesday, from 9 to 1."]);
+      expect(writes.map((write) => (write.body as { draft_text?: unknown }).draft_text)).toEqual(["Yes, Wednesday, from 1 to 5."]);
     });
   });
 
@@ -1278,7 +1278,7 @@ describe("a closed conversation", () => {
     renderRequests(THREAD.ridgeline);
     const row = await closedRow();
     expect(row.textContent).toMatch(/^Closed · .+ · Ridgeline Fabrication closed it/);
-    expect(row.textContent).toContain("Ridgeline Fabrication booked SEM on four machined PEEK holders");
+    expect(row.textContent).toContain("Ridgeline Fabrication booked CT on four machined holder tubes");
     expect(row.textContent).toContain("Claude for Northlake's summary. Only Northlake sees it.");
     expect(button(row, "Reopen")).toBeTruthy();
     expect(screen.getByRole("separator", { name: "Claude for Ridgeline Fabrication closed the conversation" })).toBeTruthy();
@@ -1403,7 +1403,7 @@ describe("a closed conversation", () => {
     expect(await within(list).findByText(/^Picking this back up/)).toBeTruthy();
     expect(mode(await box(), "Edit").getAttribute("aria-disabled")).toBeNull();
     const first = await closedRow();
-    expect(first.textContent).toContain("Ridgeline Fabrication booked SEM on four machined PEEK holders");
+    expect(first.textContent).toContain("Ridgeline Fabrication booked CT on four machined holder tubes");
     expect(within(first).queryByRole("button", { name: "Reopen" })).toBeNull();
 
     fireEvent.click(within(row).getByRole("button", { name: "See guidance" }));

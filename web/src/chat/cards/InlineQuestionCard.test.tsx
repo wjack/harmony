@@ -13,7 +13,7 @@ function org(n: number, slug: string, name: string): OrgRef {
 }
 
 const NORTHLAKE = org(1, "northlake", "Northlake Characterization Core");
-const KESTREL = org(2, "kestrel", "Kestrel XRD Services");
+const KESTREL = org(2, "kestrel", "Kestrel CT Services");
 const AURORA = org(3, "aurora", "Aurora Beamline");
 const QUARTZ = org(6, "quartz", "Quartz Spectroscopy");
 
@@ -41,7 +41,7 @@ function asker(from: OrgRef, question: string): QuestionAsker {
 
 const GROUPED: InlineQuestionItem = {
   ...OPEN,
-  question: "Northlake asks whether this is one batch of 12 powders or the first of several rounds.",
+  question: "Northlake asks whether this is one batch of 12 coupons or the first of several rounds.",
   from_org: NORTHLAKE,
   askers: [
     asker(KESTREL, "Will more batches follow, and roughly when?"),
@@ -56,7 +56,7 @@ function show(item: Partial<InlineQuestionItem>, onAnswer: (body: ResolveEscalat
     <MemoryRouter>
       <InlineQuestionCard
         item={{ ...OPEN, ...item }}
-        us="Henderson Lab"
+        us="Henderson Frame Lab"
         busy={false}
         blocked={null}
         error={null}
@@ -69,15 +69,15 @@ function show(item: Partial<InlineQuestionItem>, onAnswer: (body: ResolveEscalat
 it("leads with a long question's first paragraph and sets off each paragraph's label", () => {
   show({
     question:
-      "Northlake replied with a quote. Please advise what to reply.\n\nSchedule: XRD is booked until Nov 10.\n\nThey ask us to confirm 12 samples. Can we?",
+      "Northlake replied with a quote. Please advise what to reply.\n\nSchedule: compression testing is booked until Nov 10.\n\nThey ask us to confirm 12 coupons. Can we?",
   });
   const lead = screen.getByText("Northlake replied with a quote. Please advise what to reply.");
   expect(lead.className).toContain("text-ui-title");
   const label = screen.getByText("Schedule:");
   expect(label.className).toContain("font-medium");
-  expect(label.parentElement?.textContent).toBe("Schedule: XRD is booked until Nov 10.");
+  expect(label.parentElement?.textContent).toBe("Schedule: compression testing is booked until Nov 10.");
   // A paragraph that opens with a sentence has no label.
-  expect(screen.getByText("They ask us to confirm 12 samples. Can we?").children).toHaveLength(0);
+  expect(screen.getByText("They ask us to confirm 12 coupons. Can we?").children).toHaveLength(0);
 });
 
 it("says how a settled question was settled, not 'Answered' for every one", () => {
@@ -110,11 +110,11 @@ it("answers a question three conversations asked once, holds an answer naming an
   // Only the askers get the answer, each other one ticked until the member unticks it.
   expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
   const goesTo = (names: string) => screen.getByText((_, node) => node?.textContent === `Answer goes to ${names}`);
-  expect(goesTo("Northlake Characterization Core, Kestrel XRD Services and Aurora Beamline")).toBeTruthy();
+  expect(goesTo("Northlake Characterization Core, Kestrel CT Services and Aurora Beamline")).toBeTruthy();
   const boxes = screen.getAllByRole("checkbox");
   expect(boxes.map((box) => (box as HTMLInputElement).checked)).toEqual([true, true]);
   fireEvent.click(screen.getByRole("checkbox", { name: "Answer Aurora Beamline too" }));
-  expect(goesTo("Northlake Characterization Core and Kestrel XRD Services")).toBeTruthy();
+  expect(goesTo("Northlake Characterization Core and Kestrel CT Services")).toBeTruthy();
 
   // Northlake gets the words as written, so naming another organization on the request holds Send.
   const box = screen.getByRole("textbox", { name: "Your answer about Northlake Characterization Core" });
@@ -162,7 +162,7 @@ it("answers a question three conversations asked once, holds an answer naming an
   const rows = within(screen.getByRole("list", { name: "Where your answer went" })).getAllByRole("listitem");
   expect(rows.map((row) => row.textContent)).toEqual([
     expect.stringMatching(/Northlake Characterization CoreSent as you wrote it · \d/),
-    expect.stringMatching(/Kestrel XRD ServicesSent · fitted to Kestrel's question, within what Henderson Lab shares · \d/),
+    expect.stringMatching(/Kestrel CT ServicesSent · fitted to Kestrel's question, within what Henderson Frame Lab shares · \d/),
     expect.stringMatching(/Aurora BeamlineNot sentReview$/),
     expect.stringMatching(/Quartz SpectroscopyHeld for reviewIt would book beam time\.Review$/),
   ]);

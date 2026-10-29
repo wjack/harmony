@@ -246,8 +246,8 @@ describe("status", () => {
 
   it("shows a closed thread's summary only to the side that wrote it", () => {
     const summary = (view: NetworkView) => view.edges.find((edge) => edge.thread_id === THREAD_NORTHLAKE)?.close_summary;
-    expect(summary(networkClosed)).toMatch(/^Booked XRD and SEM\/EDS/);
-    expect(summary(deskNetwork("closed", members.helen))).toMatch(/^Henderson Lab booked/);
+    expect(summary(networkClosed)).toMatch(/^Booked CT and compression tests/);
+    expect(summary(deskNetwork("closed", members.helen))).toMatch(/^Henderson Frame Lab booked/);
   });
 });
 
@@ -378,7 +378,7 @@ describe("waiting", () => {
       member: members.alex,
       to: `/requests/${THREAD_NORTHLAKE}`,
     });
-    expect(wait && waitMeta(wait, Date.now())).toMatch(/^Alex \(Henderson Lab\)/);
+    expect(wait && waitMeta(wait, Date.now())).toMatch(/^Alex \(Henderson\)/);
   });
 
   it("sends a requester-side wait on someone other than the chat's owner to Requests", () => {

@@ -29,6 +29,7 @@ from harmony.api.routes.conversations import (
     ConversationDetail,
     StartConversation,
 )
+from harmony.api.routes.demo import DemoApprovals
 from harmony.api.routes.escalations import ResolveEscalation
 from harmony.api.routes.inbox import Inbox
 from harmony.api.routes.threads import ReopenRequest, ReopenStarted, ThreadDetail
@@ -84,6 +85,10 @@ class HarmonyApi:
         org's default)."""
         body = StartConversation(text=text, send_without_confirmation=send_without_confirmation)
         return await self._call(ConversationCreated, "POST", "/conversations", body)
+
+    async def set_skip_approvals(self, skip: bool) -> DemoApprovals:
+        """Demo controls' Skip approvals for the session's world."""
+        return await self._call(DemoApprovals, "PUT", "/demo/approvals", DemoApprovals(skip=skip))
 
     async def conversation(self, conversation_id: UUID) -> ConversationDetail:
         return await self._call(ConversationDetail, "GET", f"/conversations/{conversation_id}")

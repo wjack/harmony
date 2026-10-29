@@ -32,10 +32,10 @@ describe("eyebrow", () => {
   it("says whose answer Claude needs, naming the assignee for anyone else", () => {
     const { escalation } = item(THREAD.henderson);
     expect(eyebrow(escalation, henderson, members.helen.id)).toBe(
-      "Claude needs your answer before replying to Henderson Lab",
+      "Claude needs your answer before replying to Henderson Frame Lab",
     );
     expect(eyebrow(escalation, henderson, members.raj.id)).toBe(
-      "Claude needs Helen's answer before replying to Henderson Lab",
+      "Claude needs Helen's answer before replying to Henderson Frame Lab",
     );
   });
 
@@ -79,7 +79,7 @@ describe("cardTitle", () => {
 describe("reasonLine", () => {
   it("says why the item needs a person, and nothing when it's only Ask mode", () => {
     const { escalation } = item(THREAD.henderson);
-    expect(reasonLine(escalation)).toMatch(/^The answer mentions an internal reserve XRD slot/);
+    expect(reasonLine(escalation)).toMatch(/^The answer says another client released the Nov 4 compression block/);
     // A held message in Ask mode: the card's foot already says which mode.
     expect(reasonLine(item(THREAD.vantage).escalation)).toBeNull();
     expect(reasonLine({ ...escalation, reason: "  " })).toBeNull();
@@ -101,23 +101,23 @@ describe("the card's words", () => {
     const held = item(THREAD.vantage).escalation;
     expect(draftLabel(consult)).toBe("Draft reply");
     expect(draftLabel(held)).toBe("Claude's message");
-    expect(approveHint(consult, henderson, false)).toBe("Claude replies to Henderson Lab with this answer");
-    expect(approveHint(consult, henderson, true)).toBe("Claude replies to Henderson Lab with your edited answer");
+    expect(approveHint(consult, henderson, false)).toBe("Claude replies to Henderson Frame Lab with this answer");
+    expect(approveHint(consult, henderson, true)).toBe("Claude replies to Henderson Frame Lab with your edited answer");
     expect(approveHint(held, vantage, true)).toBe("Sends this message to Vantage Market Intelligence as shown");
   });
 
   it("says what declining does, and who may see the reason", () => {
     expect(declineCopy(item(THREAD.henderson).escalation, henderson)).toEqual({
       title: "Decline to answer",
-      caption: "Claude tells Henderson Lab you can't answer, and may pass on your reason.",
+      caption: "Claude tells Henderson Frame Lab you can't answer, and may pass on your reason.",
     });
     expect(declineCopy(item(THREAD.vantage).escalation, vantage).title).toBe("Decline this message");
   });
 
   it("names the mode a held message waits in, and links admins to the sharing to edit", () => {
     expect(modeLine("Ask", vantage)).toBe("Ask mode with Vantage Market Intelligence");
-    expect(sharingLabel(true, henderson)).toBe("Edit what you share with Henderson Lab");
-    expect(sharingLabel(false, henderson)).toBe("See what you share with Henderson Lab");
+    expect(sharingLabel(true, henderson)).toBe("Edit what you share with Henderson Frame Lab");
+    expect(sharingLabel(false, henderson)).toBe("See what you share with Henderson Frame Lab");
   });
 });
 
@@ -126,7 +126,7 @@ describe("lookedAtSummary", () => {
     const [rev] = item(THREAD.henderson).escalation.drafts;
     if (rev === undefined) throw new Error("no draft");
     expect(lookedAtSummary(rev)).toBe(
-      "XRD availability before Nov 6 · Public calendar · XRD reserve-slot schedule · External academic price list",
+      "Compression availability before Nov 6 · Public calendar · Raj's note, Nov 4 compression block · Price list, external academic",
     );
     const untitled = { ...rev, activity: [{ tool: "read_document", label: "Read a document", detail: null }] };
     expect(lookedAtSummary(untitled)).toBe("Read a document");

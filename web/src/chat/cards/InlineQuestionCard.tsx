@@ -11,7 +11,7 @@ import type { InlineQuestionItem, OrgRef, QuestionDelivery, ResolveEscalation } 
 
 export interface InlineQuestionCardProps {
   item: InlineQuestionItem;
-  /** Our organization's name: "within what Henderson Lab shares". */
+  /** Our organization's name: "within what Henderson Frame Lab shares". */
   us: string;
   busy: boolean;
   /** Why live turns can't start now (`budgetLine`); the answer holds until it clears. */
@@ -20,7 +20,7 @@ export interface InlineQuestionCardProps {
   onAnswer: (body: ResolveEscalation) => void;
 }
 
-// A paragraph's opening label, as in "Schedule: XRD is booked until Nov 10": short, and no sentence.
+// A paragraph's opening label, as in "Schedule: compression testing is booked until Nov 10": short, and no sentence.
 const LABEL = /^([^.:\n]{1,40}):\s+/;
 
 /**

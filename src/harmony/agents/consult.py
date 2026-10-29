@@ -1118,7 +1118,7 @@ CONSULT_OUTPUT_SCHEMA: Final[JsonObject] = {
                                     "why": {
                                         "type": "string",
                                         "description": "One short clause, addressed to that "
-                                        "person: 'you run XRD and SEM'.",
+                                        "person: 'you run the CT'.",
                                     },
                                 },
                                 "required": ["member", "why"],

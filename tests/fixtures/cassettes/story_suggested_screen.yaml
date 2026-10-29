@@ -1,5 +1,5 @@
 # Discovery screener verdicts for the suggested story's two searches (internal turn 1
-# of `chat:alex:1`): step 0 is the characterization search, step 1 the holder search.
+# of `chat:alex:1`): step 0 is the testing search, step 1 the holder search.
 # One entry per screened org per search: every org except the requester, Henderson.
 # Output schema: agents/discovery.py SCREENER_OUTPUT_SCHEMA, a fit and a one-line
 # reason drawn from the org's public summary. Keys: agents/keys.py.
@@ -9,22 +9,22 @@
 scenario: harmony-demo
 entries:
 
-  # --- Search 0: characterization
+  # --- Search 0: testing
   - match: {org: northlake, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "strong", "reason": "Shared-instrument core with powder XRD (Bruker D8, air-free dome holders) and SEM/EDS; turnaround 5–10 business days, priority service by arrangement."}
+          {"fit": "strong", "reason": "Shared-instrument core with micro-CT (Zeiss Xradia 620 Versa) and compression testing (Instron 5985); turnaround 5–10 business days, priority compression blocks for a published fee."}
   - match: {org: bayside, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "possible", "reason": "Commercial lab with powder XRD, but its summary says samples are handled in air and it has no SEM."}
+          {"fit": "possible", "reason": "Commercial lab with compression testing, but its summary says it has no CT."}
   - match: {org: ostrander, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "possible", "reason": "University powder XRD service, but booked through December, with no SEM or air-free handling."}
+          {"fit": "possible", "reason": "University micro-CT service, but booked through December, with no mechanical testing."}
   - match: {org: calder, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
@@ -34,32 +34,32 @@ entries:
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Machines sample holders and fixtures; it doesn't run measurements."}
+          {"fit": "no", "reason": "Machines instrument holders and fixtures; it doesn't run tests."}
   - match: {org: vantage, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "A sourcing intermediary for battery OEMs; it lists no instruments of its own."}
+          {"fit": "no", "reason": "A sourcing intermediary for e-bike makers; it lists no instruments of its own."}
   - match: {org: summit, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Packs and ships air-sensitive samples but doesn't measure them."}
+          {"fit": "no", "reason": "Heat-treats 3D-printed metal parts but doesn't test them."}
   - match: {org: pinecrest, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Supplies sodium salts and precursors; no characterization."}
+          {"fit": "no", "reason": "Supplies titanium and aluminum alloy wire and bar; no testing."}
   - match: {org: harbor, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Builds pilot pouch cells; no materials characterization."}
+          {"fit": "no", "reason": "3D-prints metal parts; its summary says it doesn't test them."}
   - match: {org: meridian, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Thermal analysis (TGA, DSC) only; no diffraction or microscopy."}
+          {"fit": "no", "reason": "Dimensional inspection (CMM and optical 3D scanning) only; no CT or mechanical testing."}
   - match: {org: ridgeway, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
@@ -74,34 +74,34 @@ entries:
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "General CNC machining; no measurement services."}
+          {"fit": "no", "reason": "General CNC machining; no testing services."}
   - match: {org: tidewater, role: screener, thread: "search:chat:alex:1", turn: 1, step: 0}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Electrochemical cycling and impedance; not XRD or SEM."}
+          {"fit": "no", "reason": "Fatigue testing, starting in about three weeks; no CT or static compression tests."}
 
   # --- Search 1: the holder
   - match: {org: ridgeline, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "strong", "reason": "Machines vacuum and airtight sample holders and transfer vessels for labs, in 3–5 business days."}
+          {"fit": "strong", "reason": "Machines instrument holders, test fixtures and custom mounts for labs, in 3–5 business days."}
   - match: {org: granite, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "possible", "reason": "General CNC machining from drawings, but its summary says it doesn't make vacuum or sealed parts."}
+          {"fit": "possible", "reason": "General CNC machining, but its summary says it works only from the customer's drawings and keeps no catalog of instrument parts."}
   - match: {org: summit, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "possible", "reason": "Packs air-sensitive samples under argon in sealed canisters, but doesn't make instrument holders."}
+          {"fit": "possible", "reason": "Works on 3D-printed metal parts in 3–5 business days, but its summary says it doesn't machine them, so no instrument holders."}
   - match: {org: northlake, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "A characterization facility; it loads samples into its own dome holders but doesn't make them."}
+          {"fit": "no", "reason": "A characterization facility; it runs CT and mechanical tests but doesn't make holders."}
   - match: {org: calder, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
@@ -116,27 +116,27 @@ entries:
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "An analytical lab; it doesn't make parts."}
+          {"fit": "no", "reason": "A testing lab; it doesn't make parts."}
   - match: {org: ostrander, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "A university XRD service; it doesn't make parts."}
+          {"fit": "no", "reason": "A university CT service; it doesn't make parts."}
   - match: {org: pinecrest, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Supplies precursors; it doesn't make parts."}
+          {"fit": "no", "reason": "Supplies alloy wire and bar; it doesn't make parts."}
   - match: {org: harbor, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Builds pilot pouch cells, not sample holders."}
+          {"fit": "no", "reason": "3D-prints metal parts, but its summary says it doesn't machine instrument holders."}
   - match: {org: meridian, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Thermal analysis only; it doesn't make parts."}
+          {"fit": "no", "reason": "Dimensional inspection only; it doesn't make parts."}
   - match: {org: ridgeway, role: screener, thread: "search:chat:alex:1", turn: 1, step: 1}
     content:
       - type: text
@@ -151,4 +151,4 @@ entries:
     content:
       - type: text
         text: >-
-          {"fit": "no", "reason": "Electrochemical testing; it doesn't make parts."}
+          {"fit": "no", "reason": "Fatigue testing; it doesn't make parts."}

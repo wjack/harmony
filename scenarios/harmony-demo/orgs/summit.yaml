@@ -1,31 +1,29 @@
-# Summit Glovebox Services, background (docs/SCENARIO.md): a possible fit for the
-# transfer, though it packs and ships rather than machining holders.
+# Summit Heat Treating, background (docs/SCENARIO.md): works on printed parts, but
+# neither tests them nor machines holders.
 slug: summit
-name: Summit Glovebox Services
-kind: logistics
+name: Summit Heat Treating
+kind: processing
 
 members:
   - slug: marco
     name: Marco Bellini
     title: Operations manager
     role: admin
-    profile: Runs the gloveboxes and shipping; quotes and scheduling.
+    profile: Runs the furnaces; quotes and scheduling.
 
 settings:
   public_summary: >-
-    Summit Glovebox Services prepares, packs and ships air-sensitive materials in the
-    Pacific Northwest: we pack under argon or nitrogen and ship in sealed pouches and
-    canisters, usually in 2–3 business days. We don't measure samples or machine
-    parts.
+    Summit Heat Treating stress-relieves and hot isostatically presses 3D-printed
+    metal parts in the Pacific Northwest, usually in 3–5 business days. We don't test
+    parts or machine them.
   instructions: >-
-    You represent Summit Glovebox Services. We don't measure samples or machine parts.
-    Consult for prices and scheduling.
+    You represent Summit Heat Treating. We don't test parts or machine them. Consult
+    for prices and scheduling.
 
 policy:
   autonomy: skip
   sharing_description: >-
-    Our packing and shipping prices, lead times and packaging options. Not: glovebox
-    capacity or other clients.
+    Our treatment prices, cycles and lead times. Not: furnace load or other clients.
   routing_prompt: Everything goes to Marco.
   default_assignee: marco
 
@@ -33,14 +31,14 @@ knowledge:
   - slug: about
     title: About Summit
     kind: profile
-    body: Inert-atmosphere sample prep, packaging and sealed shipping.
+    body: Stress relief and hot isostatic pressing for printed metal parts.
   - slug: price-list
     title: Price list
     kind: price-list
     body: >-
-      Glovebox packing under Ar or N2 $35 per sample. Sealed canister shipping $120 per
-      shipment, regional, 2 business days.
-  - slug: glovebox-capacity
-    title: Glovebox capacity
+      Stress relief $180 per furnace load. Hot isostatic pressing $650 per load, up to
+      40 small parts. 3–5 business days.
+  - slug: furnace-load
+    title: Furnace load
     kind: note
-    body: Box 2 is down for regeneration until Nov 2; we can only run one packing job a day.
+    body: The HIP unit is down for service until Nov 2; we can run one stress-relief load a day.

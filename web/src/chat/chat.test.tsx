@@ -28,7 +28,7 @@ import {
   REQUEST_TITLE,
   requestAt,
   RIDGELINE_GO_AHEAD_ID,
-  SEAL_QUESTION_ID,
+  TUBE_QUESTION_ID,
   SUMMARIES,
   RUNNING_SEARCH_LABEL,
   SENT_REPLY,
@@ -316,14 +316,14 @@ it("shows Review while the card is out of view, which opens it and scrolls to it
 it("answers a counterparty's question inline", async () => {
   const { writes } = renderChat("question");
   const answer = await screen.findByRole("textbox", { name: "Your answer about Ridgeline Fabrication" });
-  fireEvent.change(answer, { target: { value: "Kalrez, please." } });
+  fireEvent.change(answer, { target: { value: "Carbon fiber, please." } });
   fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
 
   await screen.findByText("Answered");
   expect(writes).toEqual([
     {
-      route: `POST /api/escalations/${SEAL_QUESTION_ID}/resolve`,
-      body: { action: "approve", text: "Kalrez, please.", also_for: [] },
+      route: `POST /api/escalations/${TUBE_QUESTION_ID}/resolve`,
+      body: { action: "approve", text: "Carbon fiber, please.", also_for: [] },
     },
   ]);
 });
@@ -374,7 +374,7 @@ it("answers go-aheads on proposed terms, and sums up once both threads close", a
   const { writes } = renderChat("go_ahead");
   await answerAbout("Northlake Characterization Core", "Yes, go ahead.");
   expect(screen.queryByText(/inside your \$2,000 budget/)).toBeNull();
-  await answerAbout("Ridgeline Fabrication", "Yes, with the Kalrez seal.");
+  await answerAbout("Ridgeline Fabrication", "Yes, with the carbon-fiber tube.");
 
   expect(await screen.findByText(/inside your \$2,000 budget/)).toBeTruthy();
   expect(writes).toEqual([
@@ -384,7 +384,7 @@ it("answers go-aheads on proposed terms, and sums up once both threads close", a
     },
     {
       route: `POST /api/escalations/${RIDGELINE_GO_AHEAD_ID}/resolve`,
-      body: { action: "approve", text: "Yes, with the Kalrez seal.", also_for: [] },
+      body: { action: "approve", text: "Yes, with the carbon-fiber tube.", also_for: [] },
     },
   ]);
 });
@@ -430,7 +430,7 @@ it("sends edited wording with only what changed, and says so under the buttons a
   expect(within(card).getByText("Click the brief or an ask to change the wording")).toBeTruthy();
   fireEvent.change(briefBox, { target: { value: `${briefBox.value}\n\nResults by Nov 4 if you can.  ` } });
   const ask = within(card).getByRole("textbox", { name: "Ask for Northlake Characterization Core" });
-  fireEvent.change(ask, { target: { value: "Quote XRD only, under $900." } });
+  fireEvent.change(ask, { target: { value: "Quote the CT only, under $900." } });
   // Each changed part says so, with Undo; Calder isn't ticked, so it has no ask to edit.
   expect(within(card).getAllByText("· edited by you")).toHaveLength(2);
   expect(within(card).queryByRole("textbox", { name: "Ask for Calder Computational" })).toBeNull();
@@ -446,8 +446,8 @@ it("sends edited wording with only what changed, and says so under the buttons a
     route: APPROVE,
     body: {
       recipients: [orgs.northlake.id, orgs.ridgeline.id],
-      brief: expect.stringMatching(/^XRD and SEM\/EDS[\s\S]*Results by Nov 4 if you can\.$/) as unknown,
-      asks: { [orgs.northlake.id]: "Quote XRD only, under $900." },
+      brief: expect.stringMatching(/^CT scans and compression tests[\s\S]*Results by Nov 4 if you can\.$/) as unknown,
+      asks: { [orgs.northlake.id]: "Quote the CT only, under $900." },
     },
   });
   // The card folds to its record, which still says what went out wasn't Claude's draft.
@@ -485,18 +485,18 @@ it("pages a rewritten part back to Claude's earlier wording, which goes as an ed
   const { writes } = renderChat("drafted", { rejected: { with: "message", text: REDRAFT_MESSAGE } });
   const card = await outreach();
   const briefBox = within(card).getByRole<HTMLTextAreaElement>("textbox", { name: "Brief" });
-  expect(briefBox.value).toContain("sealed vials");
+  expect(briefBox.value).toContain("engraved");
   const [earlier] = within(card).getAllByRole("button", { name: "Earlier version" });
   if (earlier === undefined) throw new Error("no pager on the brief");
   fireEvent.click(earlier);
-  expect(briefBox.value).not.toContain("sealed vials");
+  expect(briefBox.value).not.toContain("engraved");
   fireEvent.click(approveIn(card));
 
   await waitFor(() => {
     expect(writes).toHaveLength(1);
   });
   expect(writes[0]?.route).toBe(`POST /api/cards/${REDRAFT_CARD_ID}/approve`);
-  expect(writes[0]?.body).toMatchObject({ brief: expect.not.stringContaining("sealed vials") as unknown });
+  expect(writes[0]?.body).toMatchObject({ brief: expect.not.stringContaining("engraved") as unknown });
 });
 
 it("shows a card that arrives mid-draft at the end of the chat, leaving the draft in the box", async () => {
@@ -554,7 +554,7 @@ it("clears a failed answer's error when the member tries again", async () => {
     },
   });
   fireEvent.change(await screen.findByRole("textbox", { name: "Your answer about Ridgeline Fabrication" }), {
-    target: { value: "Kalrez, please." },
+    target: { value: "Carbon fiber, please." },
   });
   fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
   expect((await screen.findByRole("alert")).textContent).toBe("Couldn't reach Ridgeline.");
@@ -757,10 +757,10 @@ it.each(HOLDS)("holds an inline answer while the budget is %s, and says so", asy
   const card = screen.getByRole("region", { name: "Your representative asks about Ridgeline Fabrication" });
   expect(await within(card).findByText(line)).toBeTruthy();
   // The answer stays, and nothing goes out.
-  fireEvent.change(answer, { target: { value: "Kalrez, please." } });
+  fireEvent.change(answer, { target: { value: "Carbon fiber, please." } });
   expect(within(card).getByRole("button", { name: "Send answer" })).toHaveProperty("disabled", true);
   fireEvent.keyDown(answer, { key: "Enter", metaKey: true });
-  expect(answer).toHaveProperty("value", "Kalrez, please.");
+  expect(answer).toHaveProperty("value", "Carbon fiber, please.");
   expect(writes).toEqual([]);
 });
 
@@ -843,7 +843,7 @@ it("names the request's card Harmony Network Request, with the request's title i
   expect(within(outreach).getByText("Sent to Northlake Characterization Core and Ridgeline Fabrication")).toBeTruthy();
   // Show what was sent reads it in full: each organization's subject, as it read it.
   fireEvent.click(within(outreach).getByRole("button", { name: "Show what was sent" }));
-  expect(within(outreach).getByText("Airtight holder quote")).toBeTruthy();
+  expect(within(outreach).getByText("CT holder quote")).toBeTruthy();
   expect(within(outreach).getByText("Not sent to Calder Computational.")).toBeTruthy();
 });
 
@@ -955,17 +955,17 @@ it("starts a chat with the send mode the member picked over the organization's d
     expect(chip()).toBeNull();
   });
 
-  await sendFirstMessage("Find XRD for 12 powders.");
+  await sendFirstMessage("Find CT for 12 coupons.");
   expect(writes).toEqual([
-    { route: "POST /api/conversations", body: { text: "Find XRD for 12 powders.", send_without_confirmation: false } },
+    { route: "POST /api/conversations", body: { text: "Find CT for 12 coupons.", send_without_confirmation: false } },
   ]);
 });
 
 it("leaves a new chat on the organization's default unless the member picks one", async () => {
   const { writes } = renderNewChat(true);
   await screen.findByRole("button", { name: "Sends without review" });
-  await sendFirstMessage("Find XRD for 12 powders.");
-  expect(writes).toEqual([{ route: "POST /api/conversations", body: { text: "Find XRD for 12 powders." } }]);
+  await sendFirstMessage("Find CT for 12 coupons.");
+  expect(writes).toEqual([{ route: "POST /api/conversations", body: { text: "Find CT for 12 coupons." } }]);
 });
 
 it("follows the organization's default as an admin changes it, while the chat has no override", async () => {
@@ -1010,15 +1010,15 @@ it("holds a new chat's first message until the organization's default is known",
     { element: <NewChatPage />, path: "/", url: "/" },
   );
   const box = await composer();
-  fireEvent.change(box, { target: { value: "Find XRD for 12 powders." } });
+  fireEvent.change(box, { target: { value: "Find CT for 12 coupons." } });
   fireEvent.keyDown(box, { key: "Enter" });
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "Send message" }).disabled).toBe(true);
   expect(writes).toEqual([]);
 
   release();
   expect(await screen.findByRole("button", { name: "Sends without review" })).toBeTruthy();
-  await sendFirstMessage("Find XRD for 12 powders.");
-  expect(writes).toEqual([{ route: "POST /api/conversations", body: { text: "Find XRD for 12 powders." } }]);
+  await sendFirstMessage("Find CT for 12 coupons.");
+  expect(writes).toEqual([{ route: "POST /api/conversations", body: { text: "Find CT for 12 coupons." } }]);
 });
 
 it("holds a new chat's first message while the organization's default won't load, until it does", async () => {
@@ -1036,7 +1036,7 @@ it("holds a new chat's first message while the organization's default won't load
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain("Couldn't load how your organization sends requests");
   const box = await composer();
-  fireEvent.change(box, { target: { value: "Find XRD for 12 powders." } });
+  fireEvent.change(box, { target: { value: "Find CT for 12 coupons." } });
   fireEvent.keyDown(box, { key: "Enter" });
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "Send message" }).disabled).toBe(true);
   expect(chip()).toBeNull();
@@ -1055,8 +1055,8 @@ it("holds a new chat's first message while the organization's default won't load
   fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
   expect(await screen.findByRole("button", { name: "Sends without review" })).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
-  await sendFirstMessage("Find XRD for 12 powders.");
-  expect(writes).toEqual([{ route: "POST /api/conversations", body: { text: "Find XRD for 12 powders." } }]);
+  await sendFirstMessage("Find CT for 12 coupons.");
+  expect(writes).toEqual([{ route: "POST /api/conversations", body: { text: "Find CT for 12 coupons." } }]);
 });
 
 it("starts a chat the member set a mode for though the organization's default won't load", async () => {
@@ -1073,9 +1073,9 @@ it("starts a chat the member set a mode for though the organization's default wo
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  await sendFirstMessage("Find XRD for 12 powders.");
+  await sendFirstMessage("Find CT for 12 coupons.");
   expect(writes).toEqual([
-    { route: "POST /api/conversations", body: { text: "Find XRD for 12 powders.", send_without_confirmation: false } },
+    { route: "POST /api/conversations", body: { text: "Find CT for 12 coupons.", send_without_confirmation: false } },
   ]);
 });
 

@@ -13,10 +13,10 @@ entries:
         name: send_message
         input:
           text: >-
-            Thanks for reaching out. Northlake can run powder XRD on all 12 air-sensitive
-            samples, loaded in our glovebox into sealed holders. Our public calendar is
-            full until Nov 10; I am checking whether an earlier slot can be found and
-            will come back to you shortly.
+            Thanks for reaching out. Northlake can CT-scan and compression-test all 12
+            lattice coupons, scanning them first, since the compression tests crush them.
+            Our next standard compression block is Tue Nov 10; I am checking whether an
+            earlier slot can be found and will come back to you shortly.
   - match: {org: northlake, role: representative, thread: rep-turn, turn: 1, step: 1}
     content:
       - {type: thinking}

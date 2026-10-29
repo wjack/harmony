@@ -51,7 +51,7 @@ export default [
   ),
   page(
     "Harmony settings: sharing, from a request",
-    "Opened from \"Edit what you share with Henderson Lab\" in the Requests inbox: Henderson isn't trusted yet, so the pane suggests adding them.",
+    "Opened from \"Edit what you share with Henderson Frame Lab\" in the Requests inbox: Henderson isn't trusted yet, so the pane suggests adding them.",
     "sharing",
     members.helen,
     { query: `&org=${orgs.henderson.id}` },
@@ -95,7 +95,7 @@ export default [
   ),
   page(
     "Harmony settings: sharing, view only, from a request",
-    "Raj as a member, opened from \"See what you share with Henderson Lab\": a viewer can't trust them, so the pane doesn't suggest it.",
+    "Raj as a member, opened from \"See what you share with Henderson Frame Lab\": a viewer can't trust them, so the pane doesn't suggest it.",
     "sharing",
     nonAdmin(members.raj),
     { query: `&org=${orgs.henderson.id}` },

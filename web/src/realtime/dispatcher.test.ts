@@ -650,7 +650,7 @@ describe("other events", () => {
       thread_id: THREAD_ID,
       turn_id: "6f1c2c1e-0000-4000-8000-0000000000e1",
       attempt: 1,
-      text: "Checking the XRD calendar",
+      text: "Checking the CT calendar",
     });
     sources.latest.send(delta);
 
