@@ -191,9 +191,9 @@ export default [
   ),
   page(
     "Network view: a thread stopped on the budget",
-    "Today's live budget ran out before Ridgeline replied: its edge and panel say Closed, and why, with no summary.",
+    "The demo's live-model budget ran out before Ridgeline replied: its edge and panel say Closed, and why, with no summary.",
     "stopped",
-    { selected: orgs.ridgeline.id, budget: budgets.dailyExhausted },
+    { selected: orgs.ridgeline.id, budget: budgets.demoExhausted },
   ),
   page(
     "Network view: closed",

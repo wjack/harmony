@@ -363,7 +363,6 @@ async def _build_cast(sessionmaker: async_sessionmaker[AsyncSession]) -> Cast:
                         desk_world_id=world_id,
                         desk_member_id=actor.member_id,
                         epoch=0,
-                        budget_lineage=uuid4(),
                     ),
                 ]
             )

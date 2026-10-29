@@ -7,8 +7,8 @@ import { renderLive } from "../test/shellHarness";
 import { demoStore } from "./store";
 
 /**
- * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The live
- * budget has no box, as when it isn't shown.
+ * Where each control sits in jsdom's 1024 × 768 window, by its `data-help` key. The
+ * live-models pill has no box, as when it isn't shown.
  */
 const BOXES: Record<string, [x: number, y: number, width: number, height: number]> = {
   "demo-controls": [62, 7, 121, 24],
@@ -47,7 +47,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("says what each key control does from the demo bar's ?, and closes on Escape or Got it", async () => {
+it("says what each key control does from the demo bar's ?, and closes on Escape or Close this guide", async () => {
   const { dispatcher } = await renderLive(sessionAs(members.alex));
   const help = screen.getByRole("button", { name: "What's on screen" });
 
@@ -70,8 +70,8 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
   // A control that isn't on screen goes without its callout.
   const shown = within(overlay).getAllByRole("listitem");
   expect(shown).toHaveLength(5);
-  expect(shown.map((item) => item.textContent).join(" ")).not.toContain("budget");
-  expect(document.activeElement).toBe(within(overlay).getByRole("button", { name: "Got it" }));
+  expect(shown.map((item) => item.textContent).join(" ")).not.toContain("Live models");
+  expect(document.activeElement).toBe(within(overlay).getByRole("button", { name: "Close this guide" }));
 
   fireEvent.keyDown(overlay, { key: "Escape" });
   await waitFor(() => {
@@ -84,12 +84,12 @@ it("says what each key control does from the demo bar's ?, and closes on Escape 
   // Opened from the "?" itself, nothing points the "?" out.
   expect(screen.queryByText("See this guide any time")).toBeNull();
 
-  // A click elsewhere on it, the scrim included, leaves it open; Got it closes it.
+  // A click elsewhere on it, the scrim included, leaves it open; Close this guide closes it.
   fireEvent.click(help);
   const reopened = await screen.findByRole("dialog", { name: "What's on screen" });
   fireEvent.click(reopened);
   expect(screen.getByRole("dialog", { name: "What's on screen" })).toBeTruthy();
-  fireEvent.click(within(reopened).getByRole("button", { name: "Got it" }));
+  fireEvent.click(within(reopened).getByRole("button", { name: "Close this guide" }));
   await waitFor(() => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });

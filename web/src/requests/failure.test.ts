@@ -116,11 +116,11 @@ describe("reopenFailure", () => {
   });
 
   it("names the spent budget, with Try again only once it's back", () => {
-    expect(reopenFailure("daily_budget", "daily_exhausted")).toEqual({
-      text: "Claude couldn't pick this up: today's demo budget is used up.",
+    expect(reopenFailure("demo_budget", "demo_exhausted")).toEqual({
+      text: "Claude couldn't pick this up: the demo's live-model budget is used up.",
       retry: false,
     });
-    expect(reopenFailure("daily_budget", "ok").retry).toBe(true);
+    expect(reopenFailure("demo_budget", "ok").retry).toBe(true);
   });
 });
 

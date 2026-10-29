@@ -186,15 +186,15 @@ function ToastTriggers() {
       <Button
         onClick={() => {
           toast({
-            text: "Northlake needs a human.",
+            text: "Northlake needs you.",
             action: {
-              label: "Switch to Helen",
+              label: "Open Requests",
               onClick: () => undefined,
             },
           });
         }}
       >
-        “Northlake needs a human”
+        “Northlake needs you”
       </Button>
       <Button
         onClick={() => {

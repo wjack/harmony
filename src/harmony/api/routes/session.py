@@ -31,7 +31,7 @@ from harmony.api.deps import (
     set_cursor,
     snapshot_session,
 )
-from harmony.api.gate import GateDep, client_key_hash, too_many_attempts
+from harmony.api.gate import GateDep, too_many_attempts
 from harmony.api.routes.problems import not_found, problem_entries
 from harmony.auth.session import (
     Actor,
@@ -101,8 +101,8 @@ async def get_session(
     return await session_response(sessionmaker, response, actor, settings)
 
 
-# 404 `not_found`: `world=network` until P3; 429 `too_many_attempts`: too many new
-# sessions from one client or overall while the gate is on (3.3).
+# 404 `not_found`: `world=network` until P3; 429 `too_many_attempts`: too many re-creates
+# of this session's wiped world while the gate is on (3.3).
 @router.post(
     "/session/start",
     response_model=SessionView,
@@ -132,10 +132,9 @@ async def start_session(
             lens=world,
             scenario=scenario,
             limits=gate.worlds if gate is not None else None,
-            client_key_hash=client_key_hash(request.scope, settings),
         )
     except TooManyWorlds as err:
-        return too_many_attempts(err.retry_after_s, "too many new sessions; try again later")
+        return too_many_attempts(err.retry_after_s, "too many new worlds; try again later")
     except ScenarioNotFound as err:
         # Only a scenario named in this request can be unknown: one stored on the
         # session's old world falls back to the default (`WorldService.start`).
@@ -175,5 +174,5 @@ async def act_as_member(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "this world is gone; POST /api/session/start"
         )
-    await worlds.start_requests_for(switched.session_id, switched.world_id, switched.org_id)
+    await worlds.start_requests_for(switched.world_id, switched.org_id)
     return await session_response(sessionmaker, response, switched, settings)

@@ -15,25 +15,21 @@ locals {
   app_env = {
     APP_ENV = "prod"
     # Prod refuses anything else: the hosted app has no scripted mode.
-    MODEL_MODE              = "live"
-    MODEL_OVERRIDE          = var.model_override
-    SESSION_SECRET          = random_password.session_secret.result
-    ADMIN_SECRET            = random_password.admin_secret.result
-    ACCESS_CODE             = local.access_code
-    CLIENT_IP_HEADER        = var.client_ip_header
-    LINEAGE_BUDGET_USD      = tostring(var.lineage_budget_usd)
-    CLIENT_DAILY_BUDGET_USD = tostring(var.client_daily_budget_usd)
-    DAILY_BUDGET_USD        = tostring(var.daily_budget_usd)
-    GLOBAL_BUDGET_USD       = tostring(var.global_budget_usd)
-    TEMPORAL_ADDRESS        = module.temporal.grpc_address
-    TEMPORAL_NAMESPACE      = module.temporal.namespace_id
-    TEMPORAL_API_KEY        = module.temporal.api_key
-    OBJECT_STORE            = "s3"
-    S3_ENDPOINT_URL         = module.storage.endpoint_url
-    S3_BUCKET               = local.s3_bucket
-    S3_REGION               = local.s3_region
-    S3_ACCESS_KEY_ID        = local.minio_user
-    S3_SECRET_ACCESS_KEY    = random_password.minio_root_password.result
+    MODEL_MODE           = "live"
+    MODEL_OVERRIDE       = var.model_override
+    SESSION_SECRET       = random_password.session_secret.result
+    ADMIN_SECRET         = random_password.admin_secret.result
+    ACCESS_CODE          = local.access_code
+    CLIENT_IP_HEADER     = var.client_ip_header
+    TEMPORAL_ADDRESS     = module.temporal.grpc_address
+    TEMPORAL_NAMESPACE   = module.temporal.namespace_id
+    TEMPORAL_API_KEY     = module.temporal.api_key
+    OBJECT_STORE         = "s3"
+    S3_ENDPOINT_URL      = module.storage.endpoint_url
+    S3_BUCKET            = local.s3_bucket
+    S3_REGION            = local.s3_region
+    S3_ACCESS_KEY_ID     = local.minio_user
+    S3_SECRET_ACCESS_KEY = random_password.minio_root_password.result
   }
 
   # The worker alone calls the model, so only it holds the key.

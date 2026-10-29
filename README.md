@@ -52,7 +52,7 @@ One organization, Vantage Market Intelligence, tries to get confidential client 
 
 ### Your copy of the demo
 
-Each browser gets its own copy of the demo network. When you click Start the demo, the server makes a session and a world for you. Your browser keeps only the signed ID of that session, in the `harmony_session` cookie. The server keeps everything else: your world, the account that you act as, and your spend. The cookie lasts 30 days, so you can close the tab and come back to the same world later.
+Each browser gets its own copy of the demo network. When you click Start the demo, the server makes a session and a world for you. Your browser keeps only the signed ID of that session, in the `harmony_session` cookie. The server keeps everything else: your world and the account that you act as. The cookie lasts 30 days, so you can close the tab and come back to the same world later.
 
 Your browser also keeps these items:
 
@@ -64,7 +64,7 @@ All tabs in one browser share one session. If you switch accounts in one tab, th
 
 To start again as a new visitor, open a private (incognito) window. A private window has its own cookies. It asks for the passcode again, and then it makes a new session and a new world. The two windows do not share a world, so a request from one window does not show in the other. When you close all private windows, the browser deletes their cookies, and you cannot go back to that world.
 
-Reset is different. Reset gives you a fresh world in the same session, and your spend so far stays. A private window starts a new session with its own budget, $10 by default.
+Reset is different. Reset gives you a fresh world, but it keeps your session. A private window starts a new session.
 
 ### What the prototype leaves out
 
@@ -121,7 +121,7 @@ The hosted demo runs every role on Haiku 5.5 for now. The full design uses Opus 
 | `src/harmony/auth/` | Sessions, account switching and thread access |
 | `src/harmony/domain/` | One module per kind of record, each write in one transaction |
 | `src/harmony/events/` | The event bus and the event stream |
-| `src/harmony/llm/` | The model client, the scripted model and the spend limits |
+| `src/harmony/llm/` | The model client, the scripted model, the development spend ledger and the live switch |
 | `src/harmony/temporal/` | Workflows, activities and the worker |
 | `src/harmony/worlds/` | Make, fork and retire worlds |
 | `src/harmony/seeds/`, `scenarios/` | The demo content as YAML, and its loader |
@@ -268,15 +268,7 @@ Production runs on Render and Temporal Cloud. Terraform in `infra/terraform/` ma
 
 Production uses live models only. Terraform sets `MODEL_MODE=live`, and the app refuses to start in production with any other mode. Only the worker holds the Anthropic key. One master passcode protects the whole app.
 
-Each live call reserves its highest possible cost against three spend caps before it starts. These are the Terraform defaults:
-
-| Variable | Default | Limit for |
-|---|---|---|
-| `lineage_budget_usd` | $10 | One browser session, also after Reset |
-| `daily_budget_usd` | $20 | All visitors in one UTC day |
-| `global_budget_usd` | $50 | All hosted spend |
-
-Also set a spend limit on the Anthropic Console workspace for production. That limit stops spend if the metering in the app is wrong.
+The app has no spend caps of its own. The spend limit on the Anthropic Console workspace for production is the only limit on spend. To stop all model calls at once, use the live switch in [Operate the hosted demo](#operate-the-hosted-demo).
 
 ### Ship a change to the hosted demo
 
@@ -351,7 +343,7 @@ Do these steps once, for a new set of accounts. The full runbook is in [docs/LIV
     scripts/tf.sh output -raw access_code
     ```
 
-`scripts/tf.sh` loads the keys from `.env.local` and never prints them. It refuses `apply` unless `HARMONY_TF_ALLOW_APPLY=1` is set and `infra/terraform` is the same as on `origin/main`. If `terraform.tfvars` sets no `access_code`, Terraform makes a 16-character passcode. To change a cap or the plan of a service, set its variable in `terraform.tfvars`. `infra/terraform/variables.tf` lists each variable and its default.
+`scripts/tf.sh` loads the keys from `.env.local` and never prints them. It refuses `apply` unless `HARMONY_TF_ALLOW_APPLY=1` is set and `infra/terraform` is the same as on `origin/main`. If `terraform.tfvars` sets no `access_code`, Terraform makes a 16-character passcode. To change the plan of a service, set its variable in `terraform.tfvars`. `infra/terraform/variables.tf` lists each variable and its default.
 
 The recurring cost is about $63 a month on Render with the default `worker_plan = "standard"`. Temporal Cloud adds a usage cost after its free credits end.
 
@@ -374,7 +366,7 @@ The default run tests the health endpoint, the passcode gate, a new session and 
 
 | Task | Command |
 |---|---|
-| Show spend and the live switch | `scripts/hosted_admin.sh status` |
+| Show the state of the live switch | `scripts/hosted_admin.sh status` |
 | Stop all model calls at once | `scripts/hosted_admin.sh pause` |
 | Start model calls again | `scripts/hosted_admin.sh resume` |
 | Retire every world | `scripts/hosted_admin.sh wipe --yes` |

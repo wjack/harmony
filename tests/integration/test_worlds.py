@@ -8,7 +8,6 @@ import asyncio
 import shutil
 from collections.abc import Sequence
 from dataclasses import replace
-from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -25,7 +24,7 @@ from harmony.auth.session import SESSION_COOKIE, sign_session_id
 from harmony.config import Settings
 from harmony.db.models import Event, Org, VisitorSession, World, WorldWorkflow
 from harmony.events.bus import SESSION_CHANNEL
-from harmony.llm.budget_pg import HostedCaps, set_live
+from harmony.llm.live_switch import set_live
 from harmony.seeds.loader import DEFAULT_SCENARIO, SCENARIOS_DIR, load_scenario, load_world
 from harmony.temporal.workflows.payloads import request_workflow_id
 from harmony.worlds.retirer import SyncRetirer
@@ -124,7 +123,6 @@ async def test_start_creates_the_session_and_its_world_lazily(
     assert str(world.id) == started["world_id"]
     assert world.build_sha == app_settings.world_build
     row = await _visitor_row(db_sessionmaker, started["session_id"])
-    assert row.budget_lineage == world.budget_lineage
     assert row.desk_member_id == demo_id("member", "alex")
     assert row.network_world_id is None
 
@@ -258,21 +256,6 @@ async def test_reset_forks_a_fresh_world_and_retires_the_old_one(
     assert await _org_count(db_sessionmaker, new) == DEMO_ORGS
 
 
-async def test_reset_carries_the_budget_lineage(
-    app: FastAPI, db_sessionmaker: Sessionmaker
-) -> None:
-    async with visitor(app) as v:
-        started = await v.start()
-        first = (await v.json("POST", "/worlds/reset"))["session"]
-        second = (await v.json("POST", "/worlds/reset"))["session"]
-
-    lineage = (await _visitor_row(db_sessionmaker, started["session_id"])).budget_lineage
-    worlds = await _worlds(db_sessionmaker)
-    world_ids = [UUID(s["world_id"]) for s in (started, first, second)]
-    assert len(set(world_ids)) == 3
-    assert {worlds[world_id].budget_lineage for world_id in world_ids} == {lineage}
-
-
 async def test_a_retirement_that_keeps_rows_emits_world_retired(
     app: FastAPI, db_sessionmaker: Sessionmaker
 ) -> None:
@@ -347,17 +330,13 @@ def _starting(
     starter: _RecordingStarter,
     *,
     build_sha: str,
-    caps: HostedCaps | None = None,
+    live_models: bool = False,
 ) -> FastAPI:
-    """`app` with `starter` in place of Temporal's, and `caps` as hosted live calls."""
+    """`app` with `starter` in place of Temporal's, and `live_models` as the deployment's."""
     app.dependency_overrides[get_world_service] = lambda: WorldService(
-        sm, build_sha=build_sha, retirer=SyncRetirer(sm), requests=starter, caps=caps
+        sm, build_sha=build_sha, retirer=SyncRetirer(sm), requests=starter, live_models=live_models
     )
     return app
-
-
-# Hosted caps with only a lineage key, so no global row is needed.
-LIVE_CAPS = HostedCaps(lineage_usd=Decimal(10))
 
 
 async def test_creating_a_world_starts_no_seeded_request(
@@ -457,7 +436,7 @@ async def test_a_seeded_request_waits_while_live_calls_cant_run(
     app: FastAPI, app_settings: Settings, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build, caps=LIVE_CAPS)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build, live_models=True)
     await set_live(db_sessionmaker, enabled=False)
     async with visitor(app) as v:
         world = UUID((await v.start())["world_id"])
@@ -475,7 +454,7 @@ async def test_a_fork_while_live_calls_cant_run_starts_it_once_they_can(
     app: FastAPI, app_settings: Settings, db_engine: AsyncEngine, db_sessionmaker: Sessionmaker
 ) -> None:
     starter = _RecordingStarter(db_sessionmaker)
-    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build, caps=LIVE_CAPS)
+    _starting(app, db_sessionmaker, starter, build_sha=app_settings.world_build, live_models=True)
     await set_live(db_sessionmaker, enabled=False)
     async with visitor(app) as v:
         await v.start()
@@ -487,7 +466,7 @@ async def test_a_fork_while_live_calls_cant_run_starts_it_once_they_can(
         db_sessionmaker,
         starter,
         build_sha=_world_build(app_settings, "the-next-build"),
-        caps=LIVE_CAPS,
+        live_models=True,
     )
     async with visitor(deployed, cookies) as v:
         # The fork keeps Helen, while live models are still paused.
@@ -552,7 +531,6 @@ async def test_a_world_whose_scenario_a_later_build_removed_forks_into_the_defau
         scenarios_dir=tmp_path,
     )
     session_id = await build_a.start(None, scenario="ghost")
-    lineage = (await _visitor_row(db_sessionmaker, str(session_id))).budget_lineage
     cookies = httpx.Cookies()
     cookies.set(SESSION_COOKIE, sign_session_id(session_id, app_settings.session_secret_value()))
 
@@ -575,7 +553,6 @@ async def test_a_world_whose_scenario_a_later_build_removed_forks_into_the_defau
         "harmony-demo",
         _world_build(app_settings, "build-b"),
     )
-    assert {world.budget_lineage for world in worlds.values()} == {lineage}
     assert {w.status for w in worlds.values() if w.scenario == "ghost"} == {"retired"}
 
     async with visitor(deployed) as stranger:
@@ -629,13 +606,11 @@ async def test_the_admin_wipe_needs_the_secret_and_retires_every_world(
         for world_id in worlds:
             assert await _org_count(db_sessionmaker, world_id) == 0
 
-        # The session survives with no world; start gives it a fresh one, same lineage.
+        # The session survives with no world; start gives it a fresh one.
         await v.request("GET", "/session", expect=401)
         restarted = await v.start()
         assert restarted["session_id"] == first["session_id"]
         assert restarted["world_id"] not in {first["world_id"], *map(str, worlds)}
-    lineage = (await _visitor_row(db_sessionmaker, first["session_id"])).budget_lineage
-    assert worlds[UUID(first["world_id"])].budget_lineage == lineage
 
 
 # --- SyncRetirer ----------------------------------------------------------------------

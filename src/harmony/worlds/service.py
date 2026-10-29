@@ -11,16 +11,16 @@ request (the Vantage probe, in the demo scenario) starts the first time the sess
 acting member belongs to its requester or a recipient: after act-as
 (`start_requests_for`), and after a switch that keeps the acting member. A
 `world_workflows` row for the request's workflow means it started, so it starts at
-most once per world. With hosted caps on, it waits while the session's live calls
-can't run (paused, a spent cap, a provider block): its threads' first turns would be
-refused and end for good. The next act-as or switch once they can run starts it.
+most once per world. With live models, it waits while live calls can't run (paused,
+or a provider block): its threads' first turns would be refused and end for good. The
+next act-as or switch once they can run starts it.
 
-While the passcode gate is on, the caller passes its `CreationLimits`: new sessions
-and wiped-world re-creates or Resets are counted before anything is seeded.
+While the passcode gate is on, the caller passes its `CreationLimits`: wiped-world
+re-creates and Resets are counted per session before anything is seeded. New sessions
+are not limited.
 
 Worlds are never truncated in place: forking avoids racing workers that are mid-turn in
-the old world (§11.1). Budgets hang off the session's `budget_lineage`, which every
-fork keeps, so a reset never refills them.
+the old world (§11.1).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from harmony.db.models import Member, VisitorSession, World, WorldWorkflow
 from harmony.db.models.choices import WorldStatus
 from harmony.db.uow import unit_of_work
 from harmony.events.bus import SESSION_CHANNEL
-from harmony.llm.budget_pg import HostedCaps, visitor_budget
+from harmony.llm.live_switch import live_report
 from harmony.seeds.ids import seed_id
 from harmony.seeds.loader import (
     DEFAULT_SCENARIO,
@@ -74,13 +74,11 @@ class TooManyWorlds(Exception):
 
 
 class CreationLimits(Protocol):
-    """World-creation limits while the passcode gate is on (`api.gate.WorldLimits`).
-    Each method counts one creation or raises `TooManyWorlds`."""
-
-    def new_session(self, client_key_hash: str | None) -> None: ...
+    """World-creation limits while the passcode gate is on (`api.gate.WorldLimits`)."""
 
     def recreate(self, session_id: UUID) -> None:
-        """A Reset or a wiped-world re-create of `session_id`'s world."""
+        """Count a Reset or a wiped-world re-create of `session_id`'s world, or raise
+        `TooManyWorlds`."""
         ...
 
 
@@ -137,17 +135,17 @@ class WorldService:
         build_sha: str,
         retirer: Retirer,
         requests: RequestStarter | None = None,
-        caps: HostedCaps | None = None,
+        live_models: bool = False,
         scenarios_dir: Path = SCENARIOS_DIR,
         default_scenario: str = DEFAULT_SCENARIO,
     ) -> None:
         """Without `requests` (no Temporal), seeded open requests stay unstarted. With
-        `caps` (hosted live calls), they wait while the session's calls can't run."""
+        `live_models`, they wait while live calls can't run (the live switch)."""
         self._sessionmaker = sessionmaker
         self._build_sha = build_sha
         self._retirer = retirer
         self._requests = requests
-        self._caps = caps
+        self._live_models = live_models
         self._scenarios_dir = scenarios_dir
         self._default_scenario = default_scenario
 
@@ -158,7 +156,6 @@ class WorldService:
         lens: WorldLens = "desk",
         scenario: str | None = None,
         limits: CreationLimits | None = None,
-        client_key_hash: str | None = None,
     ) -> UUID:
         """Make sure the session (new if `session_id` is None or unknown) has a live,
         current-build world for `lens`; returns the session ID.
@@ -169,9 +166,8 @@ class WorldService:
         `ScenarioError` only for a bad `scenario` argument: a scenario stored on the
         session's old world that this build no longer has falls back to the default.
 
-        With `limits`, a new session and a wiped world's re-create are counted (a fork
-        for a new build is not), and `TooManyWorlds` is raised over a limit. A new
-        session records `client_key_hash`.
+        With `limits`, a wiped world's re-create is counted (a fork for a new build is
+        not), and `TooManyWorlds` is raised over the limit.
         """
         if session_id is not None:
             state = await self._lens_state(session_id, lens)
@@ -182,7 +178,7 @@ class WorldService:
                             session_id, lens, state.scenario, expect=state.world_id, stored=True
                         )
                     return session_id
-                # The world was wiped or never created: a fresh one, same lineage.
+                # The world was wiped or never created: a fresh one.
                 admit = (lambda: limits.recreate(session_id)) if limits is not None else None
                 if scenario is not None:
                     await self._switch(
@@ -203,8 +199,6 @@ class WorldService:
             lens,
             scenario or self._default_scenario,
             expect=_ANY,
-            admit=(lambda: limits.new_session(client_key_hash)) if limits is not None else None,
-            client_key_hash=client_key_hash,
         )
         assert switch is not None
         return switch.session_id
@@ -265,10 +259,10 @@ class WorldService:
             session_id, lens, state.scenario, expect=state.world_id, stored=True
         )
 
-    async def start_requests_for(self, session_id: UUID, world_id: UUID, org_id: UUID) -> None:
+    async def start_requests_for(self, world_id: UUID, org_id: UUID) -> None:
         """Start the seeded open requests of `world_id` that `org_id` is party to, as
-        requester or recipient, and that haven't started: after `session_id` acts as
-        one of its members (3.3).
+        requester or recipient, and that haven't started: after the session acts as one
+        of its members (3.3).
 
         Never raises: the visitor's world works without them; only their
         conversations are missing from it.
@@ -284,7 +278,7 @@ class WorldService:
         except Exception:
             log.exception("finding the seeded requests of world %s failed", world_id)
             return
-        await self._start_party_requests(session_id, world_id, scenario, org_id)
+        await self._start_party_requests(world_id, scenario, org_id)
 
     async def retire_all(self) -> list[UUID]:
         """Retire every world that isn't retired yet, one world at a time (the admin
@@ -329,11 +323,10 @@ class WorldService:
         stored: bool = False,
         keep_member: bool = True,
         admit: Callable[[], None] | None = None,
-        client_key_hash: str | None = None,
     ) -> WorldSwitch | None:
         """Seed a new world and point the session's `lens` at it, in one transaction.
 
-        `session_id=None` creates the session too, recording `client_key_hash`. With
+        `session_id=None` creates the session too. With
         `expect`, nothing happens (None is returned) unless the session still points
         at that world: two requests racing to fork the same world fork it once.
         `stored` says the name came from the session's old world rather than from the
@@ -366,15 +359,10 @@ class WorldService:
             )
             start_slug = keep_slug or (scenario.story.member if scenario.story else None)
 
-            lineage = visitor.budget_lineage if visitor is not None else uuid4()
-            seeded = await seed_world(
-                uow, scenario, build_sha=self._build_sha, budget_lineage=lineage
-            )
+            seeded = await seed_world(uow, scenario, build_sha=self._build_sha)
             member_id = seeded.member_ids.get(start_slug or "", seeded.default_member_id)
             if visitor is None:
-                visitor = VisitorSession(
-                    id=uuid4(), budget_lineage=lineage, epoch=0, client_key_hash=client_key_hash
-                )
+                visitor = VisitorSession(id=uuid4(), epoch=0)
                 session.add(visitor)
             else:
                 # Streams opened on the old world close on the epoch change.
@@ -393,7 +381,7 @@ class WorldService:
 
         kept_org = _org_of(scenario, keep_slug) if keep_slug is not None else None
         if kept_org is not None:
-            await self._start_party_requests(new_session_id, world_id, scenario, kept_org)
+            await self._start_party_requests(world_id, scenario, kept_org)
         if previous is not None:
             await self._retire(previous)
         return WorldSwitch(new_session_id, lens, world_id, previous)
@@ -404,7 +392,7 @@ class WorldService:
         A `stored` name, read off the session's old world, may be one a later build
         renamed or removed. Failing on it would leave the session unable to fork, reset
         or start again, so it falls back to the default scenario; `_switch` keeps the
-        lineage and, where it still exists, the acting member's slug. A name the caller
+        acting member's slug where it still exists. A name the caller
         passed is never replaced: its error reaches the caller (a 400).
         """
         requested = name or self._default_scenario
@@ -421,13 +409,11 @@ class WorldService:
             )
             return load_scenario(self._default_scenario, self._scenarios_dir)
 
-    async def _start_party_requests(
-        self, session_id: UUID, world_id: UUID, scenario: Scenario, org_id: UUID
-    ) -> None:
+    async def _start_party_requests(self, world_id: UUID, scenario: Scenario, org_id: UUID) -> None:
         """Start the seeded requests `org_id` is party to that have no `world_workflows`
         row yet, one caller per world at a time, so a double click starts each once.
-        While `session_id`'s live calls can't run, nothing starts and nothing is
-        recorded, so a later act-as or switch starts them."""
+        While live calls can't run, nothing starts and nothing is recorded, so a later
+        act-as or switch starts them."""
         if self._requests is None:
             return
         request_ids = _party_requests(scenario, org_id)
@@ -438,13 +424,13 @@ class WorldService:
 
         by_workflow = {request_workflow_id(world_id, rid): rid for rid in request_ids}
         try:
-            if self._caps is not None:
-                budget = await visitor_budget(self._sessionmaker, self._caps, session_id=session_id)
-                if budget.stopped_by is not None:
+            if self._live_models:
+                stopped_by = (await live_report(self._sessionmaker)).stopped_by
+                if stopped_by is not None:
                     log.info(
                         "seeded requests of world %s wait: live calls stopped by %s",
                         world_id,
-                        budget.stopped_by,
+                        stopped_by,
                     )
                     return
             async with self._sessionmaker() as session, session.begin():

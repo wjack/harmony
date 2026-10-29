@@ -234,14 +234,11 @@ headers = "".join(Path(name).read_text() for name in header_files)
 stub = Path(os.environ["STUB_DIR"])
 state = stub / "paused"
 path = args[-1].split("/api", 1)[1]
-if path == "/admin/live":
+if path == "/admin/live" and opts.get("-X") == "POST":
     state.write_text(json.dumps(not json.loads(opts["--data"])["enabled"]))
 paused = json.loads(state.read_text()) if state.exists() else False
-live = {"paused": paused, "provider_blocked_until": None, "global": None}
 bodies = {
-    "/admin/live": live,
-    "/admin/spend": {"live": live, "today": None, "lineages_today": 0,
-                     "top_lineages": [], "top_clients": []},
+    "/admin/live": {"paused": paused, "provider_blocked_until": None},
     "/admin/wipe": {"retired_world_ids": ["a", "b"]},
 }
 with (stub / "curl.log").open("a") as log:
@@ -314,7 +311,7 @@ def test_hosted_admin_pause_sends_the_secret_from_a_file_it_then_deletes(tmp_pat
     assert "live models are paused at http://admin.test" in result.stdout
     assert [(c["argv"][c["argv"].index("-X") + 1], c["argv"][-1]) for c in calls] == [
         ("POST", "http://admin.test/api/admin/live"),
-        ("GET", "http://admin.test/api/admin/spend"),
+        ("GET", "http://admin.test/api/admin/live"),
     ]
     _assert_secret_kept_off_argv(result, calls)
 
@@ -323,8 +320,8 @@ def test_hosted_admin_reads_terraform_outputs_in_process(tmp_path: Path) -> None
     result, calls = _admin(tmp_path, "status", from_terraform=True)
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["live"]["paused"] is False
-    assert calls[0]["argv"][-1] == "https://harmony.example.test/api/admin/spend"
+    assert json.loads(result.stdout)["paused"] is False
+    assert calls[0]["argv"][-1] == "https://harmony.example.test/api/admin/live"
     _assert_secret_kept_off_argv(result, calls)
 
 

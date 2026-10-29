@@ -172,7 +172,7 @@ function ComposerSection() {
   );
 }
 
-/** The composer while today's budget is spent: the strip says so, and nothing sends. */
+/** The composer while the demo's budget is spent: the strip says so, and nothing sends. */
 function BlockedComposerSection() {
   const unavailable = useUnavailable();
   const [reply, setReply] = useState("Can Northlake do it by Nov 4 instead?");
@@ -256,7 +256,7 @@ function OutreachCardSection({ edit, folded: initiallyFolded = false, declineOpe
         onDeclineOpenChange={setDeclineOpen}
         declinePending={false}
         error={null}
-        blocked={blocked ? budgetLine("daily_exhausted") : null}
+        blocked={blocked ? budgetLine("demo_exhausted") : null}
         arriving={false}
         onApprove={(body) => {
           setLog(`approve ${JSON.stringify(body)}`);
@@ -376,7 +376,7 @@ export default [
   {
     title: "Chat: request waiting, budget used up",
     description: "The strip sits on the card, not the box: Approve, Decline and the box hold; ticks and wording still work.",
-    fixtures: { ...chatRoutes("drafted"), "GET /api/budget": budgets.dailyExhausted },
+    fixtures: { ...chatRoutes("drafted"), "GET /api/budget": budgets.demoExhausted },
     ...PAGE,
     height: 900,
     render: () => <Chat />,
@@ -401,11 +401,11 @@ export default [
     render: () => <Chat />,
   },
   {
-    title: "Chat: today's budget is used up",
-    description: "Claude's turn stopped on the daily cap and Ridgeline's thread with it; the composer waits for the reset.",
+    title: "Chat: the demo's budget is used up",
+    description: "Claude's turn stopped on the demo's budget and Ridgeline's thread with it; the composer waits until it's back.",
     fixtures: {
-      ...chatRoutes("sent", { turnFailure: "daily_budget", stopReason: "daily_budget" }),
-      "GET /api/budget": budgets.dailyExhausted,
+      ...chatRoutes("sent", { turnFailure: "demo_budget", stopReason: "demo_budget" }),
+      "GET /api/budget": budgets.demoExhausted,
     },
     ...PAGE,
     height: 820,
@@ -454,7 +454,7 @@ export default [
           note={declinedLine("respond to this", "bio")}
           busy={false}
           error={null}
-          blocked={budgetLine("daily_exhausted")}
+          blocked={budgetLine("demo_exhausted")}
           onRetry={noop}
         />
       </div>
@@ -496,7 +496,7 @@ export default [
   },
   {
     title: "Composer: budget used up",
-    fixtures: { "GET /api/budget": budgets.dailyExhausted },
+    fixtures: { "GET /api/budget": budgets.demoExhausted },
     render: () => <BlockedComposerSection />,
   },
   { title: "Messages and activity", render: () => <MessagesSection /> },
@@ -593,11 +593,11 @@ export default [
   },
   {
     title: "Request status: stopped",
-    description: "Ridgeline's thread stopped on today's cap; the line says why, by the budget's state now.",
-    fixtures: { "GET /api/budget": budgets.dailyExhausted },
+    description: "Ridgeline's thread stopped on the demo's budget; the line says why, by the budget's state now.",
+    fixtures: { "GET /api/budget": budgets.demoExhausted },
     render: () => (
       <Column>
-        <RequestStatusPanel view={requestAt(initialState("sent", { stopReason: "daily_budget" }))} memberId={ALEX} />
+        <RequestStatusPanel view={requestAt(initialState("sent", { stopReason: "demo_budget" }))} memberId={ALEX} />
         <RequestStatusPanel view={requestAt(initialState("sent", { stopReason: "refused" }))} memberId={ALEX} />
       </Column>
     ),

@@ -44,8 +44,8 @@ const CALLOUTS: readonly Callout[] = [
     key: "budget",
     side: "below",
     extra: true,
-    name: "Live budget",
-    text: "What's left of this session's budget for live models.",
+    name: "Live models",
+    text: "Whether live models are on right now, or why they've stopped.",
   },
   {
     key: "reset",
@@ -66,7 +66,8 @@ const LIVE: ReadonlySet<RealtimeStatus> = new Set(["connecting", "open", "reconn
  * The demo bar's "?" (ARCHITECTURE.md §11.4): "What's on screen", a cheat sheet over the
  * whole app. A light scrim, a ring on each of the demo's key controls and a callout with
  * an arrow saying what it does, all at once; a control that isn't on screen goes without
- * one. Above its close, who's on the network: the story's summary over every org. Demo
+ * one. In the middle, a red-ringed "Close this guide"; at the bottom, who's on the
+ * network: the story's summary over every org. Demo
  * controls' "See user guide" opens it too, and so does the intro's Next, once the demo is
  * up as Alex; closing that one leaves the suggested message in New chat's composer. The
  * first time one of those closes, a tip points at the "?": "See this guide any time".
@@ -122,6 +123,8 @@ export function HelpButton() {
             onCloseAutoFocus={(event) => {
               if (handingOff.current) event.preventDefault();
             }}
+            // Its title is for screen readers only, and it has no description.
+            aria-describedby={undefined}
             className="fixed inset-0 z-50 outline-none data-[state=open]:animate-fade-in"
           >
             <Overlay trigger={trigger} />
@@ -183,6 +186,7 @@ function GuideTip() {
 function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) {
   const list = useRef<HTMLUListElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
   const [placements, setPlacements] = useState<Placement[]>([]);
   const network = useDemoStory().data?.network ?? null;
 
@@ -199,7 +203,7 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
         if (callout === null || target === null) return [];
         return [{ key, side, extra, target, width: callout.offsetWidth, height: callout.offsetHeight }];
       });
-      const obstacles = [trigger.current, panel.current].flatMap((element) => {
+      const obstacles = [trigger.current, panel.current, close.current].flatMap((element) => {
         const box = element === null ? null : onScreen(element, viewport);
         return box === null ? [] : [box];
       });
@@ -286,16 +290,17 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
         })}
       </ul>
 
-      <div ref={panel} className="absolute bottom-6 left-1/2 flex -translate-x-1/2 flex-col items-center gap-2">
+      <div ref={panel} className="absolute bottom-6 left-1/2 -translate-x-1/2">
         {network !== null && <NetworkCard network={network} />}
-        <div className="flex items-center gap-3 rounded-full bg-demo py-1.5 pr-1.5 pl-4 text-[13px] whitespace-nowrap text-demo-text shadow-modal ring-1 ring-demo-border">
-          <Dialog.Title className="font-medium">What&apos;s on screen</Dialog.Title>
-          <Dialog.Description className="text-demo-muted">Press Esc to close.</Dialog.Description>
-          <Dialog.Close className="inline-flex h-7 items-center rounded-full bg-demo-text px-3 font-medium text-demo transition-colors hover:bg-white">
-            Got it
-          </Dialog.Close>
-        </div>
       </div>
+
+      <Dialog.Title className="sr-only">What&apos;s on screen</Dialog.Title>
+      <Dialog.Close
+        ref={close}
+        className="absolute top-1/2 left-1/2 inline-flex h-10 -translate-x-1/2 -translate-y-1/2 items-center rounded-full bg-demo px-5 text-[14px] font-medium whitespace-nowrap text-demo-text shadow-modal ring-2 ring-danger transition-colors hover:bg-danger hover:text-white"
+      >
+        Close this guide
+      </Dialog.Close>
     </>
   );
 }

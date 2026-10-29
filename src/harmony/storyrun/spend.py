@@ -1,8 +1,7 @@
 """What a run spent, and how fast its turns ran.
 
 - The world's spend at each beat, from its checkpointed model calls.
-- Its lineage's peak `spent + reserved`: sampled from the hosted `budgets` row while the
-  run plays (`LineageMeter`, hosted caps on), else approximated from the model calls.
+- Its peak `spent + reserved`, approximated from the model calls.
 - The same peak re-priced at production prices (3.14): each call's request is put back
   on its role's production model (`llm.requests.production_body`), each turn holds its
   largest re-priced call for as long as it ran, and settles its re-priced cost when it
@@ -30,10 +29,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from harmony.agents import keys
-from harmony.db.models import AgentTurn, Budget, Consult, ModelCall, Org, World
+from harmony.db.models import AgentTurn, Consult, ModelCall, Org
 from harmony.db.models.choices import ModelRole
 from harmony.domain.agent_turns import rev_turn_id
-from harmony.llm.budget_pg import lineage_key
 from harmony.llm.pricing import call_cost, worst_case_cost
 from harmony.llm.requests import ROLE_PROFILES, Tier, production_body
 from harmony.llm.wire import JsonObject, as_str
@@ -81,30 +79,6 @@ class RunSpend:
     latencies_ms: list[int]
     models: list[str]
     refusals: int
-
-
-class LineageMeter:
-    """Samples the world lineage's hosted budget row while the run plays: its peak
-    `spent + reserved`, or None when there is no row (hosted caps off)."""
-
-    def __init__(self, sessionmaker: Sessionmaker) -> None:
-        self._sessionmaker = sessionmaker
-        self._key: str | None = None
-        self.peak_usd: Decimal | None = None
-
-    async def sample(self, world_id: UUID) -> None:
-        async with self._sessionmaker() as session:
-            if self._key is None:
-                lineage = await session.scalar(
-                    select(World.budget_lineage).where(World.id == world_id)
-                )
-                if lineage is None:
-                    return
-                self._key = lineage_key(lineage)
-            row = await session.get(Budget, self._key, populate_existing=True)
-        if row is not None:
-            held = row.spent_usd + row.reserved_usd
-            self.peak_usd = held if self.peak_usd is None else max(self.peak_usd, held)
 
 
 # --- Collecting -----------------------------------------------------------------------
@@ -266,7 +240,6 @@ def _without_iterations(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 __all__ = [
     "CallRow",
     "Held",
-    "LineageMeter",
     "RunSpend",
     "TurnCalls",
     "as_measured",

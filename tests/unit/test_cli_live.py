@@ -15,7 +15,7 @@ from harmony import cli_live
 from harmony.cli import app
 from harmony.config import Settings
 from harmony.db.models import LiveControls
-from harmony.llm.budget_pg import LIVE_SWITCH_KEY
+from harmony.llm.live_switch import LIVE_SWITCH_KEY
 
 runner = CliRunner()
 

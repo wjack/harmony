@@ -152,7 +152,6 @@ async def _stage(app: FastAPI, settings: Settings, sm: Sessionmaker) -> Stage:
                     id=session_id,
                     desk_world_id=world_id,
                     desk_member_id=demo_id("member", name),
-                    budget_lineage=uuid4(),
                 )
             )
         await uow.commit()

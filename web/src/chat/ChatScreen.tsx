@@ -111,7 +111,7 @@ function ChatView({ detail, conversationId }: { detail: ConversationDetail; conv
   const requestIds = detail.items.flatMap((item) => (item.type === "request_status" ? [item.request_id] : []));
   // Once every request has closed, nothing more will arrive.
   const awaitingNetwork = useAnyRequestActive(requestIds);
-  // The composer's own budget strip says more than this one while a cap is spent.
+  // The composer's own budget strip says more than this one while live turns are stopped.
   const showBanner = awaitingNetwork && !bannerClosed && card === null && blocked === null;
 
   const { scrollRef, contentRef, atBottom, onScroll, toBottom, revealTop } = useStickToBottom([

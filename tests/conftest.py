@@ -22,7 +22,6 @@ import tempfile
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -69,9 +68,6 @@ def prod_settings(**overrides: Any) -> Settings:
         "model_override": None,
         "session_secret": SecretStr("s" * 40),
         "access_code": SecretStr("correct horse battery"),
-        "daily_budget_usd": Decimal(60),
-        "global_budget_usd": Decimal(250),
-        "client_daily_budget_usd": Decimal(25),
     }
     return settings_without_dotenv(**(values | overrides))
 

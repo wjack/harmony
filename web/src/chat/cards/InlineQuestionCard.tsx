@@ -72,9 +72,9 @@ const SETTLED: Record<NonNullable<InlineQuestionItem["action"]>, Settled> = {
  * that organization. The answer goes only to the askers; afterwards Claude may ask in
  * the chat whether part of it may go to the request's other conversations.
  *
- * The answer hands the move to the representative, whose turn a spent cap or a pause
- * would refuse, ending the thread for good: while the budget isn't `ok` it holds, and
- * says why, and the thread waits on the member as it did (LIVE_DEMO_PLAN 3.4).
+ * The answer hands the move to the representative, whose turn a spent budget or a
+ * pause would refuse, ending the thread for good: while the budget isn't `ok` it holds,
+ * and says why, and the thread waits on the member as it did (LIVE_DEMO_PLAN 3.4).
  */
 export function InlineQuestionCard({ item, us, busy, blocked, error, onAnswer }: InlineQuestionCardProps) {
   const titleId = useId();

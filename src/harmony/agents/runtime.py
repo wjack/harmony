@@ -74,7 +74,7 @@ contract's).
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Annotated, Final, Literal, Protocol
 from uuid import UUID
@@ -351,24 +351,15 @@ class CheckpointedModel(Protocol):
     ) -> CheckpointedCall: ...
 
 
-# The hosted budget keys a call reserves against (`budget_pg.hosted_budget_keys`).
-BudgetKeys = Callable[[], Awaitable[Sequence[str]]]
-
-
 @dataclass(frozen=True, slots=True)
 class CheckpointedClient:
     """`CheckpointedModel` over `call_model_checkpointed` (activities build one per turn
-    with `heartbeat=activity.heartbeat`).
-
-    `budget_keys` is asked again for every call: the day caps are keyed on the UTC
-    date, and a turn or answerer running past midnight must charge its later calls to
-    the new day."""
+    with `heartbeat=activity.heartbeat`)."""
 
     sessionmaker: async_sessionmaker[AsyncSession]
     client: ModelClient
     guard: SpendGuard
     heartbeat: HeartbeatCallback | None = None
-    budget_keys: BudgetKeys | None = None
 
     async def call(
         self,
@@ -383,7 +374,6 @@ class CheckpointedClient:
             request,
             on_stream_event=on_stream_event,
             heartbeat=self.heartbeat,
-            budget_keys=await self.budget_keys() if self.budget_keys is not None else (),
         )
 
 
@@ -886,7 +876,6 @@ __all__ = [
     "MAX_STEPS",
     "NOT_RUN",
     "NOT_RUN_YET",
-    "BudgetKeys",
     "CardRaised",
     "CheckpointedClient",
     "CheckpointedModel",

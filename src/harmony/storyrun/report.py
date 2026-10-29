@@ -274,19 +274,14 @@ def run_spend_lines(
     *,
     ledger_before: Decimal | None,
     ledger_after: Decimal | None,
-    measured_peak_usd: Decimal | None,
 ) -> list[str]:
-    """The run's spend: the ledger's, the world's at each beat, and the lineage's peak
-    `spent + reserved`, measured and re-priced at production prices (3.14)."""
+    """The run's spend: the ledger's, the world's at each beat, and its peak
+    `spent + reserved`, approximated from the model calls and re-priced at production
+    prices (3.14)."""
     ledger = (
         f"${ledger_after - ledger_before:.4f}"
         if ledger_before is not None and ledger_after is not None
         else "n/a (no spend ledger)"
-    )
-    measured = (
-        f"${measured_peak_usd:.4f} (sampled from the hosted budget row)"
-        if measured_peak_usd is not None
-        else f"${peak_usd(spend.turns, as_measured):.4f} (approximated from the model calls)"
     )
     return [
         f"  ledger spend this run: {ledger}",
@@ -297,7 +292,7 @@ def run_spend_lines(
             f"{describe(beat.atom)}"
             for beat in run.seen
         ),
-        f"  lineage peak spent + reserved: {measured}",
+        f"  peak spent + reserved: ${peak_usd(spend.turns, as_measured):.4f}",
         f"  re-priced at production prices: ${peak_usd(spend.turns, at_production_prices):.4f}",
     ]
 

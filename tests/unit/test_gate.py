@@ -16,7 +16,6 @@ import time
 from base64 import b64encode
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -956,24 +955,6 @@ async def test_at_most_max_waiting_failures_wait_for_a_slot(
     assert sum(task.done() for task in waits) == 7
     await asyncio.gather(*waits)
     assert pacer.waiting == 0
-
-
-def test_new_sessions_are_limited_per_client_and_per_day() -> None:
-    today = datetime(2026, 10, 26, 18, 0, tzinfo=UTC)
-    current = [today]
-    limits = WorldLimits(per_client=5, daily=8, now=lambda: current[0])
-    for _ in range(5):
-        limits.new_session("a")
-    with pytest.raises(TooManyWorlds) as refused:
-        limits.new_session("a")
-    assert refused.value.retry_after_s == 6 * 3600
-    limits.new_session("b")
-    limits.new_session(None)
-    limits.new_session(None)
-    with pytest.raises(TooManyWorlds):
-        limits.new_session(None)
-    current[0] = today + timedelta(hours=6)
-    limits.new_session("a")
 
 
 def test_recreates_track_a_bounded_number_of_sessions() -> None:

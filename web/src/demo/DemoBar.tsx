@@ -2,9 +2,9 @@ import {
   ArrowRight,
   CalendarDays,
   CircleSlash,
+  Radio,
   RotateCcw,
   SlidersHorizontal,
-  Wallet,
   Waypoints,
   WifiOff,
   X,
@@ -40,10 +40,11 @@ interface DemoBarProps {
  * product on purpose, so demo controls are never mistaken for Claude: who you're acting
  * as, the network view (which watches every side, so it is the demo's, not the
  * product's, and counts the other accounts with an item waiting on them), the world
- * date, budget, cross-account alerts and Reset, and a "?" that says what the demo's key
- * controls do (HelpOverlay.tsx; each control it points at carries `data-help`).
+ * date, whether live models are on, cross-account alerts and Reset, and a "?" that says
+ * what the demo's key controls do (HelpOverlay.tsx; each control it points at carries
+ * `data-help`).
  *
- * The budget, Reset and "?" are pinned right and never leave it. Who and when take the
+ * Live models, Reset and "?" are pinned right and never leave it. Who and when take the
  * room the alerts leave, measured on their own group: short of it, their labels drop
  * first ("Acting as", the org's full name, "Demo controls"), and only then are they cut
  * at their end. The date is kept small: the scenario's clock, not a control.
@@ -126,7 +127,7 @@ export function DemoBar({ session, offline = false, reconnecting = false }: Demo
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        <Budget />
+        <LiveModels />
         {session !== null && (
           <BarButton
             label="Reset"
@@ -170,21 +171,21 @@ function ActingAs({ member }: { member: MemberView }) {
 }
 
 /**
- * "Live · $7.40 left", or the line for the cap that stops live turns (LIVE_DEMO_PLAN
- * 3.5). Nothing while hosted caps are off. It opens Demo controls' "Model and spend".
+ * "Live" while live models run, or the line for what stops them (LIVE_DEMO_PLAN 3.5): a
+ * pause, or the demo's spent budget. Nothing while the server runs scripted models. It
+ * opens Demo controls' "Models".
  */
-function Budget() {
+function LiveModels() {
   const budget = useBudget().data;
   if (budget?.live !== true) return null;
   const line = budgetLine(budget.state);
-  const remaining = budget.session?.remaining_usd;
   return (
     <>
       <Divider />
       <button
         type="button"
         data-help="budget"
-        title="This session's live-model budget"
+        title="Live models"
         onClick={() => {
           openDemoControls();
         }}
@@ -195,10 +196,8 @@ function Budget() {
       >
         {line === null ? (
           <>
-            <Wallet size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
-            <span className="font-medium tabular-nums">
-              {remaining === undefined ? "Live" : `Live · $${remaining.toFixed(2)} left`}
-            </span>
+            <Radio size={13} strokeWidth={1.75} className="text-demo-muted" aria-hidden />
+            <span className="font-medium">Live</span>
           </>
         ) : (
           <>

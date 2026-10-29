@@ -1,8 +1,7 @@
 """The representative turn activity (`AgentActivities.rep_turn`), run directly.
 
-- Hosted live calls are reserved against the session lineage's budget, which Reset
-  keeps, so a visitor cannot refill their cap by resetting (§11.1, §14); the refusal
-  names the `session` cap.
+- A hosted live call reads the live switch first: while live models are paused, a turn
+  is refused before any model call, and the refusal names `paused` (3.4).
 - Only a complete response is delivered: a response cut off at `max_tokens` fails the
   turn and commits nothing, and its text never streamed.
 """
@@ -10,29 +9,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import JsonValue
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from harmony.agents.runtime import TurnIncomplete
 from harmony.config import get_settings
-from harmony.db.models import (
-    Budget,
-    BudgetReservation,
-    NetworkRequest,
-    Thread,
-    ThreadMessage,
-    VisitorSession,
-    World,
-)
+from harmony.db.models import NetworkRequest, Thread, ThreadMessage, VisitorSession
 from harmony.db.models.choices import BudgetKind
 from harmony.db.uow import unit_of_work
 from harmony.events.bus import StreamMessage
@@ -42,18 +32,10 @@ from harmony.llm import (
     ModelRequest,
     ModelResult,
     StreamEventCallback,
-    budget_pg,
 )
 from harmony.llm.budget import BudgetGuard, FreeSpend
-from harmony.llm.budget_pg import (
-    GLOBAL_KEY,
-    HostedBudgets,
-    HostedCaps,
-    daily_key,
-    ensure_budget,
-    lineage_key,
-)
 from harmony.llm.errors import BudgetExhausted
+from harmony.llm.live_switch import LiveSwitch, set_live
 from harmony.llm.pricing import OPUS_5_5
 from harmony.llm.scripted import CassetteEntry, CassetteKey, ScriptedModel
 from harmony.temporal.activities.agents import AgentActivities, RepTurnInput
@@ -61,7 +43,6 @@ from harmony.temporal.policies import MODEL_NON_RETRYABLE
 from harmony.temporal.workflows.payloads import BUDGET_EXHAUSTED_ERROR, BudgetExhaustedDetails
 from harmony.worlds.retirer import SyncRetirer
 from harmony.worlds.service import WorldService
-from tests.conftest import prod_settings, settings_without_dotenv
 from tests.integration._visitors import demo_id
 
 type Sessionmaker = async_sessionmaker[AsyncSession]
@@ -173,154 +154,47 @@ async def _northlake_messages(sm: Sessionmaker, turn: RepTurnInput) -> int:
     return count or 0
 
 
-# --- Hosted caps: per session lineage, across Reset -----------------------------------
+# --- The live switch --------------------------------------------------------------------
 
 
-async def test_hosted_turns_are_capped_per_lineage_and_reset_never_refills_it(
+async def test_a_paused_hosted_turn_is_refused_before_any_model_call(
     db_sessionmaker: Sessionmaker,
 ) -> None:
     sm = db_sessionmaker
     worlds = WorldService(sm, build_sha="test", retirer=SyncRetirer(sm))
-    session_id = await worlds.start(None)
-    world_id = await _desk_world(sm, session_id)
-    async with sm() as session:
-        lineage = await session.scalar(select(World.budget_lineage).where(World.id == world_id))
-    assert lineage is not None
-
-    # The hosted demo's live worker: no dev ledger, the Postgres caps only.
+    # The hosted demo's live worker: no dev ledger, the live switch only.
     model = _PaidModel(ScriptedModel.from_paths(get_settings().cassette_dir))
     guard = BudgetGuard(
         ledger=None,
         cap_usd=Decimal(200),
         thresholds=(Decimal(200),),
         env="prod",
-        hosted=HostedBudgets(sm),
+        switch=LiveSwitch(sm),
     )
-    agents = AgentActivities(
-        sm,
-        model,
-        guard,
-        _Publisher(),
-        model_override=OPUS_5_5,
-        hosted_caps=HostedCaps(lineage_usd=Decimal(6)),
-    )
+    agents = AgentActivities(sm, model, guard, _Publisher(), model_override=OPUS_5_5)
     env = ActivityEnvironment()
 
-    first = await env.run(agents.rep_turn, await _stage(sm, world_id))
-    assert first.stop == "end_turn"
-    calls = model.call_count
-    async with sm() as session:
-        row = await session.get_one(Budget, lineage_key(lineage))
-    assert (row.cap_usd, row.reserved_usd) == (Decimal(6), Decimal(0))
-    assert row.spent_usd > 0, "the turn was not metered against the lineage"
-
-    # The lineage's cap is spent. Reset forks a new world under the same lineage, and
-    # its turns are refused before any model call.
-    async with sm() as session, session.begin():
-        await session.execute(
-            update(Budget)
-            .where(Budget.key == lineage_key(lineage))
-            .values(spent_usd=Budget.cap_usd)
-        )
-    switch = await worlds.fork_and_reset(session_id, "desk", observed_world_id=world_id)
-    assert switch.world_id != world_id
+    await set_live(sm, enabled=False)
+    paused_world = await _desk_world(sm, await worlds.start(None))
     with pytest.raises((BudgetExhausted, ApplicationError)) as refused:
-        await env.run(agents.rep_turn, await _stage(sm, switch.world_id))
-    assert _refusing_kind(refused.value) == "session"
-    assert model.call_count == calls
+        await env.run(agents.rep_turn, await _stage(sm, paused_world))
+    assert _refusing_kind(refused.value) == "paused"
+    assert model.call_count == 0
 
-
-class _MidnightAfterFirstCall(_PaidModel):
-    """`_PaidModel` whose first call returns at 00:00 UTC, as other visitors use up the
-    day that just ended."""
-
-    def __init__(self, inner: ScriptedModel, sm: Sessionmaker, days: list[date]) -> None:
-        super().__init__(inner)
-        self._sm = sm
-        self._days = days
-
-    async def call(
-        self,
-        request: ModelRequest,
-        *,
-        on_stream_event: StreamEventCallback | None = None,
-        heartbeat: HeartbeatCallback | None = None,
-    ) -> ModelResult:
-        result = await super().call(request, on_stream_event=on_stream_event, heartbeat=heartbeat)
-        if self.call_count == 1:
-            async with self._sm() as session, session.begin():
-                await session.execute(
-                    update(Budget)
-                    .where(Budget.key == daily_key(self._days[-1]))
-                    .values(spent_usd=Budget.cap_usd)
-                )
-            self._days.append(self._days[-1] + timedelta(days=1))
-        return result
-
-
-async def test_a_turn_past_midnight_charges_its_later_calls_to_the_new_day(
-    db_sessionmaker: Sessionmaker, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sm = db_sessionmaker
-    days = [date(2026, 10, 26)]
-    monkeypatch.setattr(budget_pg, "utc_today", lambda: days[-1])
-    worlds = WorldService(sm, build_sha="test", retirer=SyncRetirer(sm))
+    await set_live(sm, enabled=True)
     world_id = await _desk_world(sm, await worlds.start(None))
-    async with sm() as session, session.begin():
-        await ensure_budget(session, GLOBAL_KEY, Decimal(250))
-    model = _MidnightAfterFirstCall(ScriptedModel.from_paths(get_settings().cassette_dir), sm, days)
-    guard = BudgetGuard(
-        ledger=None,
-        cap_usd=Decimal(200),
-        thresholds=(Decimal(200),),
-        env="prod",
-        hosted=HostedBudgets(sm),
-    )
-    caps = HostedCaps(lineage_usd=Decimal(10), daily_usd=Decimal(60), global_usd=Decimal(250))
-    agents = AgentActivities(
-        sm, model, guard, _Publisher(), model_override=OPUS_5_5, hosted_caps=caps
-    )
-
-    # Two model calls: the first before midnight, the second after it.
-    result = await ActivityEnvironment().run(agents.rep_turn, await _stage(sm, world_id))
-
-    assert (result.stop, model.call_count) == ("end_turn", 2)
-    async with sm() as session:
-        reserved = list(
-            await session.scalars(
-                select(BudgetReservation.keys).order_by(BudgetReservation.created_at)
-            )
-        )
-    assert [[key for key in keys if key.startswith("daily:")] for keys in reserved] == [
-        [daily_key(days[0])],
-        [daily_key(days[1])],
-    ]
+    result = await env.run(agents.rep_turn, await _stage(sm, world_id))
+    assert result.stop == "end_turn"
+    assert model.call_count > 0
 
 
 def _refusing_kind(error: BaseException) -> BudgetKind:
-    """The cap that refused a call, raised directly or re-raised for the workflow."""
+    """What refused a call, raised directly or re-raised for the workflow."""
     if isinstance(error, BudgetExhausted):
         return error.kind
     assert isinstance(error, ApplicationError), error
     assert (error.type, error.non_retryable) == (BUDGET_EXHAUSTED_ERROR, True)
     return BudgetExhaustedDetails.model_validate(error.details[0]).kind
-
-
-def test_hosted_caps_apply_only_to_live_calls_in_prod_or_with_hosted_caps_in_dev() -> None:
-    prod_live = prod_settings()
-    assert HostedCaps.from_settings(prod_live) == HostedCaps(
-        lineage_usd=Decimal(10),
-        client_daily_usd=Decimal(25),
-        daily_usd=Decimal(60),
-        global_usd=Decimal(250),
-    )
-    assert HostedCaps.from_settings(prod_live.model_copy(update={"model_mode": "scripted"})) is None
-    assert HostedCaps.from_settings(prod_live.model_copy(update={"app_env": "local"})) is None
-    local_live = settings_without_dotenv(model_mode="live", app_env="local")
-    assert HostedCaps.from_settings(local_live) is None
-    in_dev = local_live.model_copy(update={"hosted_caps_in_dev": True})
-    assert HostedCaps.from_settings(in_dev) == HostedCaps(lineage_usd=Decimal(10))
-    assert HostedCaps.from_settings(in_dev.model_copy(update={"model_mode": "scripted"})) is None
 
 
 # --- Only complete responses are delivered ----------------------------------------------
