@@ -1,0 +1,13 @@
+claude-haiku-4-5 multi brightline-1-claimed
+claude-haiku-4-5 multi brightline-1-verified
+claude-haiku-4-5 multi northlake-5-verified
+claude-haiku-4-5 multi northlake-5-claimed
+claude-haiku-4-5 single brightline-1-claimed
+claude-haiku-4-5 single northlake-5-claimed
+claude-haiku-4-5 single northlake-5-verified
+claude-haiku-4-5 inject calder-4-claimed
+claude-haiku-5-5 multi brightline-1-claimed
+claude-haiku-5-5 multi northlake-5-claimed
+claude-haiku-5-5 single northlake-5-claimed
+claude-haiku-5-5 inject brightline-1-verified
+claude-haiku-5-5 inject northlake-5-claimed

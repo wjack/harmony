@@ -1,0 +1,17 @@
+{
+ "run": "v2-heldout",
+ "split": "heldout",
+ "ids": "brightline-3-verified",
+ "arms": "single",
+ "defenders": "claude-haiku-4-5",
+ "attacker": "claude-sonnet-5-5",
+ "condition": "alone",
+ "version": "v2",
+ "cp_model": "claude-sonnet-5-5",
+ "judge_model": "claude-haiku-5-5",
+ "k": 3,
+ "turns": 6,
+ "concurrency": 8,
+ "cap": 216.55,
+ "judge_sanity": false
+}

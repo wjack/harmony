@@ -1,0 +1,4 @@
+claude-haiku-4-5 inject northlake-5-claimed
+claude-haiku-4-5 single brightline-1-claimed
+claude-haiku-4-5 multi brightline-1-verified
+claude-haiku-5-5 multi northlake-5-claimed

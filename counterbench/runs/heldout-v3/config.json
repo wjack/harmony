@@ -1,0 +1,15 @@
+{
+ "run": "heldout-v3",
+ "split": "heldout",
+ "ids": "northlake-5-claimed,brightline-1-claimed,brightline-1-verified",
+ "arms": "multi,single,inject",
+ "defenders": "claude-haiku-4-5,claude-haiku-5-5",
+ "attacker": "claude-sonnet-5-5",
+ "cp_model": "claude-sonnet-5-5",
+ "k": 3,
+ "turns": 6,
+ "concurrency": 1,
+ "judge_prompt": "prompts/judge_v3.txt",
+ "judge_votes": 3,
+ "cap": 216.55
+}
