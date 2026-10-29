@@ -138,7 +138,7 @@ async function renderLive(threadId: string, options: RenderOptions = {}) {
 
 const card = () => screen.findByRole("region", { name: "Needs your decision" });
 /** The view's one box, for a comment or an Edit. */
-const box = () => screen.findByRole("region", { name: "Comment or Edit" });
+const box = () => screen.findByRole("region", { name: "Comment or instruct Claude" });
 const conversation = () => screen.findByRole("list", { name: "Conversation" });
 const field = (region: HTMLElement) => within(region).getByRole<HTMLTextAreaElement>("textbox");
 const button = (region: HTMLElement, name: string) => within(region).getByRole<HTMLButtonElement>("button", { name });
@@ -168,14 +168,14 @@ function type(region: HTMLElement, value: string) {
   fireEvent.change(field(region), { target: { value } });
 }
 
-function mode(region: HTMLElement, name: "Comment" | "Edit") {
+function mode(region: HTMLElement, name: "Comment" | "Instruct Claude") {
   return within(within(region).getByRole("radiogroup", { name: "Mode" })).getByRole("radio", { name });
 }
 
-/** Switches the box to Edit and types `text`, then sends it unless told not to. */
+/** Switches the box to Instruct Claude and types `text`, then sends it unless told not to. */
 async function tellClaude(text: string, send = true) {
   const region = await box();
-  fireEvent.click(mode(region, "Edit"));
+  fireEvent.click(mode(region, "Instruct Claude"));
   type(region, text);
   if (send) fireEvent.click(button(region, "Tell Claude"));
   return region;
@@ -699,7 +699,7 @@ describe("the decision card", () => {
 
     fireEvent.click(button(decision, "Edit"));
     const region = await box();
-    expect(mode(region, "Edit").getAttribute("aria-checked")).toBe("true");
+    expect(mode(region, "Instruct Claude").getAttribute("aria-checked")).toBe("true");
     expect(region.textContent).toContain("Claude tries its turn again with this when you send it.");
     type(region, EDIT_INSTRUCTION);
     expect(decision.textContent).toContain("Claude tries again with your instruction when you send it.");
@@ -869,8 +869,8 @@ describe("the box", () => {
     expect(button(region, "Add comment").disabled).toBe(true);
     expect(screen.getByText("Only Northlake sees comments. Claude doesn't read them.")).toBeTruthy();
 
-    fireEvent.click(mode(region, "Edit"));
-    expect(mode(region, "Edit").getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(mode(region, "Instruct Claude"));
+    expect(mode(region, "Instruct Claude").getAttribute("aria-checked")).toBe("true");
     expect(field(region).getAttribute("aria-label")).toBe("Tell Claude");
     expect(field(region).placeholder).toBe("What should Claude do differently?");
     expect(button(region, "Tell Claude").disabled).toBe(true);
@@ -889,7 +889,7 @@ describe("the box", () => {
 
   it("says an Edit with no draft waiting changes what Claude does from its next message", async () => {
     renderRequests(THREAD.pacific, { world: waitingOnThem(requestsWorld(), THREAD.pacific) });
-    fireEvent.click(mode(await box(), "Edit"));
+    fireEvent.click(mode(await box(), "Instruct Claude"));
     expect(screen.getByText("Claude follows this from its next message in this conversation. Only Northlake sees it.")).toBeTruthy();
   });
 
@@ -1046,7 +1046,7 @@ describe("the box", () => {
     const alert = await within(region.parentElement ?? region).findByRole("alert");
     expect(alert.textContent).toContain(line);
     expect(field(region).value).toBe(EDIT_INSTRUCTION);
-    expect(mode(region, "Edit").getAttribute("aria-checked")).toBe("true");
+    expect(mode(region, "Instruct Claude").getAttribute("aria-checked")).toBe("true");
   });
 
   it("puts a failed Edit's text back in Edit, focused, on Try again", async () => {
@@ -1063,7 +1063,7 @@ describe("the box", () => {
     expect(row.textContent).toContain("Couldn't reach Claude. Your instruction is saved; nothing changed.");
     fireEvent.click(within(row).getByRole("button", { name: "Try again" }));
     const region = await box();
-    expect(mode(region, "Edit").getAttribute("aria-checked")).toBe("true");
+    expect(mode(region, "Instruct Claude").getAttribute("aria-checked")).toBe("true");
     expect(field(region).value).toBe(EDIT_INSTRUCTION);
     expect(document.activeElement).toBe(field(region));
   });
@@ -1081,7 +1081,7 @@ describe("the box", () => {
   it("turns Edit off on a closed conversation, where Reopen picks it up", async () => {
     renderRequests(THREAD.ridgeline);
     const region = await box();
-    const edit = mode(region, "Edit");
+    const edit = mode(region, "Instruct Claude");
     expect(edit.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(edit);
     expect(mode(region, "Comment").getAttribute("aria-checked")).toBe("true");
@@ -1188,7 +1188,7 @@ describe("the box", () => {
     expect(input.className).toContain("text-ink");
 
     type(region, "@raj can you hold Nov 4?");
-    fireEvent.click(mode(region, "Edit"));
+    fireEvent.click(mode(region, "Instruct Claude"));
     expect(backdrop()).toBeNull();
     expect(input.className).toContain("text-ink");
   });
@@ -1401,7 +1401,7 @@ describe("a closed conversation", () => {
     const row = await within(list).findByRole("article", { name: "Helen reopened the conversation" });
     expect(row.textContent).toContain("Claude updated its guidance and writes the next message.");
     expect(await within(list).findByText(/^Picking this back up/)).toBeTruthy();
-    expect(mode(await box(), "Edit").getAttribute("aria-disabled")).toBeNull();
+    expect(mode(await box(), "Instruct Claude").getAttribute("aria-disabled")).toBeNull();
     const first = await closedRow();
     expect(first.textContent).toContain("Ridgeline Fabrication booked CT on four machined holder tubes");
     expect(within(first).queryByRole("button", { name: "Reopen" })).toBeNull();
@@ -1508,7 +1508,7 @@ describe("a closed conversation", () => {
       "Ridgeline Fabrication reopened it first. Your text is in Edit, ready to send.",
     );
     await waitFor(() => {
-      expect(mode(region, "Edit").getAttribute("aria-checked")).toBe("true");
+      expect(mode(region, "Instruct Claude").getAttribute("aria-checked")).toBe("true");
     });
     expect(field(region).value).toBe(REOPEN_INSTRUCTION);
     expect(screen.queryByRole("region", { name: "Reopen with Ridgeline Fabrication" })).toBeNull();

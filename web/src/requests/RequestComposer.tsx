@@ -1,16 +1,16 @@
 /**
  * The request view's box (EDIT.md §8.3, composer.html), in one of two modes switched in
  * its bottom bar. **Comment** writes to our team: no Claude reads it, and an @mention
- * brings a teammate in. **Edit** tells our own Claude what to do differently: it
- * rewrites a draft of ours that's waiting and follows the instruction for the rest of
- * the conversation. The box starts in Comment and goes back to it after each Edit.
+ * brings a teammate in. **Instruct Claude** tells our own Claude what to do differently:
+ * it rewrites a draft of ours that's waiting and follows the instruction for the rest of
+ * the conversation. The box starts in Comment and goes back to it after each instruction.
  *
  * Enter sends what's in the box and never approves: approving belongs to the card.
- * An Edit's `client_key` is minted per submit and reused only after a request that got
+ * An instruction's `client_key` is minted per submit and reused only after a request that got
  * no answer, so the retry is the same write; any answer, even an error, ends it. Every
  * failure keeps the typed text.
  *
- * Edit is off on a closed conversation (Reopen is how Claude picks it up), and Tell
+ * Instruct Claude is off on a closed conversation (Reopen is how Claude picks it up), and Tell
  * Claude is off while the budget stops live turns; Comment always works.
  */
 import { CircleAlert, Loader2, Lock, MessageSquare, Sparkles } from "lucide-react";
@@ -330,7 +330,7 @@ export function RequestComposer({
         </div>
       )}
       <section
-        aria-label="Comment or Edit"
+        aria-label="Comment or instruct Claude"
         className={cx(
           "rounded-composer border shadow-composer transition-colors",
           editing
@@ -455,7 +455,7 @@ function InlineLink({ onClick, children }: { onClick: () => void; children: Reac
 
 const EDIT_OFF = "Reopen the conversation to tell Claude what to pick up";
 
-/** Comment | Edit, a small track in the box's bottom bar. Edit is off on a closed conversation. */
+/** Comment | Instruct Claude, a small track in the box's bottom bar. Instruct Claude is off on a closed conversation. */
 function ModeSwitch({
   mode,
   editOff,
@@ -489,7 +489,7 @@ function ModeSwitch({
       </button>
     );
   };
-  const edit = segment("edit", <Sparkles size={14} strokeWidth={1.75} aria-hidden />, "Edit", editOff);
+  const edit = segment("edit", <Sparkles size={14} strokeWidth={1.75} aria-hidden />, "Instruct Claude", editOff);
   return (
     <div role="radiogroup" aria-label="Mode" className="inline-flex h-8 items-center gap-0.5 rounded-control bg-hover p-0.5">
       {segment("comment", <MessageSquare size={14} strokeWidth={1.75} aria-hidden className="text-caution" />, "Comment")}

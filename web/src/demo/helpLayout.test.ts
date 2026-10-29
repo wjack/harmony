@@ -33,7 +33,7 @@ const WINDOWS = [
       reset: box(1333, 7, 1401, 31),
       requests: box(9, 236, 264, 268),
     }),
-    // The "?", and the network card over the "Got it" bar.
+    // The "?", and the network card.
     obstacles: [box(1405, 7, 1429, 31), box(490, 640, 950, 876)],
     placed: ["demo-controls", "network", "acting-as", "budget", "reset", "requests"],
   },

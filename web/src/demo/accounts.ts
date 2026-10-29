@@ -9,7 +9,7 @@ import type { DemoEvent, EventEnvelope, Inbox, MemberDirectory, MemberView, Sess
 import { useApi, useDispatcher } from "../app/context";
 import { useActAs, useMembers, useSession, useStartSession } from "../app/queries";
 import type { MemberChange, RealtimeDispatcher } from "../realtime/dispatcher";
-import { firstName, shortOrgName } from "../shell/names";
+import { shortOrgName } from "../shell/names";
 import { answeringChat, escalationPath, itemForEscalation } from "../shell/escalationPlace";
 import { dismissToastWithKey, dismissToastsWithKeyPrefix, toast } from "../shell/toasts";
 import {
@@ -17,7 +17,6 @@ import {
   claimCue,
   clearAlertsFor,
   clearAllAlerts,
-  isAlertUp,
   withdrawNeedsHumanAlert,
   type NeedsHumanAlert,
 } from "./alerts";
@@ -28,8 +27,8 @@ import { clearUnsaved, unsavedSources } from "./unsaved";
 const CUE_TOAST_PREFIX = "needs-human:";
 
 /**
- * One toast per account, like its demo-bar chip: a newer cue for the same person
- * replaces it, and acting as them removes it.
+ * One "… needs you" toast per account: a newer cue for the same person replaces it, and
+ * acting as someone else removes it.
  */
 function cueToastKey(orgSlug: string, memberSlug: string): string {
   return `${CUE_TOAST_PREFIX}${orgSlug}/${memberSlug}`;
@@ -124,7 +123,6 @@ function intentFor(change: MemberChange): SwitchIntent | null {
 /** Acting as `member` settles their cue, and the "… needs you" addressed to `previous`. */
 function settleCues(member: MemberView, previous: MemberView | undefined): void {
   clearAlertsFor(member.slug, member.org.slug);
-  dismissToastWithKey(cueToastKey(member.org.slug, member.slug));
   if (previous !== undefined) dismissToastWithKey(cueToastKey(previous.org.slug, previous.slug));
 }
 
@@ -343,7 +341,8 @@ export function useEnterDemo(then?: () => void) {
 }
 
 /**
- * Turns `demo.needs_human` cues into toasts and demo-bar chips (§11.4). Mount once, in
+ * Turns `demo.needs_human` cues into demo-bar chips, or a toast for the acting member
+ * (§11.4). Mount once, in
  * the part of the shell that outlives account switches: it reads the acting session
  * from the cache when a cue arrives, so it never holds a previous account's view.
  */
@@ -352,16 +351,9 @@ export function useDemoCues(): void {
   const dispatcher = useDispatcher();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { switchTo } = useSwitchAccount();
-  const switchRef = useRef(switchTo);
 
   useEffect(() => {
-    switchRef.current = switchTo;
-  }, [switchTo]);
-
-  useEffect(() => {
-    // Names for the toast; the directory is usually cached, and a cue never waits on it
-    // to raise the chip.
+    // Names for the toast; the directory is usually cached.
     const directory = (): Promise<MemberDirectory | undefined> =>
       queryClient
         .query({
@@ -381,15 +373,14 @@ export function useDemoCues(): void {
       const acting = queryClient.getQueryData<SessionView>(queryKeys.session)?.member;
       // Member slugs are per org: "admin" at one org isn't "admin" at another.
       const toActing = acting?.slug === event.member_slug && acting.org.slug === event.org_slug;
-      // An item routed to two people cues both; it gets one toast and one chip (E5).
+      // An item routed to two people cues both; it gets one toast or chip (E5).
       if (event.entity_id !== null && !claimCue(event.entity_id, envelope.created_at ?? "", toActing)) return;
 
       if (acting !== undefined && toActing) {
         // Already acting as an assignee: point at the item where they answer it, never
         // at a co-assignee whose cue came first.
         const escalationId = event.entity_id ?? "";
-        const pointedAway = withdrawNeedsHumanAlert(escalationId);
-        if (pointedAway !== null) dismissToastWithKey(cueToastKey(pointedAway.orgSlug, pointedAway.memberSlug));
+        withdrawNeedsHumanAlert(escalationId);
         void Promise.all([directory(), freshInbox()]).then(([members, inbox]) => {
           const item = inbox === undefined ? null : itemForEscalation(inbox, escalationId);
           const key = cueToastKey(acting.org.slug, acting.slug);
@@ -420,26 +411,8 @@ export function useDemoCues(): void {
         return;
       }
 
-      const alert = addNeedsHumanAlert(event);
-      if (alert === null) return;
-      void directory().then((members) => {
-        // The acting member's own cue, or a switch, may have taken the chip down meanwhile.
-        if (!isAlertUp(alert)) return;
-        const assignee = findMember(members, alert.memberSlug, alert.orgSlug);
-        toast({
-          text: `${shortOrgName(orgName(members, alert.orgSlug))} needs a human.`,
-          key: cueToastKey(alert.orgSlug, alert.memberSlug),
-          durationMs: 8_000,
-          action: {
-            label: `Switch to ${assignee === null ? alert.memberSlug : firstName(assignee.name)}`,
-            onClick: () => {
-              if (assignee !== null) {
-                void switchRef.current(assignee, { to: requestsPathFor(alert.escalationId) });
-              }
-            },
-          },
-        });
-      });
+      // Someone else's: the demo bar's chip says so, with no toast (user, 2026-10-28).
+      addNeedsHumanAlert(event);
     });
   }, [api, dispatcher, queryClient, navigate]);
 }
