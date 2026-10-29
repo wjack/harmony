@@ -45,7 +45,7 @@ const CALLOUTS: readonly Callout[] = [
     side: "below",
     extra: true,
     name: "Live budget",
-    text: "What's left of this session's budget for live models. Reset doesn't refill it.",
+    text: "What's left of this session's budget for live models.",
   },
   {
     key: "reset",
@@ -122,8 +122,6 @@ export function HelpButton() {
             onCloseAutoFocus={(event) => {
               if (handingOff.current) event.preventDefault();
             }}
-            // Anywhere closes it, the scrim and the "?" under it included.
-            onClick={close}
             className="fixed inset-0 z-50 outline-none data-[state=open]:animate-fade-in"
           >
             <Overlay trigger={trigger} />
@@ -292,7 +290,7 @@ function Overlay({ trigger }: { trigger: RefObject<HTMLButtonElement | null> }) 
         {network !== null && <NetworkCard network={network} />}
         <div className="flex items-center gap-3 rounded-full bg-demo py-1.5 pr-1.5 pl-4 text-[13px] whitespace-nowrap text-demo-text shadow-modal ring-1 ring-demo-border">
           <Dialog.Title className="font-medium">What&apos;s on screen</Dialog.Title>
-          <Dialog.Description className="text-demo-muted">Click anywhere or press Esc to close.</Dialog.Description>
+          <Dialog.Description className="text-demo-muted">Press Esc to close.</Dialog.Description>
           <Dialog.Close className="inline-flex h-7 items-center rounded-full bg-demo-text px-3 font-medium text-demo transition-colors hover:bg-white">
             Got it
           </Dialog.Close>
